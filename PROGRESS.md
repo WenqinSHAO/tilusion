@@ -12,6 +12,7 @@
 ## Ongoing
 
 - First-pass segment extraction prompt is done enough for live trials, but its output is draft quality.
+- Segment extraction prompt is being tightened using validator feedback, starting with explicit exact-quote and surface-in-evidence rules.
 - Current next step: build the loop that combines deterministic validation with LLM-powered repair, then re-validates before accepting extraction output. Detailed plan: `docs/extraction_roadmap.md`.
 - First deterministic validation slice is underway: exact evidence quote matching, response-local ID/reference integrity, evidence span length, object-surface grounding, and compact LLM repair payloads.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.

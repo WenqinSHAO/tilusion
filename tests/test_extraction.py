@@ -39,7 +39,7 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     model_payload = envelope.to_model_payload()
 
     assert envelope.task == "local_bundle_extraction"
-    assert envelope.prompt_version == "segment-extraction-v0.3"
+    assert envelope.prompt_version == "segment-extraction-v0.4"
     assert envelope.schema_version == "segment-extraction-v0.2"
     assert envelope.unit["id"] == "unit-0001"
     assert envelope.unit["source_range"]["kind"] == "txt-span"
@@ -56,7 +56,7 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     assert DEFAULT_MAX_TOKENS == 32768
     assert DEEPSEEK_CONTEXT_TOKENS == 1_000_000
     assert DEEPSEEK_MAX_OUTPUT_TOKENS == 384_000
-    assert PROMPT_VERSION == "segment-extraction-v0.3"
+    assert PROMPT_VERSION == "segment-extraction-v0.4"
     assert SCHEMA_VERSION == "segment-extraction-v0.2"
 
 
@@ -70,6 +70,9 @@ def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() ->
     assert "alias_candidate_of" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "IDs are temporary and response-local only" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "Evidence quotes must be exact substrings" in LOCAL_BUNDLE_SYSTEM_PROMPT
+    assert "Do not remove, normalize, or rewrite note markers" in LOCAL_BUNDLE_SYSTEM_PROMPT
+    assert "at least one cited evidence quote should contain that exact surface string" in LOCAL_BUNDLE_SYSTEM_PROMPT
+    assert "Do not cite a paragraph opening as evidence" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "Do not use the entire input segment as one evidence span" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "The pipeline will reconstruct original-file locators" in LOCAL_BUNDLE_SYSTEM_PROMPT
 

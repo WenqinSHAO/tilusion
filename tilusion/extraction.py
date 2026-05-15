@@ -12,13 +12,13 @@ from typing import Any, Protocol
 from .book_reader import StructureUnit, build_book_index, extract_unit_text
 
 
-PROMPT_VERSION = "segment-extraction-v0.3"
+PROMPT_VERSION = "segment-extraction-v0.4"
 SCHEMA_VERSION = "segment-extraction-v0.2"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_MAX_TOKENS = 32768
 DEEPSEEK_CONTEXT_TOKENS = 1_000_000
 DEEPSEEK_MAX_OUTPUT_TOKENS = 384_000
-PROMPT_RESOURCE = "segment_extraction_v0.3.md"
+PROMPT_RESOURCE = "segment_extraction_v0.4.md"
 
 
 class ExtractionError(RuntimeError):
