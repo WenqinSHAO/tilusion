@@ -49,9 +49,9 @@ Do not begin with open-ended ontology induction.
 
 Initial extraction objects should be limited to:
 
-- `entity_mention`
-- `location_mention`
-- `event_mention`
+- `entity_mention`: a character, role, organization, group, or concept mention, with possible alias candidates recorded separately
+- `location_mention`: a physical, conceptual, or relative place mention, with enough context to disambiguate repeated names
+- `event_mention`: a narrative occurrence, usually associated with time, location, participants, and evidence; granularity may vary by narrative context
 - `time_expression`
 - `temporal_claim`
 - `alias_candidate`
@@ -61,6 +61,17 @@ Initial extraction objects should be limited to:
 This is the extraction substrate.
 
 It is intentionally smaller than the eventual canonical graph.
+
+`thread_candidate` means a possible unresolved narrative line that the text opens, advances, complicates, or resolves.
+
+Examples:
+
+- an unanswered identity question
+- an unresolved promise, threat, quest, or mystery
+- an object whose importance is implied but not yet explained
+- a prophecy, debt, accusation, disappearance, or hidden motive
+
+It is called a candidate because early extraction should not claim that every such item is a durable plot thread. Later passes can confirm, merge, reject, or mark it resolved.
 
 ### 2. Local Extraction Before Global Reasoning
 
@@ -76,14 +87,29 @@ First extract:
 
 Do not attempt cross-book resolution in the first pass.
 
+Local extraction should not be context-blind extraction.
+
+Each local pass should receive compact structured context from what has already been extracted and confirmed, such as:
+
+- confirmed entities and aliases
+- confirmed locations
+- active unresolved threads
+- recent event summaries where relevant
+- known temporal constraints
+- explicit frontier boundary
+
+This prior state should be passed as structured data, not as a growing prose summary.
+
+Even when a large chapter or book structure is given, it is useful to break it into smaller pieces while preserving the narrative boundary.
+
 ### 3. Evidence Is Mandatory
 
-Every extracted object should point to source evidence.
+Every extracted object should point to source evidence, with location information from the original file.
 
 No object should exist only as a model claim without:
 
 - a supporting span
-- a source unit ID
+- a source unit ID, and later a more fine-grained span where possible
 - enough local context for a human to inspect it later
 
 ### 4. Corrections Must Beat Raw Model Confidence
@@ -95,6 +121,8 @@ The system should be designed so that:
 - downstream views recompute from corrected state
 
 This matters more than chasing raw extraction recall in early milestones.
+The extraction model should be able to use accumulated book-specific knowledge to improve gradually.
+Some of that knowledge comes from corrected extraction results. Some may come from gradually improving understanding of what the book is about.
 
 ### 5. Complexity Must Grow Only After Passing Local Gates
 
@@ -144,6 +172,8 @@ Rules:
 - no cross-unit canonicalization
 - no global timeline
 - no inferred total order
+- use compact confirmed prior state where available
+- store output by pass name and schema version
 
 Success criteria:
 
@@ -335,6 +365,76 @@ Suggested initial records:
 
 These can later feed canonicalization.
 
+## Context And Pass Strategy
+
+Extraction should be local in raw text scope, but aware of prior confirmed state.
+
+That means a pass over `unit-0008` should not receive the whole book. It may receive:
+
+- the text for `unit-0008`
+- a compact list of confirmed entities and aliases so far
+- active unresolved thread candidates
+- recent canonical event summaries where needed
+- relevant temporal constraints
+- the structured outputs from earlier passes on the same unit
+
+The goal is to improve extraction quality without turning every call into a whole-book prompt.
+
+## Pass Dependency Model
+
+Each pass should consume useful prior structured output instead of rediscovering everything from raw text.
+
+Recommended dependency shape:
+
+1. Local bundle extraction
+2. Event grouping
+3. Temporal claim extraction
+4. Thread candidate extraction
+5. Alias candidate generation
+6. Parent-unit verification
+
+`Local bundle extraction` should extract tightly coupled local objects together:
+
+- entity mentions
+- location mentions
+- event mentions
+- time expressions
+- evidence spans
+
+This pass benefits from seeing the local text once and keeping local coherence.
+
+Focused later passes should consume the local bundle output:
+
+- event grouping consumes entity, location, event, and time mentions
+- temporal claim extraction consumes grouped event candidates and time expressions
+- thread candidate extraction consumes event summaries, active thread state, and evidence spans
+- alias candidate generation consumes entity mentions plus confirmed aliases
+- parent-unit verification consumes chunk-level outputs and compact confirmed state
+
+## Segmentation Strategy
+
+Neither extreme is ideal:
+
+- very long input with one extraction type per pass gives continuity, but can be expensive and hard to inspect
+- very short input with all extraction types in one pass gives local coherence, but can overload one prompt and make global verification weak
+
+Use a hybrid strategy:
+
+1. Start from reader structural units, usually chapters.
+2. If a unit is too long, split it into scene-sized chunks using headings, paragraph boundaries, or conservative overlaps.
+3. Run local bundle extraction on each chunk.
+4. Run focused passes over structured chunk outputs.
+5. Run a lightweight verification pass at the parent unit level.
+
+The parent-unit verification pass should check for:
+
+- duplicate local events across chunks
+- missed chapter-level thread updates
+- obvious temporal contradictions
+- inconsistent entity naming
+
+It should not rewrite the entire extraction result from scratch.
+
 ## Token Discipline
 
 Token waste will become a serious problem if extraction is not decomposed.
@@ -348,9 +448,14 @@ Rules:
 - cache outputs by:
   - source unit ID
   - source text hash
+  - extraction task name
   - prompt version
   - schema version
+  - compact context state hash
+  - model/backend identity
 - never rerun the whole book when only one frontier segment changed
+
+Cache boundaries should be designed so that changing a temporal prompt does not invalidate entity mention extraction, and correcting one alias does not force every unrelated local pass to rerun.
 
 ## Evaluation Discipline
 
@@ -379,12 +484,14 @@ It is:
 
 The extraction path should likely use a multi-pass pattern such as:
 
-1. mention extraction
+1. local bundle extraction
 2. local event grouping
-3. temporal cue extraction
-4. thread extraction
-5. cross-unit linking
-6. review generation
+3. temporal claim extraction
+4. thread candidate extraction
+5. alias candidate generation
+6. parent-unit verification
+7. cross-unit linking
+8. review generation
 
 Each pass should consume structured prior results where possible, not just raw text.
 

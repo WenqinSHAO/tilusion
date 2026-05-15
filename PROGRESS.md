@@ -11,6 +11,7 @@
   - `c15cf0c` reader schema and extraction usage documentation
 - Current reader contract and schema live in `docs/reader_index_schema.md`.
 - Extraction planning now lives in `docs/extraction_roadmap.md`.
+- Extraction roadmap updated to define thread candidates, context-aware local extraction, pass dependencies, hybrid segmentation, and cache keys.
 - Reader scope is now stable enough for later modules to consume:
   - structure index for `.txt` and `.epub`
   - normalized opaque unit IDs
