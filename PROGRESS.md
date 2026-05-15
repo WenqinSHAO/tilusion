@@ -21,6 +21,7 @@
   - `title_path`
   - normalized `source_range`
   - explicit `warnings`
+- External `unit_id` values normalized across TXT and EPUB output to a single opaque scheme: `unit-0001`, `unit-0002`, ...
 - Regression coverage exists for TXT heading/chunking/duplicate-TOC behavior and EPUB TOC/range reconciliation.
 
 ## Reader Contract
@@ -46,9 +47,8 @@
 ## Index Schema Evaluation
 
 - `unit_id` unification:
-  - desirable later
-  - not urgent if later modules treat `id` as opaque and do not parse meaning from prefixes like `u` or `toc`
-  - should be done before multiple downstream modules persist cross-references to units
+  - completed for external reader output
+  - later modules should still treat `id` as opaque and not derive semantics from numbering
 - attribute enrichment:
   - needed soon
   - likely additions:

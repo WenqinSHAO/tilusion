@@ -298,6 +298,7 @@ class TxtBookReader:
                 start = end
                 order += 1
 
+        normalize_unit_ids(units, root.id)
         assign_title_paths(units, root.id)
 
         return BookIndex(
@@ -534,6 +535,7 @@ class EpubBookReader:
                 children_by_parent.setdefault(unit.id, [])
             for unit in units:
                 unit.children = children_by_parent.get(unit.id, [])
+            normalize_unit_ids(units, root.id)
             assign_title_paths(units, root.id)
             return units
 
@@ -567,6 +569,7 @@ class EpubBookReader:
             )
             root.children.append(unit.id)
             units.append(unit)
+        normalize_unit_ids(units, root.id)
         assign_title_paths(units, root.id)
         return units
 
@@ -861,6 +864,22 @@ def assign_title_paths(units: list[StructureUnit], root_id: str) -> None:
 
     for unit in units:
         unit.title_path = walk(unit.id)
+
+
+def normalize_unit_ids(units: list[StructureUnit], root_id: str) -> None:
+    id_map: dict[str, str] = {root_id: root_id}
+    next_index = 1
+    for unit in units:
+        if unit.id == root_id:
+            continue
+        id_map[unit.id] = f"unit-{next_index:04d}"
+        next_index += 1
+
+    for unit in units:
+        unit.id = id_map[unit.id]
+        if unit.parent_id is not None:
+            unit.parent_id = id_map[unit.parent_id]
+        unit.children = [id_map[child_id] for child_id in unit.children]
 
 
 def filter_txt_duplicate_toc_blocks(headings: list[dict[str, Any]]) -> list[dict[str, Any]]:

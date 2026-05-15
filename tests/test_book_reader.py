@@ -13,6 +13,7 @@ def test_txt_reader_detects_chapters(tmp_path: Path) -> None:
     index = build_book_index(book)
 
     assert index.source_format == "txt"
+    assert [unit.id for unit in index.units[1:]] == ["unit-0001", "unit-0002"]
     assert [unit.label for unit in index.units[1:]] == ["Chapter 1", "Chapter 2"]
     assert index.units[1].source_kind == "heading"
     assert index.units[1].content_kind == "main_text"
@@ -33,6 +34,7 @@ def test_txt_reader_falls_back_to_chunks(tmp_path: Path) -> None:
 
     index = build_book_index(book)
 
+    assert index.units[1].id == "unit-0001"
     assert index.units[1].kind == "chunk"
     assert index.units[1].source_kind == "fallback_chunk"
     assert index.units[1].content_kind == "unknown"
@@ -68,6 +70,7 @@ def test_txt_reader_filters_dense_duplicate_toc_block(tmp_path: Path) -> None:
 
     index = build_book_index(book)
 
+    assert [unit.id for unit in index.units[1:]] == ["unit-0001", "unit-0002", "unit-0003"]
     assert [unit.label for unit in index.units[1:]] == ["卷一 闺房记乐", "卷二 闲情记趣", "卷三 坎坷记愁"]
     assert "正文甲" in extract_unit_text(book, index.units[1])
 
@@ -135,6 +138,7 @@ def test_epub_reader_uses_toc_ranges(tmp_path: Path) -> None:
     index = build_book_index(book)
 
     assert index.title == "Sample EPUB"
+    assert [unit.id for unit in index.units[1:3]] == ["unit-0001", "unit-0002"]
     assert [unit.label for unit in index.units[1:3]] == ["Chapter 1", "Chapter 2"]
     assert index.units[1].source_kind == "toc"
     assert index.units[1].content_kind == "main_text"
@@ -210,6 +214,7 @@ def test_epub_reader_reconciles_suspicious_toc_targets(tmp_path: Path) -> None:
 
     index = build_book_index(book)
 
+    assert [unit.id for unit in index.units[1:3]] == ["unit-0001", "unit-0002"]
     assert [unit.label for unit in index.units[1:3]] == ["卷一 闺房记乐", "卷二 闲情记趣"]
     assert index.units[1].source_kind == "reconciled_toc"
     assert "reconciled" in index.units[1].warnings[0]
