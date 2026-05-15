@@ -16,6 +16,7 @@
 - DeepSeek backend updated to use the official OpenAI SDK pattern, defaulting extraction to `deepseek-v4-flash` with JSON mode and optional thinking controls.
 - Segment extraction prompt externalized into a versioned prompt file; model payload now omits pipeline audit metadata and gives clearer guidance on evidence spans, local IDs, locator reconstruction, and alias candidates.
 - Extraction calls now use a larger default output cap, preflight estimated context/output budgets, and report truncated or malformed JSON as actionable extraction failures.
+- Extraction roadmap now records the next implementation direction: first-pass LLM extraction followed by deterministic validation, targeted repair, and re-validation gates.
 - Reader scope is now stable enough for later modules to consume:
   - structure index for `.txt` and `.epub`
   - normalized opaque unit IDs

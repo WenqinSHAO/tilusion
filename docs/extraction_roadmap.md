@@ -179,8 +179,63 @@ Success criteria:
 
 - output schema validates
 - every object has evidence
+- evidence quotes can be deterministically located in the source unit
+- invalid or weak evidence can be repaired without rerunning unrelated work
 - rerunning on the same input is reasonably stable
 - token cost per unit is measurable and acceptable
+
+### Phase 1 Implementation Pattern: Validate Before Trust
+
+The first extraction pass should be treated as a draft, not as a trusted result.
+
+The intended loop is:
+
+1. Run segment extraction over the reader unit or chunk.
+2. Run deterministic validation over the structured result.
+3. If validation finds fixable problems, run a repair pass with the source text, first-pass result, and structured validation errors.
+4. Re-run deterministic validation.
+5. Accept, retry, downgrade invalid objects to warnings, or fail the pass based on explicit gates.
+
+This is preferred over relying on prompt tuning alone.
+
+LLMs are useful for semantic extraction, but deterministic code should enforce mechanical constraints.
+
+Initial deterministic checks should include:
+
+- every required top-level field exists and has the expected type
+- response-local IDs are unique within each object class
+- every cross-reference resolves
+- every extractable object cites at least one evidence span
+- every evidence quote is an exact substring of the reader unit text
+- every evidence quote can be located, with ambiguous repeated quotes flagged
+- evidence spans are short enough to be inspectable
+- entity and location surfaces appear in at least one cited evidence quote when applicable
+- event, time, thread, and alias objects do not cite missing evidence IDs
+- model output did not stop due to output truncation
+
+The repair pass should receive:
+
+- original text or source windows around failed evidence
+- first-pass structured result
+- structured validation errors
+- the same output schema
+
+For small units, the repair pass can receive the full source unit.
+
+For large units, prefer source windows around failed evidence and enough nearby context to repair locators and references.
+
+The repair prompt should preserve valid objects where possible and fix only invalid or weak parts.
+
+It should not use repair as an excuse to rewrite the whole extraction or introduce new global canonical records.
+
+Important early gates:
+
+- no unmatched evidence quotes
+- no unresolved references
+- no overlong evidence spans except explicitly allowed short segments
+- no accepted object whose evidence is mechanically missing
+
+If a result fails these gates after repair, the pipeline should fail explicitly or mark invalid objects as rejected instead of silently passing them downstream.
 
 ## Phase 2: Intra-Unit Grouping
 
