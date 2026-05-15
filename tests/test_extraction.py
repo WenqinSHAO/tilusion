@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tilusion.extraction import (
+    DEFAULT_MODEL,
     ExtractionContext,
     MockExtractionBackend,
     build_cache_key,
@@ -26,6 +27,7 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     assert envelope.unit["id"] == "unit-0001"
     assert envelope.unit["source_range"]["kind"] == "txt-span"
     assert len(key) == 64
+    assert DEFAULT_MODEL == "deepseek-v4-flash"
 
 
 def test_local_bundle_extraction_uses_mock_backend_and_cache(tmp_path: Path) -> None:

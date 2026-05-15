@@ -7,14 +7,13 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Protocol
-from urllib import request
 
 from .book_reader import StructureUnit, build_book_index, extract_unit_text
 
 
 PROMPT_VERSION = "local-bundle-v0.1"
 SCHEMA_VERSION = "local-bundle-v0.1"
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = "deepseek-v4-flash"
 
 
 @dataclass(slots=True)
@@ -115,44 +114,49 @@ class MockExtractionBackend:
 
 
 class DeepSeekBackend:
-    def __init__(self, model: str = DEFAULT_MODEL) -> None:
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        *,
+        thinking: bool = False,
+        reasoning_effort: str = "high",
+        max_tokens: int = 4096,
+    ) -> None:
         self.model = model
-        self.api_key = os.environ.get("DS_API_KEY")
+        self.thinking = thinking
+        self.reasoning_effort = reasoning_effort
+        self.max_tokens = max_tokens
+        self.api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DS_API_KEY")
         if not self.api_key:
-            raise RuntimeError("DS_API_KEY is required for DeepSeek extraction")
+            raise RuntimeError("DEEPSEEK_API_KEY or DS_API_KEY is required for DeepSeek extraction")
+        from openai import OpenAI
+
+        self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com")
 
     @property
     def model_identity(self) -> str:
-        return f"deepseek:{self.model}"
+        thinking_mode = "thinking" if self.thinking else "no-thinking"
+        return f"deepseek:{self.model}:{thinking_mode}:effort={self.reasoning_effort}:max={self.max_tokens}"
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
-        body = json.dumps(
-            {
-                "model": self.model,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": json.dumps(user_payload, ensure_ascii=False),
-                    },
-                ],
-                "temperature": 0.1,
-            },
-            ensure_ascii=False,
-        ).encode("utf-8")
-        req = request.Request(
-            "https://api.deepseek.com/chat/completions",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with request.urlopen(req, timeout=120) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        return payload["choices"][0]["message"]["content"]
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_tokens": self.max_tokens,
+            "stream": False,
+            "extra_body": {"thinking": {"type": "enabled" if self.thinking else "disabled"}},
+        }
+        if self.thinking:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        response = self.client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
+        if not content:
+            raise RuntimeError("DeepSeek returned empty content for JSON extraction")
+        return content
 
 
 def run_local_bundle_extraction(

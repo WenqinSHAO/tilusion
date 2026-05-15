@@ -6,7 +6,8 @@ overall guidline
 
 env and toolin:
 - work in virtualenv shredder.
-- LLM backend deepseek v4 pro and flash, API key at env var DS_API_KEY
+- LLM backend DeepSeek v4 flash by default for extraction, with pro available for harder cases.
+- Preferred API key env var is DEEPSEEK_API_KEY; DS_API_KEY is kept as a local fallback.
 
 book keeping
 - PROGRESS.md is the only grounth-truth of development status, make sure it is up-to-date at each commit

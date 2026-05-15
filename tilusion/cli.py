@@ -24,7 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_pass_parser.add_argument("unit_id")
     run_pass_parser.add_argument("--pass", dest="pass_name", choices=["local-bundle"], default="local-bundle")
     run_pass_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    run_pass_parser.add_argument("--model", default="deepseek-chat")
+    run_pass_parser.add_argument("--model", default="deepseek-v4-flash")
+    run_pass_parser.add_argument("--thinking", action="store_true")
+    run_pass_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
+    run_pass_parser.add_argument("--max-tokens", type=int, default=4096)
     run_pass_parser.add_argument("--no-cache", action="store_true")
 
     return parser
@@ -48,7 +51,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "run-pass":
-        backend = MockExtractionBackend() if args.backend == "mock" else DeepSeekBackend(args.model)
+        backend = (
+            MockExtractionBackend()
+            if args.backend == "mock"
+            else DeepSeekBackend(
+                args.model,
+                thinking=args.thinking,
+                reasoning_effort=args.reasoning_effort,
+                max_tokens=args.max_tokens,
+            )
+        )
         result = run_local_bundle_extraction(
             args.book,
             args.unit_id,
