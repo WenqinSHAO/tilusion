@@ -13,6 +13,6 @@
 
 - First-pass segment extraction prompt is done enough for live trials, but its output is draft quality.
 - Current next step: build the loop that combines deterministic validation with LLM-powered repair, then re-validates before accepting extraction output. Detailed plan: `docs/extraction_roadmap.md`.
-- Early validation should focus on exact evidence quote matching, response-local ID/reference integrity, evidence span length, object-surface grounding, and clear failure reporting.
+- First deterministic validation slice is underway: exact evidence quote matching, response-local ID/reference integrity, evidence span length, object-surface grounding, and compact LLM repair payloads.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
 - Still untested at true 500MB scale.
