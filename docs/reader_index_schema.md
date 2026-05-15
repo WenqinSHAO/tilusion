@@ -214,7 +214,7 @@ text = extract_unit_text(path, unit)
 Current behavior:
 
 - extraction returns the full text inside the structural unit range
-- it does not yet separate main text from embedded commentary, notes, or editorial apparatus when the edition mixes them into the same unit
+- if an edition mixes main text with commentary, notes, or editorial apparatus inside the same structural unit, the reader returns that mixed source text as-is
 - for EPUB, extraction follows the reconciled reading-order ranges produced by the indexer
 - for TXT, extraction follows byte spans derived from heading boundaries or fallback chunking
 
@@ -224,4 +224,4 @@ Current behavior:
 - Do not re-parse raw `.txt` or `.epub` in later modules once an index exists.
 - Use `content_kind` and `source_kind` to decide what should be sent to later extraction or analysis stages.
 - Treat `warnings` as review signals, not as hard failures.
-- Assume `extract_unit_text` may return commentary mixed with main text until a later text-segmentation step is added.
+- Treat separation of main text from commentary/notes as a later extraction or analysis responsibility, not a reader responsibility.
