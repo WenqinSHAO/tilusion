@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import hashlib
+from importlib import resources
 import json
 import os
 from pathlib import Path
@@ -11,9 +12,21 @@ from typing import Any, Protocol
 from .book_reader import StructureUnit, build_book_index, extract_unit_text
 
 
-PROMPT_VERSION = "local-bundle-v0.1"
-SCHEMA_VERSION = "local-bundle-v0.1"
+PROMPT_VERSION = "segment-extraction-v0.3"
+SCHEMA_VERSION = "segment-extraction-v0.2"
 DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_MAX_TOKENS = 32768
+DEEPSEEK_CONTEXT_TOKENS = 1_000_000
+DEEPSEEK_MAX_OUTPUT_TOKENS = 384_000
+PROMPT_RESOURCE = "segment_extraction_v0.3.md"
+
+
+class ExtractionError(RuntimeError):
+    """Raised when an extraction pass cannot produce valid structured output."""
+
+
+class ExtractionBudgetError(ExtractionError):
+    """Raised when an extraction request is likely to exceed model token limits."""
 
 
 @dataclass(slots=True)
@@ -40,6 +53,13 @@ class PromptEnvelope:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def to_model_payload(self) -> dict[str, Any]:
+        return {
+            "unit": self.unit,
+            "prior_context": self.context,
+            "text": self.text,
+        }
 
 
 @dataclass(slots=True)
@@ -120,8 +140,15 @@ class DeepSeekBackend:
         *,
         thinking: bool = False,
         reasoning_effort: str = "high",
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> None:
+        if max_tokens <= 0:
+            raise ValueError("max_tokens must be positive")
+        if max_tokens > DEEPSEEK_MAX_OUTPUT_TOKENS:
+            raise ValueError(
+                f"max_tokens={max_tokens} exceeds DeepSeek V4 max output "
+                f"limit of {DEEPSEEK_MAX_OUTPUT_TOKENS}"
+            )
         self.model = model
         self.thinking = thinking
         self.reasoning_effort = reasoning_effort
@@ -153,9 +180,16 @@ class DeepSeekBackend:
         if self.thinking:
             kwargs["reasoning_effort"] = self.reasoning_effort
         response = self.client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content
+        choice = response.choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        content = choice.message.content
         if not content:
             raise RuntimeError("DeepSeek returned empty content for JSON extraction")
+        if finish_reason == "length":
+            raise ExtractionError(
+                "DeepSeek stopped because generation hit max_tokens or context length; "
+                "retry with a higher --max-tokens value or a smaller input segment."
+            )
         return content
 
 
@@ -176,12 +210,17 @@ def run_local_bundle_extraction(
     extraction_context = context or ExtractionContext(frontier=unit_id)
     llm = backend or MockExtractionBackend()
     envelope = build_local_bundle_prompt(unit, text, extraction_context)
+    check_extraction_budget(
+        LOCAL_BUNDLE_SYSTEM_PROMPT,
+        envelope.to_model_payload(),
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
     cache_key = build_cache_key(envelope, llm.model_identity)
     cache_path = Path(cache_dir) / f"{cache_key}.json"
     if use_cache and cache_path.exists():
         return result_from_json(cache_path.read_text(encoding="utf-8"))
 
-    raw_response = llm.complete_json(LOCAL_BUNDLE_SYSTEM_PROMPT, envelope.to_dict())
+    raw_response = llm.complete_json(LOCAL_BUNDLE_SYSTEM_PROMPT, envelope.to_model_payload())
     data = parse_json_response(raw_response)
     validate_local_bundle(data)
     result = LocalBundleResult(
@@ -222,27 +261,7 @@ def build_local_bundle_prompt(
     )
 
 
-LOCAL_BUNDLE_SYSTEM_PROMPT = """You extract local narrative structure from one reader unit.
-
-Return only JSON. Do not include prose outside JSON.
-
-Required top-level keys:
-- unit_id
-- evidence_spans
-- entity_mentions
-- location_mentions
-- event_mentions
-- time_expressions
-- thread_candidates
-- warnings
-
-Rules:
-- Every extracted mention, event, time expression, and thread candidate must cite evidence_span_ids.
-- Do not canonicalize across chapters.
-- Do not infer a global timeline.
-- Preserve uncertainty in summaries and warnings.
-- Prefer fewer grounded objects over many weak guesses.
-"""
+LOCAL_BUNDLE_SYSTEM_PROMPT = resources.files("tilusion.prompts").joinpath(PROMPT_RESOURCE).read_text(encoding="utf-8")
 
 
 PLACEHOLDER_PASSES = [
@@ -270,11 +289,71 @@ def build_cache_key(envelope: PromptEnvelope, model_identity: str) -> str:
 def parse_json_response(raw_response: str) -> dict[str, Any]:
     try:
         return json.loads(raw_response)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as first_error:
         match = re.search(r"\{.*\}", raw_response, flags=re.DOTALL)
         if not match:
-            raise
-        return json.loads(match.group(0))
+            raise ExtractionError(
+                "LLM response was not valid JSON. This often means the response was "
+                "cut off by output truncation, ignored JSON mode, or included non-JSON text. "
+                f"JSON error: {first_error.msg} at char {first_error.pos}."
+            ) from first_error
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError as second_error:
+            tail = raw_response[-240:].replace("\n", "\\n")
+            raise ExtractionError(
+                "LLM response looked like JSON but could not be parsed. This is often "
+                "caused by output truncation; retry with a higher --max-tokens value "
+                "or a smaller input segment. "
+                f"JSON error: {second_error.msg} at char {second_error.pos}. "
+                f"Response tail: {tail}"
+            ) from second_error
+
+
+def check_extraction_budget(
+    system_prompt: str,
+    model_payload: dict[str, Any],
+    *,
+    max_output_tokens: int,
+    context_tokens: int = DEEPSEEK_CONTEXT_TOKENS,
+) -> None:
+    if max_output_tokens <= 0:
+        raise ExtractionBudgetError("max_output_tokens must be positive")
+    if max_output_tokens > DEEPSEEK_MAX_OUTPUT_TOKENS:
+        raise ExtractionBudgetError(
+            f"max_output_tokens={max_output_tokens} exceeds DeepSeek V4 max output "
+            f"limit of {DEEPSEEK_MAX_OUTPUT_TOKENS}"
+        )
+    input_tokens = estimate_deepseek_tokens(system_prompt) + estimate_deepseek_tokens(
+        json.dumps(model_payload, ensure_ascii=False)
+    )
+    if input_tokens + max_output_tokens > context_tokens:
+        raise ExtractionBudgetError(
+            "Extraction request is likely to exceed model context. "
+            f"Estimated input tokens: {input_tokens}; requested max output tokens: "
+            f"{max_output_tokens}; context limit: {context_tokens}. "
+            "Use a smaller reader unit/chunk or lower --max-tokens."
+        )
+
+
+def estimate_deepseek_tokens(text: str) -> int:
+    cjk_chars = sum(1 for char in text if is_cjk(char))
+    other_chars = len(text) - cjk_chars
+    return max(1, int((cjk_chars * 0.6) + (other_chars * 0.3)) + 1)
+
+
+def is_cjk(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x20000 <= codepoint <= 0x2A6DF
+        or 0x2A700 <= codepoint <= 0x2B73F
+        or 0x2B740 <= codepoint <= 0x2B81F
+        or 0x2B820 <= codepoint <= 0x2CEAF
+        or 0x2CEB0 <= codepoint <= 0x2EBEF
+    )
 
 
 def validate_local_bundle(data: dict[str, Any]) -> None:

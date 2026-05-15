@@ -4,7 +4,13 @@ import argparse
 import sys
 
 from .book_reader import build_book_index, extract_unit_text
-from .extraction import DeepSeekBackend, MockExtractionBackend, run_local_bundle_extraction
+from .extraction import (
+    DEFAULT_MAX_TOKENS,
+    DeepSeekBackend,
+    ExtractionError,
+    MockExtractionBackend,
+    run_local_bundle_extraction,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_pass_parser.add_argument("--model", default="deepseek-v4-flash")
     run_pass_parser.add_argument("--thinking", action="store_true")
     run_pass_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    run_pass_parser.add_argument("--max-tokens", type=int, default=4096)
+    run_pass_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     run_pass_parser.add_argument("--no-cache", action="store_true")
 
     return parser
@@ -51,22 +57,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "run-pass":
-        backend = (
-            MockExtractionBackend()
-            if args.backend == "mock"
-            else DeepSeekBackend(
-                args.model,
-                thinking=args.thinking,
-                reasoning_effort=args.reasoning_effort,
-                max_tokens=args.max_tokens,
+        try:
+            backend = (
+                MockExtractionBackend()
+                if args.backend == "mock"
+                else DeepSeekBackend(
+                    args.model,
+                    thinking=args.thinking,
+                    reasoning_effort=args.reasoning_effort,
+                    max_tokens=args.max_tokens,
+                )
             )
-        )
-        result = run_local_bundle_extraction(
-            args.book,
-            args.unit_id,
-            backend=backend,
-            use_cache=not args.no_cache,
-        )
+            result = run_local_bundle_extraction(
+                args.book,
+                args.unit_id,
+                backend=backend,
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, ValueError) as error:
+            print(f"extraction failed: {error}", file=sys.stderr)
+            return 1
         print(result.to_json())
         return 0
 
