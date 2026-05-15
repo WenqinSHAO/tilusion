@@ -2,7 +2,7 @@ overall guidline
 - Don't rebuild the wheel, search and use safe and mature exisiting lib or project when possible.
 - Don't over-design, stay simple and robust.
 - Fail fast and explicitly.
-- take some and auditable steps.
+- Take small, auditable steps.
 
 env and toolin:
 - work in virtualenv shredder.
@@ -10,7 +10,10 @@ env and toolin:
 - Preferred API key env var is DEEPSEEK_API_KEY; DS_API_KEY is kept as a local fallback.
 
 book keeping
-- PROGRESS.md is the only grounth-truth of development status, make sure it is up-to-date at each commit
-- don't dump everything in commit in PRGRESS.md, summarize, update, and link to commits.
-- distinguish in PROGRESS.md, what is done, what is on-going (goal and gap)
-- PROGRESS.md is meant for human and Agent, stay concise.
+- Maintain careful commits: each commit should have a focused subject and a body explaining intent, design choices, and verification when relevant.
+- Use commit history as the detailed development log. Prefer careful commit bodies over dumping detailed reasoning into PROGRESS.md.
+- PROGRESS.md is the compact shared memory for human and agent. Keep it current before finalizing each meaningful commit.
+- Do not let PROGRESS.md lag behind major direction changes. If a commit changes project status, next steps, or known gaps, update PROGRESS.md in the same commit unless there is a clear reason not to.
+- Keep PROGRESS.md milestone-oriented, not a running changelog. Point to key commits and dedicated docs for detail.
+- In PROGRESS.md, clearly distinguish done work from ongoing work, current goal, and known gaps.
+- Keep PROGRESS.md concise enough to scan at session start.
