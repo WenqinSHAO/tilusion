@@ -2,3 +2,4 @@ books/
 __pycache__/
 .pytest_cache/
 .venv/
+.tilusion_cache/
