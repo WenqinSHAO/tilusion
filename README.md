@@ -25,3 +25,7 @@ Files:
    - Visualization/update flow
 
 This pack intentionally avoids detailed API contracts and database schemas. It is meant to guide an initial coding-agent implementation plan.
+
+Implementation notes:
+
+- [Reader Index Schema And Extraction Usage](docs/reader_index_schema.md)

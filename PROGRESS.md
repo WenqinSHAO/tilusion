@@ -22,6 +22,7 @@
   - normalized `source_range`
   - explicit `warnings`
 - External `unit_id` values normalized across TXT and EPUB output to a single opaque scheme: `unit-0001`, `unit-0002`, ...
+- Reader schema and extraction usage documented in `docs/reader_index_schema.md`.
 - Regression coverage exists for TXT heading/chunking/duplicate-TOC behavior and EPUB TOC/range reconciliation.
 
 ## Reader Contract
@@ -58,5 +59,5 @@
     - `content_kind` hints such as `main_text`, `toc`, `front_matter`, `commentary`, `notes` when detectable
     - confidence / warnings when structure was inferred heuristically
 - documentation:
-  - needed now, but short
-  - enough to define the current `BookIndex` / `StructureUnit` contract, which fields are stable to consume, and which are provisional
+  - current reader contract documentation added
+  - keep future documentation changes close to real schema changes
