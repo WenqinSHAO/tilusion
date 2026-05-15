@@ -2,30 +2,17 @@
 
 ## Done
 
-- Design intent aligned and recorded in the planning docs.
-- Repo initialized; planning baseline committed in `975ef8b`.
-- Reader slice implemented and refined across:
-  - `f4d1d3d` initial TXT/EPUB structural reader
-  - `3fa276b` index attribute enrichment
-  - `625ec2a` unit ID normalization
-  - `c15cf0c` reader schema and extraction usage documentation
-- Current reader contract and schema live in `docs/reader_index_schema.md`.
-- Extraction planning now lives in `docs/extraction_roadmap.md`.
-- Extraction roadmap updated to define thread candidates, context-aware local extraction, pass dependencies, hybrid segmentation, and cache keys.
-- First extraction skeleton added: local bundle pass, prompt envelope, mock/DeepSeek backend boundary, cache keying, CLI `run-pass`.
-- DeepSeek backend updated to use the official OpenAI SDK pattern, defaulting extraction to `deepseek-v4-flash` with JSON mode and optional thinking controls.
-- Segment extraction prompt externalized into a versioned prompt file; model payload now omits pipeline audit metadata and gives clearer guidance on evidence spans, local IDs, locator reconstruction, and alias candidates.
-- Extraction calls now use a larger default output cap, preflight estimated context/output budgets, and report truncated or malformed JSON as actionable extraction failures.
-- Extraction roadmap now records the next implementation direction: first-pass LLM extraction followed by deterministic validation, targeted repair, and re-validation gates.
-- Reader scope is now stable enough for later modules to consume:
-  - structure index for `.txt` and `.epub`
-  - normalized opaque unit IDs
-  - per-unit navigation metadata
-  - on-demand text extraction for a structural unit
-- Regression coverage exists for TXT heading/chunking/duplicate-TOC behavior and EPUB TOC/range reconciliation.
+- Planning baseline and initial design intent committed in `975ef8b`; design docs live under `design/`.
+- Reader foundation is usable for later modules. Key commits: `f4d1d3d` initial TXT/EPUB reader, `3fa276b` index attribute enrichment, `625ec2a` unit ID normalization, `c15cf0c` reader schema docs.
+- Current reader contract lives in `docs/reader_index_schema.md`: structure index, normalized opaque unit IDs, navigation metadata, and on-demand unit text extraction.
+- Extraction direction is documented in `docs/extraction_roadmap.md`. Key commits: `b82f5ee` extraction roadmap, `2165fbf` context-aware pass strategy, `4b5632a` validation-and-repair loop.
+- First extraction skeleton is in place. Key commits: `4c6690d` local extraction pipeline skeleton, `ef1f265` DeepSeek SDK backend, `5934ceb` versioned segment prompt and extraction failure handling.
+- Regression coverage exists for reader behavior and the first extraction skeleton.
 
 ## Ongoing
 
-- Goal: build extraction/analysis modules on top of the reader contract.
-- Gap: no benchmark yet against a true 500MB input.
-- Note: if a source edition mixes main text with notes/commentary inside one structural unit, that separation is a later extraction/analysis responsibility rather than a reader responsibility.
+- First-pass segment extraction prompt is done enough for live trials, but its output is draft quality.
+- Current next step: build the loop that combines deterministic validation with LLM-powered repair, then re-validates before accepting extraction output. Detailed plan: `docs/extraction_roadmap.md`.
+- Early validation should focus on exact evidence quote matching, response-local ID/reference integrity, evidence span length, object-surface grounding, and clear failure reporting.
+- Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
+- Still untested at true 500MB scale.
