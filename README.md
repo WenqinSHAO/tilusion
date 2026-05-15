@@ -29,3 +29,5 @@ This pack intentionally avoids detailed API contracts and database schemas. It i
 Implementation notes:
 
 - [Reader Index Schema And Extraction Usage](docs/reader_index_schema.md)
+- [Extraction Roadmap](docs/extraction_roadmap.md)
+- [References](docs/references.md)

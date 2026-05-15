@@ -10,6 +10,7 @@
   - `625ec2a` unit ID normalization
   - `c15cf0c` reader schema and extraction usage documentation
 - Current reader contract and schema live in `docs/reader_index_schema.md`.
+- Extraction planning now lives in `docs/extraction_roadmap.md`.
 - Reader scope is now stable enough for later modules to consume:
   - structure index for `.txt` and `.epub`
   - normalized opaque unit IDs
