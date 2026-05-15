@@ -104,9 +104,14 @@ class StructureUnit:
     children: list[str]
     locator: dict[str, Any]
     nav_hint: str
+    source_kind: str
+    content_kind: str
+    title_path: list[str] = field(default_factory=list)
+    source_range: dict[str, Any] | None = None
     source_path: str | None = None
     start_line: int | None = None
     end_line: int | None = None
+    warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -192,6 +197,8 @@ class TxtBookReader:
             children=[],
             locator={"type": "txt-book", "path": str(self.path)},
             nav_hint=self.path.name,
+            source_kind="container",
+            content_kind="book",
         )
         units.append(root)
 
@@ -231,6 +238,15 @@ class TxtBookReader:
                         "encoding": self.encoding,
                     },
                     nav_hint=f"line {heading['start_line']}",
+                    source_kind="heading",
+                    content_kind=infer_content_kind(heading["label"], heading["kind"], "heading"),
+                    source_range={
+                        "kind": "txt-span",
+                        "start_byte": heading["start_byte"],
+                        "end_byte": end_byte,
+                        "start_line": heading["start_line"],
+                        "end_line": end_line,
+                    },
                     start_line=heading["start_line"],
                     end_line=end_line,
                 )
@@ -263,14 +279,26 @@ class TxtBookReader:
                         "encoding": self.encoding,
                     },
                     nav_hint=f"bytes {start}-{end}",
+                    source_kind="fallback_chunk",
+                    content_kind="unknown",
+                    source_range={
+                        "kind": "txt-span",
+                        "start_byte": start,
+                        "end_byte": end,
+                        "start_line": line_cursor,
+                        "end_line": None,
+                    },
                     start_line=line_cursor,
                     end_line=None,
+                    warnings=["structure inferred from fallback chunking"],
                     notes=["fallback chunking: no confident headings detected"],
                 )
                 root.children.append(unit.id)
                 units.append(unit)
                 start = end
                 order += 1
+
+        assign_title_paths(units, root.id)
 
         return BookIndex(
             source_path=str(self.path),
@@ -462,6 +490,8 @@ class EpubBookReader:
             children=[],
             locator={"type": "epub-book", "path": source_path},
             nav_hint=Path(source_path).name,
+            source_kind="container",
+            content_kind="book",
         )
         units: list[StructureUnit] = [root]
 
@@ -486,13 +516,25 @@ class EpubBookReader:
                         "end": asdict(end),
                     },
                     nav_hint=entry["nav_hint"],
+                    source_kind=entry.get("source_kind", "toc"),
+                    content_kind=infer_content_kind(
+                        entry["label"], guess_label_kind(entry["label"]), entry.get("source_kind", "toc")
+                    ),
+                    source_range={
+                        "kind": "epub-range",
+                        "start": asdict(start),
+                        "end": asdict(end),
+                        "source_path": entry["href"],
+                    },
                     source_path=entry["href"],
+                    warnings=list(entry.get("warnings", [])),
                 )
                 units.append(unit)
                 children_by_parent.setdefault(unit.parent_id, []).append(unit.id)
                 children_by_parent.setdefault(unit.id, [])
             for unit in units:
                 unit.children = children_by_parent.get(unit.id, [])
+            assign_title_paths(units, root.id)
             return units
 
         for order, item in enumerate(spine, start=1):
@@ -513,10 +555,19 @@ class EpubBookReader:
                     "end": asdict(end),
                 },
                 nav_hint=f"spine {item['spine_index']} :: {item['href']}",
+                source_kind="spine_document",
+                content_kind=infer_content_kind(doc["title"], guess_label_kind(doc["title"]), "spine_document"),
+                source_range={
+                    "kind": "epub-range",
+                    "start": asdict(start),
+                    "end": asdict(end),
+                    "source_path": item["href"],
+                },
                 source_path=item["href"],
             )
             root.children.append(unit.id)
             units.append(unit)
+        assign_title_paths(units, root.id)
         return units
 
 
@@ -665,6 +716,8 @@ def parse_epub3_nav(
                     "fragment": frag or None,
                     "position": position,
                     "nav_hint": href,
+                    "source_kind": "toc",
+                    "warnings": [],
                 }
             )
             child_lists = li.xpath("./*[local-name()='ol' or local-name()='ul']")
@@ -708,6 +761,8 @@ def parse_ncx_toc(
                     "fragment": frag or None,
                     "position": position,
                     "nav_hint": src,
+                    "source_kind": "toc",
+                    "warnings": [],
                 }
             )
             walk(point.xpath("./ncx:navPoint", namespaces=ns), depth + 1, entry_id)
@@ -768,6 +823,44 @@ def guess_label_kind(label: str) -> str:
     ):
         return "chapter"
     return "section"
+
+
+def infer_content_kind(label: str, kind: str, source_kind: str) -> str:
+    normalized = normalize_nav_label(label).lower()
+    if kind == "book" or source_kind == "container":
+        return "book"
+    if source_kind == "fallback_chunk":
+        return "unknown"
+    if normalized in {"目录"} or "contents" in normalized:
+        return "toc"
+    if any(token in normalized for token in ("书名页", "版权页", "出版说明", "前言", "preface", "prologue", "introduction")):
+        return "front_matter"
+    if re.match(r"^(卷|册|篇|部|chapter|part|book|第)", normalized, flags=re.IGNORECASE):
+        return "main_text"
+    if kind in {"chapter", "part"}:
+        return "main_text"
+    return "section"
+
+
+def assign_title_paths(units: list[StructureUnit], root_id: str) -> None:
+    unit_map = {unit.id: unit for unit in units}
+    memo: dict[str, list[str]] = {}
+
+    def walk(unit_id: str) -> list[str]:
+        if unit_id in memo:
+            return memo[unit_id]
+        unit = unit_map[unit_id]
+        if unit.id == root_id:
+            path: list[str] = []
+        elif unit.parent_id is None or unit.parent_id == root_id:
+            path = [unit.label]
+        else:
+            path = [*walk(unit.parent_id), unit.label]
+        memo[unit_id] = path
+        return path
+
+    for unit in units:
+        unit.title_path = walk(unit.id)
 
 
 def filter_txt_duplicate_toc_blocks(headings: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -858,5 +951,10 @@ def reconcile_toc_entries(
             entry["href"] = spine_by_index[candidate]["href"]
             entry["fragment"] = None
             entry["nav_hint"] = spine_by_index[candidate]["href"]
+            entry["source_kind"] = "reconciled_toc"
+            entry.setdefault("warnings", []).append("toc target reconciled to matching spine document title")
+        elif (entry.get("fragment") or "").endswith("-back"):
+            entry["source_kind"] = "reconciled_toc"
+            entry.setdefault("warnings", []).append("toc back-anchor normalized to enclosing heading start")
         min_spine = max(min_spine, entry["position"].spine_index)
     return entries

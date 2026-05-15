@@ -14,6 +14,16 @@ def test_txt_reader_detects_chapters(tmp_path: Path) -> None:
 
     assert index.source_format == "txt"
     assert [unit.label for unit in index.units[1:]] == ["Chapter 1", "Chapter 2"]
+    assert index.units[1].source_kind == "heading"
+    assert index.units[1].content_kind == "main_text"
+    assert index.units[1].title_path == ["Chapter 1"]
+    assert index.units[1].source_range == {
+        "kind": "txt-span",
+        "start_byte": 0,
+        "end_byte": 17,
+        "start_line": 1,
+        "end_line": 3,
+    }
     assert extract_unit_text(book, index.units[1]).startswith("Chapter 1")
 
 
@@ -24,6 +34,9 @@ def test_txt_reader_falls_back_to_chunks(tmp_path: Path) -> None:
     index = build_book_index(book)
 
     assert index.units[1].kind == "chunk"
+    assert index.units[1].source_kind == "fallback_chunk"
+    assert index.units[1].content_kind == "unknown"
+    assert "structure inferred from fallback chunking" in index.units[1].warnings[0]
     assert "fallback chunking" in index.units[1].notes[0]
 
 
@@ -123,6 +136,15 @@ def test_epub_reader_uses_toc_ranges(tmp_path: Path) -> None:
 
     assert index.title == "Sample EPUB"
     assert [unit.label for unit in index.units[1:3]] == ["Chapter 1", "Chapter 2"]
+    assert index.units[1].source_kind == "toc"
+    assert index.units[1].content_kind == "main_text"
+    assert index.units[1].title_path == ["Chapter 1"]
+    assert index.units[1].source_range == {
+        "kind": "epub-range",
+        "start": {"spine_index": 0, "char_offset": 0},
+        "end": {"spine_index": 1, "char_offset": 0},
+        "source_path": "OEBPS/chapter1.xhtml",
+    }
     assert "Alpha text." in extract_unit_text(book, index.units[1])
 
 
@@ -189,5 +211,8 @@ def test_epub_reader_reconciles_suspicious_toc_targets(tmp_path: Path) -> None:
     index = build_book_index(book)
 
     assert [unit.label for unit in index.units[1:3]] == ["卷一 闺房记乐", "卷二 闲情记趣"]
+    assert index.units[1].source_kind == "reconciled_toc"
+    assert "reconciled" in index.units[1].warnings[0]
+    assert index.units[2].source_kind == "reconciled_toc"
     assert "卷一 闺房记乐" in extract_unit_text(book, index.units[1])
     assert "卷二 闲情记趣" in extract_unit_text(book, index.units[2])
