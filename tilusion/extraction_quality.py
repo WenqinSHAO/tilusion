@@ -391,6 +391,31 @@ def relocate_evidence_quote(
             candidates=source_windows(text, punctuation_spans[:5], source_window_chars),
         )
 
+    punctuation_dropped_spans = find_normalized_spans(
+        text, quote, strip_notes=True, fold_punctuation=True, drop_punctuation=True
+    )
+    if len(punctuation_dropped_spans) == 1:
+        start, end = punctuation_dropped_spans[0]
+        return EvidenceLocation(
+            evidence_id=evidence_id,
+            status="relocated",
+            strategy="annotation_whitespace_punctuation_dropped",
+            quote=quote,
+            start=start,
+            end=end,
+            match_text=text[start:end],
+            candidate_count=1,
+        )
+    if len(punctuation_dropped_spans) > 1:
+        return EvidenceLocation(
+            evidence_id=evidence_id,
+            status="ambiguous",
+            strategy="annotation_whitespace_punctuation_dropped",
+            quote=quote,
+            candidate_count=len(punctuation_dropped_spans),
+            candidates=source_windows(text, punctuation_dropped_spans[:5], source_window_chars),
+        )
+
     return EvidenceLocation(
         evidence_id=evidence_id,
         status="missing",
@@ -407,12 +432,19 @@ def find_normalized_spans(
     *,
     strip_notes: bool,
     fold_punctuation: bool,
+    drop_punctuation: bool = False,
 ) -> list[tuple[int, int]]:
     normalized_text, text_map = normalize_for_location(
-        text, strip_notes=strip_notes, fold_punctuation=fold_punctuation
+        text,
+        strip_notes=strip_notes,
+        fold_punctuation=fold_punctuation,
+        drop_punctuation=drop_punctuation,
     )
     normalized_quote, _ = normalize_for_location(
-        quote, strip_notes=strip_notes, fold_punctuation=fold_punctuation
+        quote,
+        strip_notes=strip_notes,
+        fold_punctuation=fold_punctuation,
+        drop_punctuation=drop_punctuation,
     )
     if not normalized_quote:
         return []
@@ -421,7 +453,12 @@ def find_normalized_spans(
     for start, end in normalized_matches:
         if start >= len(text_map) or end - 1 >= len(text_map):
             continue
-        spans.append((text_map[start], text_map[end - 1] + 1))
+        original_start = text_map[start]
+        original_end = text_map[end - 1] + 1
+        if drop_punctuation:
+            while original_end < len(text) and is_punctuation(text[original_end]):
+                original_end += 1
+        spans.append((original_start, original_end))
     return spans
 
 
@@ -430,6 +467,7 @@ def normalize_for_location(
     *,
     strip_notes: bool,
     fold_punctuation: bool,
+    drop_punctuation: bool = False,
 ) -> tuple[str, list[int]]:
     chars: list[str] = []
     index_map: list[int] = []
@@ -442,6 +480,9 @@ def normalize_for_location(
                 continue
         char = text[index]
         if char.isspace():
+            index += 1
+            continue
+        if drop_punctuation and is_punctuation(char):
             index += 1
             continue
         chars.append(fold_char(char) if fold_punctuation else char)
@@ -475,6 +516,16 @@ PUNCTUATION_FOLD = str.maketrans(
 
 def fold_char(char: str) -> str:
     return char.translate(PUNCTUATION_FOLD)
+
+
+def is_punctuation(char: str) -> bool:
+    return char in PUNCTUATION_CHARS
+
+
+PUNCTUATION_CHARS = set(
+    "，、。．：；！？（）“”‘’—－《》〈〉「」『』【】[]()"
+    ",.!?;:\"'`"
+)
 
 
 def quality_issue(

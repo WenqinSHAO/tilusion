@@ -234,7 +234,8 @@ Suggested relocation order:
 2. Normalized search that tolerates whitespace differences.
 3. Annotation-tolerant search that ignores inline note markers such as `[1]`.
 4. Punctuation-tolerant search for common Chinese/English punctuation variants.
-5. Source-window search using distinctive quote fragments.
+5. Punctuation-dropping search for recoverable wrapper punctuation drift, such as omitted Chinese quote marks around speech.
+6. Source-window search using distinctive quote fragments.
 
 Relocation outcomes should be explicit:
 

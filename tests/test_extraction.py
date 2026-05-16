@@ -284,6 +284,17 @@ def test_evidence_relocation_accepts_missing_note_marker() -> None:
     assert location.match_text == "余年十三，随母归宁[7]，两小无嫌。"
 
 
+def test_evidence_relocation_accepts_omitted_speech_quotes() -> None:
+    text = "一日，芸问曰：“各种古文，宗何为是？”余曰：“《国策》。”"
+    quote = "一日，芸问曰：各种古文，宗何为是？"
+
+    location = relocate_evidence_quote(text, quote, evidence_id="overview-segment-0003:start_quote")
+
+    assert location.status == "relocated"
+    assert location.strategy == "annotation_whitespace_punctuation_dropped"
+    assert location.match_text == "一日，芸问曰：“各种古文，宗何为是？”"
+
+
 def test_extraction_quality_report_tracks_relocated_evidence_without_error() -> None:
     text = "余年十三，随母归宁[7]，两小无嫌。\n"
     data = {
