@@ -26,8 +26,10 @@ from tilusion.extraction import (
 from tilusion.book_reader import build_book_index, extract_unit_text
 from tilusion.extraction_quality import relocate_evidence_quote, validate_extraction_quality
 from tilusion.extraction_pipeline import (
+    build_overview_composition,
     build_segment_extraction_composition,
     generated_prompt_part,
+    run_chained_extraction,
     run_segment_extraction_pass,
 )
 
@@ -125,6 +127,16 @@ def test_prompt_composition_tracks_static_and_generated_parts() -> None:
     assert len(prompt.content_hash) == 64
 
 
+def test_overview_composition_tracks_static_prompt_contract() -> None:
+    prompt = build_overview_composition()
+
+    assert prompt.composition_id == "overview-segmentation-v0.1"
+    assert prompt.parts[0].part_id == "overview-segmentation-contract"
+    assert "coarse, source-grounded navigation overview" in prompt.content
+    assert "start_quote" in prompt.content
+    assert "end_quote" in prompt.content
+
+
 def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -> None:
     book = tmp_path / "sample.txt"
     book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
@@ -151,6 +163,33 @@ def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -
         assert Path(path).exists()
     assert "validation_report" in first.artifact_paths
     assert first.validation_report.to_dict()["evidence_location_summary"]["exact"] == 1
+
+
+def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
+    cache_dir = tmp_path / "chain-cache"
+
+    record = run_chained_extraction(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=cache_dir,
+    )
+
+    assert record.unit_id == "unit-0001"
+    assert record.source_length["chars"] == len("Chapter 1\nAlice left home.\n")
+    assert record.overview.data["overview_segments"]
+    assert len(record.resolved_segments) == 1
+    assert record.resolved_segments[0].to_dict()["length"]["chars"] == len("Chapter 1\nAlice left home.")
+    assert len(record.segment_passes) == 1
+    assert record.validation_report["passed"]
+    assert record.validation_report["segment_lengths"][0]["segment_id"] == "overview-segment-0001"
+    assert record.repair_hints["ready_for_llm_repair"] is False
+    for path in record.artifact_paths.values():
+        assert Path(path).exists()
+    assert Path(record.overview.artifact_paths["result"]).exists()
+    assert Path(record.segment_passes[0].artifact_paths["result"]).exists()
 
 
 def test_extraction_budget_rejects_oversized_input() -> None:

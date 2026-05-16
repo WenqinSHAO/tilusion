@@ -18,5 +18,6 @@
 - Prompt design should move toward composable versioned parts for extraction guides, context, existing records, validation feedback, repair, segmentation, and QC.
 - First deterministic validation slice now has a dedicated quality module with evidence relocation, response-local ID/reference integrity, evidence span length, object-surface grounding, and compact LLM repair payloads.
 - Multi-pass scaffolding has started: `run-pass` now emits a pass record and caches prompt composition, request payload, raw response, parsed result, validation report, and manifest under `.tilusion_cache/extraction_passes/`.
+- First chained extraction flow is available via `run-chain`: overview segmentation, deterministic segment-anchor relocation, per-segment extraction with overview hints, aggregate validation, and repair-hint artifacts. LLM repair/review/QC passes are still intentionally separate follow-up work.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
 - Still untested at true 500MB scale.

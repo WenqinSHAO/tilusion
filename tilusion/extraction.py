@@ -99,6 +99,8 @@ class MockExtractionBackend:
     model_identity = "mock-local-bundle-v0"
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+        if user_payload.get("task") == "overview_segmentation":
+            return json.dumps(mock_overview_response(user_payload), ensure_ascii=False)
         text = user_payload["text"]
         unit_id = user_payload["unit"]["id"]
         evidence = first_nonempty_line(text)
@@ -395,6 +397,38 @@ def sha256_json(data: Any) -> str:
 
 def first_nonempty_line(text: str) -> str:
     for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def mock_overview_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    text = str(user_payload.get("text") or "")
+    unit_id = str(user_payload.get("unit", {}).get("id") or "")
+    first = first_nonempty_line(text)
+    last = last_nonempty_line(text)
+    segment = {
+        "segment_id": "overview-segment-0001",
+        "title": first[:80] or "segment",
+        "summary": "Placeholder overview segment extracted by mock backend.",
+        "start_quote": first[:120],
+        "end_quote": last[:120],
+        "key_entities": [],
+        "key_locations": [],
+        "time_hints": [],
+        "event_hints": [],
+        "extraction_hints": ["mock backend used; detailed extraction should inspect this segment"],
+    }
+    return {
+        "unit_id": unit_id,
+        "overview_segments": [segment] if text.strip() else [],
+        "warnings": ["mock backend used; overview is structural placeholder only"],
+    }
+
+
+def last_nonempty_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
         stripped = line.strip()
         if stripped:
             return stripped

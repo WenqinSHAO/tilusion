@@ -12,7 +12,7 @@ from .extraction import (
     ExtractionError,
     MockExtractionBackend,
 )
-from .extraction_pipeline import run_segment_extraction_pass
+from .extraction_pipeline import run_chained_extraction, run_segment_extraction_pass
 from .extraction_quality import validate_extraction_quality
 
 
@@ -39,6 +39,19 @@ def build_parser() -> argparse.ArgumentParser:
     run_pass_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     run_pass_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_passes")
     run_pass_parser.add_argument("--no-cache", action="store_true")
+
+    run_chain_parser = subparsers.add_parser(
+        "run-chain", help="Run overview segmentation plus per-segment extraction"
+    )
+    run_chain_parser.add_argument("book")
+    run_chain_parser.add_argument("unit_id")
+    run_chain_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
+    run_chain_parser.add_argument("--model", default="deepseek-v4-flash")
+    run_chain_parser.add_argument("--thinking", action="store_true")
+    run_chain_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
+    run_chain_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    run_chain_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_chains")
+    run_chain_parser.add_argument("--no-cache", action="store_true")
 
     validate_parser = subparsers.add_parser(
         "validate-result", help="Validate an extraction result against source text"
@@ -75,16 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run-pass":
         try:
-            backend = (
-                MockExtractionBackend()
-                if args.backend == "mock"
-                else DeepSeekBackend(
-                    args.model,
-                    thinking=args.thinking,
-                    reasoning_effort=args.reasoning_effort,
-                    max_tokens=args.max_tokens,
-                )
-            )
+            backend = build_backend(args)
             record = run_segment_extraction_pass(
                 args.book,
                 args.unit_id,
@@ -94,6 +98,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (ExtractionError, ValueError) as error:
             print(f"extraction failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command == "run-chain":
+        try:
+            record = run_chained_extraction(
+                args.book,
+                args.unit_id,
+                backend=build_backend(args),
+                cache_dir=args.cache_dir,
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, ValueError) as error:
+            print(f"extraction chain failed: {error}", file=sys.stderr)
             return 1
         print(record.to_json())
         return 0
@@ -132,6 +151,19 @@ def format_quality_report_text(report) -> str:
             f"repair: {issue.repair_hint}"
         )
     return "\n".join(lines)
+
+
+def build_backend(args):
+    return (
+        MockExtractionBackend()
+        if args.backend == "mock"
+        else DeepSeekBackend(
+            args.model,
+            thinking=args.thinking,
+            reasoning_effort=args.reasoning_effort,
+            max_tokens=args.max_tokens,
+        )
+    )
 
 
 if __name__ == "__main__":

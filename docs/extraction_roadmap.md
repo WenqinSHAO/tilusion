@@ -301,6 +301,14 @@ It should not try to produce final detailed evidence for every event.
 
 Detailed evidence extraction belongs to smaller chunks.
 
+Current implementation note:
+
+- `run-pass` remains the one-pass baseline for comparison.
+- `run-chain` runs an overview segmentation pass first, then resolves each segment's `start_quote` and `end_quote` back into character offsets inside the parent reader unit.
+- The per-segment detailed extraction pass receives only the sliced segment text, not the entire parent unit.
+- The chain manifest records source length and per-segment length stats so extraction density and segment size can be inspected before judging output quality.
+- LLM repair, per-segment LLM review, and parent-unit QC are intentionally not part of the first chain implementation.
+
 Chunk boundaries can be based on:
 
 - paragraph groups
@@ -575,6 +583,16 @@ Prompt part versions should be part of cache keys.
 
 This makes it possible to update evidence relocation guidance without invalidating unrelated context formatting, or to revise a QC prompt without rerunning first-pass extraction.
 
+Current `run-chain` prompt composition:
+
+- Overview pass system prompt is the static prompt part `overview-segmentation-contract` from `tilusion/prompts/overview_segmentation_v0.1.md`.
+- Overview pass user payload contains `task`, `unit_id`, `unit`, and the full parent unit `text`.
+- Segment extraction pass system prompt starts with the static `segment-extraction-contract` from `tilusion/prompts/segment_extraction_v0.4.md`.
+- Segment extraction then appends one generated prompt part per segment with role `overview_extraction_hints`.
+- The generated overview-hints part contains the segment title, summary, per-segment key entities, locations, time hints, event hints, and extraction hints from the overview result.
+- Segment extraction user payload contains the synthetic segment unit metadata, compact `prior_context` derived from overview hints, and the sliced segment text only.
+- Each pass writes `prompt_composition.json` and `system_prompt.md`; those are the first files to inspect when comparing prompt versions.
+
 The likely prompt families are:
 
 - overview and segmentation prompts
@@ -653,6 +671,45 @@ It is:
 - can the result be inspected
 - can the result be corrected
 - can later computation rely on it safely
+
+### Manual LLM Backend Test Guide
+
+Use the one-pass baseline first:
+
+```bash
+python -m tilusion.cli run-pass "./books/Fu Sheng Liu Ji --Zhong Hua Jing Dian Zhi - Miao Huai Ming Ping Zhu  Chen Fu Zhuan.txt" unit-0002 --backend deepseek
+```
+
+Then run the chained flow:
+
+```bash
+python -m tilusion.cli run-chain "./books/Fu Sheng Liu Ji --Zhong Hua Jing Dian Zhi - Miao Huai Ming Ping Zhu  Chen Fu Zhuan.txt" unit-0002 --backend deepseek
+```
+
+Both commands print a `cache_dir`.
+
+For `run-chain`, inspect these files:
+
+- `chain_manifest.json`: full chain summary, source length, segment lengths, overview result, segment pass summaries, aggregate validation, and repair hints.
+- `resolved_segments.json`: relocated segment boundaries, source offsets, segment length, and anchor relocation status.
+- `overview/*/result.json`: raw parsed overview segmentation result.
+- `overview/*/validation_report.json`: deterministic checks for segment anchors.
+- `segments/<segment_id>/*/request_payload.json`: the exact sliced segment text sent to the LLM backend.
+- `segments/<segment_id>/*/prompt_composition.json`: static and generated prompt parts used for that segment.
+- `segments/<segment_id>/*/system_prompt.md`: the composed system prompt.
+- `segments/<segment_id>/*/result.json`: parsed per-segment extraction result.
+- `segments/<segment_id>/*/validation_report.json`: deterministic quality report for the per-segment result.
+- `repair_hints.json`: compact repair payloads for segments with deterministic issues.
+
+How to judge whether the chain improved:
+
+- Compare `run-pass` output with `run-chain` segment outputs for extraction density and missed obvious events.
+- Check whether overview segments are meaningful scene/topic/time/location ranges rather than arbitrary equal chunks.
+- Check `resolved_segments.json` for segment sizes; very large segments mean the overview pass under-segmented, very tiny segments mean it over-segmented.
+- Open each `request_payload.json` to confirm the detailed pass received the intended segment text.
+- Use each segment `validation_report.json` to see whether evidence is exact, relocated, ambiguous, or missing.
+- Use `repair_hints.json` to find deterministic issues ready for a later LLM repair pass.
+- Treat warnings such as `surface_not_in_cited_evidence` as review targets, not automatic hallucination.
 
 ## Recommended LLM Workflow Pattern
 
