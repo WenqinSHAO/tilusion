@@ -13,7 +13,9 @@
 
 - First-pass segment extraction prompt is done enough for live trials, but its output is draft quality.
 - Segment extraction prompt is being tightened using validator feedback, starting with explicit exact-quote and surface-in-evidence rules.
-- Current next step: build the loop that combines deterministic validation with LLM-powered repair, then re-validates before accepting extraction output. Detailed plan: `docs/extraction_roadmap.md`.
+- Current next step: build deterministic evidence relocation before treating quote mismatch as failure. Detailed plan: `docs/extraction_roadmap.md`.
+- Planned extraction loop now uses multiple pass sizes: whole-unit overview, chunk-level detailed extraction, chunk-level repair/validation, and whole-unit QC.
+- Prompt design should move toward composable versioned parts for extraction guides, context, existing records, validation feedback, repair, segmentation, and QC.
 - First deterministic validation slice is underway: exact evidence quote matching, response-local ID/reference integrity, evidence span length, object-surface grounding, and compact LLM repair payloads.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
 - Still untested at true 500MB scale.

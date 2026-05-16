@@ -112,6 +112,19 @@ No object should exist only as a model claim without:
 - a source unit ID, and later a more fine-grained span where possible
 - enough local context for a human to inspect it later
 
+Evidence quotes do not have to be byte-exact copies from the source if they can still be deterministically relocated.
+
+Classical or annotated editions often insert inline note markers, spaces, or punctuation that an LLM may omit while still preserving the intended quote.
+
+The acceptance rule should therefore be:
+
+- exact quote match is best
+- relaxed deterministic relocation is acceptable
+- ambiguous relocation requires review or repair
+- unrelocatable quotes are treated as likely invented or too distorted
+
+Accepted evidence should store the pipeline-resolved source offsets, not only the LLM-provided quote string.
+
 ### 4. Corrections Must Beat Raw Model Confidence
 
 The system should be designed so that:
@@ -179,7 +192,7 @@ Success criteria:
 
 - output schema validates
 - every object has evidence
-- evidence quotes can be deterministically located in the source unit
+- evidence quotes can be deterministically relocated in the source unit
 - invalid or weak evidence can be repaired without rerunning unrelated work
 - rerunning on the same input is reasonably stable
 - token cost per unit is measurable and acceptable
@@ -206,12 +219,33 @@ Initial deterministic checks should include:
 - response-local IDs are unique within each object class
 - every cross-reference resolves
 - every extractable object cites at least one evidence span
-- every evidence quote is an exact substring of the reader unit text
-- every evidence quote can be located, with ambiguous repeated quotes flagged
+- every evidence quote is exact or can be relocated by deterministic relaxed matching
+- ambiguous repeated or relaxed matches are flagged
 - evidence spans are short enough to be inspectable
 - entity and location surfaces appear in at least one cited evidence quote when applicable
 - event, time, thread, and alias objects do not cite missing evidence IDs
 - model output did not stop due to output truncation
+
+Evidence relocation should run before repair.
+
+Suggested relocation order:
+
+1. Direct exact substring search.
+2. Normalized search that tolerates whitespace differences.
+3. Annotation-tolerant search that ignores inline note markers such as `[1]`.
+4. Punctuation-tolerant search for common Chinese/English punctuation variants.
+5. Source-window search using distinctive quote fragments.
+
+Relocation outcomes should be explicit:
+
+- `exact`: quote matched exactly once
+- `relocated`: quote matched once after deterministic normalization
+- `ambiguous`: quote matched multiple possible source spans
+- `missing`: no plausible source span found
+
+Only `missing` should be treated as a hard evidence failure by default.
+
+`relocated` is acceptable for go-to-location review if the resolved source span is stored.
 
 The repair pass should receive:
 
@@ -230,12 +264,62 @@ It should not use repair as an excuse to rewrite the whole extraction or introdu
 
 Important early gates:
 
-- no unmatched evidence quotes
+- no unrelocatable evidence quotes
 - no unresolved references
 - no overlong evidence spans except explicitly allowed short segments
 - no accepted object whose evidence is mechanically missing
 
 If a result fails these gates after repair, the pipeline should fail explicitly or mark invalid objects as rejected instead of silently passing them downstream.
+
+### Long Unit Handling
+
+Some reader units are too long and semantically dense for one detailed extraction call.
+
+For example, `unit-0002` of the current Fu Sheng Liu Ji test text is about 15.7K characters, 42.8K UTF-8 bytes, 458 lines, and 224 non-empty paragraph-like blocks.
+
+It covers many scenes and time jumps, so one detailed extraction pass tends to either over-compress events or produce brittle evidence.
+
+For long units, prefer a multi-size pass loop:
+
+1. Whole-unit overview pass.
+2. Segment planning pass or deterministic chunking.
+3. Chunk-level detailed extraction.
+4. Chunk-level deterministic relocation and validation.
+5. Targeted repair on failed chunks or failed evidence windows.
+6. Whole-unit quality-control pass over merged chunk outputs.
+
+The whole-unit overview pass should extract only coarse structure:
+
+- major time anchors
+- major locations
+- main roles/entities
+- broad event sequence
+- thread candidates
+- suggested segmentation boundaries
+
+It should not try to produce final detailed evidence for every event.
+
+Detailed evidence extraction belongs to smaller chunks.
+
+Chunk boundaries can be based on:
+
+- paragraph groups
+- time changes
+- location changes
+- major event transitions
+- main role focus shifts
+- LLM-suggested boundaries from the overview pass, if they can be mapped back to source offsets
+
+The whole-unit quality-control pass should review merged chunk outputs for:
+
+- duplicate events across chunks
+- missing obvious transitions
+- inconsistent aliases
+- thread continuity errors
+- temporal contradictions
+- unbalanced extraction density
+
+It should not rewrite the entire extraction from scratch.
 
 ## Phase 2: Intra-Unit Grouping
 
@@ -465,6 +549,41 @@ Focused later passes should consume the local bundle output:
 - thread candidate extraction consumes event summaries, active thread state, and evidence spans
 - alias candidate generation consumes entity mentions plus confirmed aliases
 - parent-unit verification consumes chunk-level outputs and compact confirmed state
+
+## Prompt Composition Strategy
+
+The extraction system should not grow as one giant prompt.
+
+As passes multiply, prompts should be assembled from reusable parts with explicit versions.
+
+Useful prompt parts:
+
+- task header: the specific job for this call
+- shared extraction principles: grounding, uncertainty, local IDs, no final canonicalization
+- output schema contract: exact JSON shape for the pass
+- evidence policy: quote, relocation, and source-span expectations
+- prior context block: confirmed entities, aliases, locations, threads, and recent events
+- existing records block: already extracted records being refined or checked
+- validation feedback block: deterministic issues and source windows for repair
+- segmentation guide: known or proposed boundaries by time, location, event, or role focus
+- repair instructions: preserve valid records, fix invalid records, return full corrected JSON
+- review/QC instructions: inspect merged output for duplicates, gaps, contradictions, and uneven density
+
+Prompt parts should be composable so that a repair pass can reuse the same schema and evidence policy as the extraction pass, while swapping the task header and adding validation feedback.
+
+Prompt part versions should be part of cache keys.
+
+This makes it possible to update evidence relocation guidance without invalidating unrelated context formatting, or to revise a QC prompt without rerunning first-pass extraction.
+
+The likely prompt families are:
+
+- overview and segmentation prompts
+- detailed segment extraction prompts
+- deterministic-error repair prompts
+- merge and parent-unit QC prompts
+- cross-unit alias and timeline review prompts
+
+This also leaves room for later GEPA-like prompt evolution, because evolved parts can be evaluated and versioned independently.
 
 ## Segmentation Strategy
 
