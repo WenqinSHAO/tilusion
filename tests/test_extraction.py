@@ -22,9 +22,9 @@ from tilusion.extraction import (
     estimate_deepseek_tokens,
     parse_json_response,
     run_local_bundle_extraction,
-    validate_extraction_quality,
 )
 from tilusion.book_reader import build_book_index, extract_unit_text
+from tilusion.extraction_quality import relocate_evidence_quote, validate_extraction_quality
 
 
 def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> None:
@@ -182,6 +182,55 @@ def test_extraction_quality_report_passes_clean_result() -> None:
     assert report.to_repair_payload()["quality_summary"]["passed"] is True
 
 
+def test_evidence_relocation_accepts_missing_note_marker() -> None:
+    text = "余年十三，随母归宁[7]，两小无嫌。\n"
+    quote = "余年十三，随母归宁，两小无嫌。"
+
+    location = relocate_evidence_quote(text, quote, evidence_id="evidence-0001")
+
+    assert location.status == "relocated"
+    assert location.strategy == "annotation_whitespace_tolerant"
+    assert location.match_text == "余年十三，随母归宁[7]，两小无嫌。"
+
+
+def test_extraction_quality_report_tracks_relocated_evidence_without_error() -> None:
+    text = "余年十三，随母归宁[7]，两小无嫌。\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "余年十三，随母归宁，两小无嫌。",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [],
+        "location_mentions": [],
+        "event_mentions": [
+            {
+                "event_id": "event-0001",
+                "summary": "少年随母归宁。",
+                "participant_mention_ids": [],
+                "location_mention_ids": [],
+                "time_expression_ids": [],
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+
+    assert report.passed
+    assert report.issue_count == 0
+    assert report.evidence_locations[0].status == "relocated"
+    assert "[7]" in (report.evidence_locations[0].match_text or "")
+
+
 def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     text = "Alice met Bob in Paris.\nAlice returned later.\n"
     data = {
@@ -247,7 +296,7 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
 
     assert not report.passed
     assert "duplicate_object_id" in codes
-    assert "evidence_quote_not_found" in codes
+    assert "evidence_quote_missing" in codes
     assert "evidence_quote_ambiguous" in codes
     assert "evidence_quote_too_long" in codes
     assert "unresolved_evidence_ref" in codes
@@ -255,9 +304,10 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     assert "unresolved_object_ref" in codes
     assert "surface_not_in_cited_evidence" in codes
     assert any(
-        issue.code == "evidence_quote_not_found" and issue.source_windows
+        issue.code == "evidence_quote_missing" and issue.source_windows
         for issue in report.issues
     )
+    assert repair_payload["evidence_relocation"]["unresolved"]
     assert repair_payload["quality_summary"]["truncated"] is True
     assert repair_payload["repair_instructions"]
     assert len(repair_payload["issues"]) == 3

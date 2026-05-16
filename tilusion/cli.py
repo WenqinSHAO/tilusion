@@ -12,8 +12,8 @@ from .extraction import (
     ExtractionError,
     MockExtractionBackend,
     run_local_bundle_extraction,
-    validate_extraction_quality,
 )
+from .extraction_quality import validate_extraction_quality
 
 
 def build_parser() -> argparse.ArgumentParser:
