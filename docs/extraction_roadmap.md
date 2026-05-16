@@ -272,6 +272,51 @@ Important early gates:
 
 If a result fails these gates after repair, the pipeline should fail explicitly or mark invalid objects as rejected instead of silently passing them downstream.
 
+### Validation Report Audience Split
+
+Current validation output mixes three audiences:
+
+- local developer/debug inspection
+- human review and UI navigation
+- compact LLM repair input
+
+These should be separated before adding the LLM repair pass.
+
+Planned artifacts:
+
+- `validation_report.json`: full local report. Keep all evidence locations, relocation strategies, source windows, warnings, issue metadata, and computed offsets. This is for debugging and human/user inspection.
+- `repair_hints.json`: compact LLM-facing payload. Include only actionable issues that need semantic correction, such as missing/ambiguous evidence, unresolved references, schema/type errors, and selected high-confidence warnings.
+- `validated_result.json`: enriched machine-facing result. Preserve the original extraction objects and add deterministic locator metadata, such as computed evidence `start`, `end`, `match_text`, and relocation status.
+
+Clean evidence locations with computed `start` and `end` should normally stay local.
+
+They are useful for go-to-location review, UI navigation, downstream merge, and proving that evidence was not hallucinated.
+
+They should not be sent to an LLM repair pass unless the repair task specifically asks the model to judge whether a located quote semantically supports an object.
+
+The current `surface_not_in_cited_evidence` warning is too broad.
+
+The intended refinement:
+
+1. If the surface appears in a cited evidence quote, pass.
+2. If the surface appears in the resolved evidence window or paragraph around the cited quote, treat it as locator-supported and keep it local or low-priority.
+3. If the surface appears elsewhere in the segment, warn that the object may need better cited evidence.
+4. If the surface is not found in the segment, flag it as likely hallucinated or unsupported.
+
+This matters because some evidence quotes are being used as paragraph/scene locators, not as complete semantic support snippets.
+
+In those cases, a source window can help a human inspect the object, but it should not automatically become LLM repair input.
+
+The current `start_hint` and `end_hint` fields are weak deterministic anchors.
+
+They are useful for human readability and for reminding the LLM where it thought the evidence came from, but deterministic reconstruction should rely on quote relocation.
+
+Longer term, hints should be optional and secondary:
+
+- primary locator: `quote`
+- deterministic enrichment: computed `start`, `end`, `match_text`, relocation strategy
+- optional human hint: one natural-language `hint`, or retained `start_hint`/`end_hint` only for display
+
 ### Long Unit Handling
 
 Some reader units are too long and semantically dense for one detailed extraction call.
@@ -701,6 +746,10 @@ For `run-chain`, inspect these files:
 - `segments/<segment_id>/*/result.json`: parsed per-segment extraction result.
 - `segments/<segment_id>/*/validation_report.json`: deterministic quality report for the per-segment result.
 - `repair_hints.json`: compact repair payloads for segments with deterministic issues.
+
+Current caveat: `repair_hints.json` still includes too many warnings, especially `surface_not_in_cited_evidence`.
+
+Until the audience split is implemented, treat it as a diagnostic artifact rather than a ready-to-send LLM repair prompt.
 
 How to judge whether the chain improved:
 
