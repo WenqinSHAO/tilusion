@@ -17,5 +17,6 @@
 - Planned extraction loop now uses multiple pass sizes: whole-unit overview, chunk-level detailed extraction, chunk-level repair/validation, and whole-unit QC.
 - Prompt design should move toward composable versioned parts for extraction guides, context, existing records, validation feedback, repair, segmentation, and QC.
 - First deterministic validation slice now has a dedicated quality module with evidence relocation, response-local ID/reference integrity, evidence span length, object-surface grounding, and compact LLM repair payloads.
+- Multi-pass scaffolding has started: `run-pass` now emits a pass record and caches prompt composition, request payload, raw response, parsed result, validation report, and manifest under `.tilusion_cache/extraction_passes/`.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
 - Still untested at true 500MB scale.

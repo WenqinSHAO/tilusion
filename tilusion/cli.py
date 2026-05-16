@@ -11,8 +11,8 @@ from .extraction import (
     DeepSeekBackend,
     ExtractionError,
     MockExtractionBackend,
-    run_local_bundle_extraction,
 )
+from .extraction_pipeline import run_segment_extraction_pass
 from .extraction_quality import validate_extraction_quality
 
 
@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_pass_parser.add_argument("--thinking", action="store_true")
     run_pass_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
     run_pass_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    run_pass_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_passes")
     run_pass_parser.add_argument("--no-cache", action="store_true")
 
     validate_parser = subparsers.add_parser(
@@ -84,16 +85,17 @@ def main(argv: list[str] | None = None) -> int:
                     max_tokens=args.max_tokens,
                 )
             )
-            result = run_local_bundle_extraction(
+            record = run_segment_extraction_pass(
                 args.book,
                 args.unit_id,
                 backend=backend,
+                cache_dir=args.cache_dir,
                 use_cache=not args.no_cache,
             )
         except (ExtractionError, ValueError) as error:
             print(f"extraction failed: {error}", file=sys.stderr)
             return 1
-        print(result.to_json())
+        print(record.to_json())
         return 0
 
     if args.command == "validate-result":

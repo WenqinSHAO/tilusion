@@ -25,6 +25,11 @@ from tilusion.extraction import (
 )
 from tilusion.book_reader import build_book_index, extract_unit_text
 from tilusion.extraction_quality import relocate_evidence_quote, validate_extraction_quality
+from tilusion.extraction_pipeline import (
+    build_segment_extraction_composition,
+    generated_prompt_part,
+    run_segment_extraction_pass,
+)
 
 
 def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> None:
@@ -99,6 +104,53 @@ def test_local_bundle_extraction_uses_mock_backend_and_cache(tmp_path: Path) -> 
     assert result.data["evidence_spans"][0]["quote"] == "Chapter 1"
     assert cached.to_dict() == result.to_dict()
     assert list(cache_dir.glob("*.json"))
+
+
+def test_prompt_composition_tracks_static_and_generated_parts() -> None:
+    generated = generated_prompt_part(
+        "validation-feedback",
+        role="deterministic_validation_feedback",
+        content="No unresolved evidence.",
+        generated_by="validate_extraction_quality",
+        metadata={"issue_count": 0},
+    )
+
+    prompt = build_segment_extraction_composition([generated])
+
+    assert prompt.parts[0].role == "static_task_contract"
+    assert prompt.parts[1].part_id == "validation-feedback"
+    assert prompt.parts[1].generated_by == "validate_extraction_quality"
+    assert "prompt-part:segment-extraction-contract" in prompt.content
+    assert "No unresolved evidence." in prompt.content
+    assert len(prompt.content_hash) == 64
+
+
+def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
+    cache_dir = tmp_path / "pass-cache"
+
+    first = run_segment_extraction_pass(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=cache_dir,
+    )
+    second = run_segment_extraction_pass(
+        book,
+        "unit-0001",
+        backend=FailingBackend(),
+        cache_dir=cache_dir,
+    )
+
+    assert not first.cache_hit
+    assert second.cache_hit
+    assert first.cache_key == second.cache_key
+    assert second.result.data["unit_id"] == "unit-0001"
+    for path in first.artifact_paths.values():
+        assert Path(path).exists()
+    assert "validation_report" in first.artifact_paths
+    assert first.validation_report.to_dict()["evidence_location_summary"]["exact"] == 1
 
 
 def test_extraction_budget_rejects_oversized_input() -> None:
@@ -315,3 +367,10 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
 
 def run_empty_context():
     return ExtractionContext(frontier="unit-0001")
+
+
+class FailingBackend:
+    model_identity = "mock-local-bundle-v0"
+
+    def complete_json(self, system_prompt, user_payload):
+        raise AssertionError("cache hit should not call backend")
