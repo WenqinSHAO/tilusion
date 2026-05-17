@@ -27,5 +27,6 @@
 - Second LLM-backed chain trial with v0.5 prompt restored 14/14 segments and exposed non-blocking finish/QC issues: one segment overlap, four missing/ellipsized evidence quotes, two empty evidence refs, one ambiguous short quote, one malformed evidence ref, and three non-actionable surface warnings. Details: `docs/extraction_roadmap.md#second-llm-backed-chain-trial-follow-up-issues-2026-05-17`.
 - Cross-segment branch scope is now unit completion: merge/stabilize segment outputs, carry forward repair/QC issues, resolve aliases, detect duplicate events, and produce source-navigable unit artifacts. Timeline construction and future context retrieval stay separate.
 - First unit-finalization skeleton is implemented: `finalize-unit <chain_cache_dir>` runs a cacheable final pass over an existing chain cache and writes unit extraction, QC, reader-view, prompt, payload, raw response, and validation artifacts.
+- Prompt composition strategy is designed for LLM KV cache reuse: static system prompts and shared source text prefixes enable cheap multi-round refinement (repair loops, branching, majority voting). Detailed analysis in `docs/extraction_roadmap.md#leveraging-llm-kv-cache-reuse`.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
 - Still untested at true 500MB scale.

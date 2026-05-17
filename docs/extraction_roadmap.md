@@ -894,6 +894,59 @@ The likely prompt families are:
 
 This also leaves room for later GEPA-like prompt evolution, because evolved parts can be evaluated and versioned independently.
 
+### Leveraging LLM KV Cache Reuse
+
+The prompt composition strategy above is not only about maintainability — it directly enables LLM backend KV cache reuse across passes.
+
+Most LLM backends (DeepSeek, Claude, OpenAI) cache the key-value tensors for prompt prefixes. When a second request shares the same prefix bytes, the backend skips recomputing attention for that prefix. This is request-level acceleration, not file-based caching.
+
+#### Prefix Sharing Opportunities
+
+The extraction loop naturally produces shared prefixes:
+
+**Static system prompts are the cheapest prefix.** The task contract and output schema are identical across many calls. The system prompt for segment extraction (`segment-extraction-contract`) is the same for every segment; only the generated overview-hints part differs. If the backend receives the same system prompt bytes for multiple segments in sequence, the KV cache for that prefix is reused.
+
+**Full source text can be a shared user-payload prefix.** The overview pass already sends the complete unit text. If the repair pass or finalization pass also sends the full unit text as a prefix (followed by generated feedback or compacted results as a suffix), these passes benefit from the overview pass's KV cache. The tradeoff is token volume: the source text is the largest single payload component, but with KV cache hit the marginal compute cost is negligible.
+
+**Segment text is not currently shareable across passes.** Each segment extraction pass sends a different source slice, so there is no natural prefix overlap between segment passes. Within a single segment, multi-round refinement (extract → validate → repair) reuses the same segment text prefix, making repair rounds cheaper than the initial extraction.
+
+#### Multi-Round / Test-Time Scaling Patterns
+
+Several patterns become practical once prompt parts are composable and prefixes are shareable:
+
+**Repair loop (2 rounds).** Round 1 extracts segment data. Deterministic validation identifies actionable issues. Round 2 sends the same source text + system prompt (KV cache hit on both) with a repair task suffix and compact `repair_hints` feedback. The second round costs only the new suffix tokens plus the model's output tokens.
+
+**Majority-vote or best-of-N (N parallel rounds).** Run the same extraction prompt N times with high temperature. Each response is parsed and validated independently. A lightweight merge step picks the most consistent output or flags disagreements. All N calls share the same prompt prefix, so KV cache reuse amortizes the prefix cost. This is useful when extraction ambiguity is high and the cost of a wrong merge exceeds the cost of extra inference.
+
+**Branching at unit scope (1 + M rounds).** After segment extraction completes and the unit text prefix is cached:
+- Round A: finalize unit (merge, alias, dedup, QC) — implemented
+- Round B: construct timeline from stabilized event records
+- Round C: generate cross-unit context summary for the next unit's `prior_context`
+
+Rounds A/B/C share the same unit-text prefix and receive different task suffixes. If run in quick succession, each round hits KV cache on the prefix and only pays for the suffix + output.
+
+**Incremental correction without rerunning.** When a human corrects one entity record in the unit extraction, only the affected segment's extraction cache is invalidated (via text hash change). The overview pass and other segments retain their cache hits. A re-run of `run-chain` only re-extracts the changed segment, and the finalization pass receives the updated segment result while reusing the cached overview and unchanged segments.
+
+#### Current Gaps
+
+| Capability | Status |
+|-----------|--------|
+| File-based SHA256 cache | Done |
+| Cross-segment text-hash cache reuse | Done (`_build_segment_cache_map`) |
+| Composible prompt parts with versioned cache keys | Done |
+| Shared source text prefix across overview, repair, and finalization | Not wired — finalization sends compacted JSON, repair pass not yet implemented |
+| Multi-round repair loop consuming `repair_hints` | `repair_hints` designed for this, loop runner not implemented |
+| KV-cache-aware pass ordering in the pipeline | Not implemented — passes run independently, no prefix-sharing scheduler |
+| Test-time majority voting or best-of-N | Not designed |
+
+#### Near-Term Priorities
+
+1. **Wire source text into the finalization payload as an optional prefix.** The finalization pass should receive the full unit text (or relevant source windows for unresolved evidence) so it can verify claims against evidence. If the overview pass just ran, the KV cache makes this nearly free.
+
+2. **Implement the repair loop runner.** A `repair-segment` command or pipeline function that sends the source text + `repair_hints` payload to the LLM. The second round reuses the first round's prompt prefix.
+
+3. **Pass ordering in `run-chain`.** After the overview pass caches the full unit text prefix, run segment extraction passes immediately (while the prefix is warm), then run the finalization pass (also reusing the prefix). Currently passes are independent and could be scheduled by a runner that groups same-prefix calls together.
+
 ## Segmentation Strategy
 
 Neither extreme is ideal:
