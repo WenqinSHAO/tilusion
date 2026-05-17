@@ -691,6 +691,7 @@ def run_unit_timeline_pass(
     else:
         raw_response = llm.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
+        data = _restore_missing_records(data, repaired_data)
     validation_report = validate_unit_timeline_result(
         data, expected_unit_id=manifest["unit_id"]
     )
@@ -775,6 +776,7 @@ def run_unit_timeline_repair_pass(
         # Strip internal helper fields from LLM output
         data.pop("_validation_issues", None)
         data.pop("_missing_events", None)
+        data = _restore_missing_records(data, timeline_data)
     validation_report = validate_unit_timeline_result(
         data, expected_unit_id=manifest["unit_id"]
     )
@@ -2643,6 +2645,24 @@ def _validation_summary(data: dict[str, Any]) -> dict[str, Any]:
         "thread_count": thread_count,
         "timeline_count": timeline_count,
     }
+
+
+_RECORD_KEYS = (
+    "entity_records",
+    "location_records",
+    "event_records",
+    "thread_records",
+)
+
+
+def _restore_missing_records(data: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    """Copy record arrays from source if missing or empty in data (LLM safety net)."""
+    for key in _RECORD_KEYS:
+        if not data.get(key):
+            source_val = source.get(key)
+            if source_val:
+                data[key] = source_val
+    return data
 
 
 def text_length_stats(text: str) -> dict[str, int]:
