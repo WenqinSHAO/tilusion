@@ -117,6 +117,7 @@ class JsonPassRecord:
     data: dict[str, Any]
     validation_report: dict[str, Any]
     artifact_paths: dict[str, str]
+    anchor_locations: dict[str, EvidenceLocation] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -289,7 +290,9 @@ def run_chained_extraction(
         cache_dir=root_dir / "overview",
         use_cache=use_cache,
     )
-    resolved_segments, overview_repairs = resolve_overview_segments(overview.data, text)
+    resolved_segments, overview_repairs = resolve_overview_segments(
+        overview.data, text, anchor_locations=overview.anchor_locations
+    )
     segment_passes = []
     for segment in resolved_segments:
         segment_context = ExtractionContext(
@@ -444,7 +447,7 @@ def run_overview_segmentation_pass(
         raw_response = backend.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
         validate_overview_result(data)
-    validation_report = validate_overview_structure(data, text)
+    validation_report, anchor_locations = validate_overview_structure(data, text)
     record = JsonPassRecord(
         pass_name="overview-segmentation",
         cache_key=cache_key,
@@ -454,6 +457,7 @@ def run_overview_segmentation_pass(
         data=data,
         validation_report=validation_report,
         artifact_paths=paths,
+        anchor_locations=anchor_locations,
     )
     if use_cache:
         write_json_pass_artifacts(
@@ -475,7 +479,7 @@ def refresh_cached_overview_record(record_data: dict[str, Any]) -> JsonPassRecor
     data = json.loads(Path(paths["result"]).read_text(encoding="utf-8"))
     raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
     text = payload["text"]
-    validation_report = validate_overview_structure(data, text)
+    validation_report, anchor_locations = validate_overview_structure(data, text)
     record = JsonPassRecord(
         pass_name=record_data["pass_name"],
         cache_key=record_data["cache_key"],
@@ -485,6 +489,7 @@ def refresh_cached_overview_record(record_data: dict[str, Any]) -> JsonPassRecor
         data=data,
         validation_report=validation_report,
         artifact_paths=paths,
+        anchor_locations=anchor_locations,
     )
     Path(paths["validation_report"]).write_text(
         json.dumps(validation_report, ensure_ascii=False, indent=2),
@@ -772,8 +777,11 @@ def validate_overview_result(data: dict[str, Any]) -> None:
             raise ValueError(f"overview field {key} must be {expected_type.__name__}")
 
 
-def validate_overview_structure(data: dict[str, Any], text: str) -> dict[str, Any]:
+def validate_overview_structure(
+    data: dict[str, Any], text: str
+) -> tuple[dict[str, Any], dict[str, EvidenceLocation]]:
     issues = []
+    anchor_locations: dict[str, EvidenceLocation] = {}
     segments = data.get("overview_segments") if isinstance(data.get("overview_segments"), list) else []
     for index, segment in enumerate(segments):
         if not isinstance(segment, dict):
@@ -801,11 +809,13 @@ def validate_overview_structure(data: dict[str, Any], text: str) -> dict[str, An
         for field_name in ["start_quote", "end_quote"]:
             quote = segment.get(field_name)
             if isinstance(quote, str) and quote:
+                location_key = f"{segment.get('segment_id') or index}:{field_name}"
                 location = relocate_evidence_quote(
                     text,
                     quote,
-                    evidence_id=f"{segment.get('segment_id') or index}:{field_name}",
+                    evidence_id=location_key,
                 )
+                anchor_locations[location_key] = location
                 if location.status == "missing":
                     issues.append(
                         overview_issue(
@@ -836,7 +846,7 @@ def validate_overview_structure(data: dict[str, Any], text: str) -> dict[str, An
         "error_count": error_count,
         "warning_count": warning_count,
         "issues": issues,
-    }
+    }, anchor_locations
 
 
 def overview_issue(
@@ -859,24 +869,30 @@ def overview_issue(
 
 
 def resolve_overview_segments(
-    overview_data: dict[str, Any], text: str
+    overview_data: dict[str, Any],
+    text: str,
+    *,
+    anchor_locations: dict[str, EvidenceLocation] | None = None,
 ) -> tuple[list[ResolvedOverviewSegment], list[dict[str, Any]]]:
     resolved = []
     repair_hints = []
+    precomputed = anchor_locations or {}
     segments = overview_data.get("overview_segments") or []
     for index, segment in enumerate(segments):
         if not isinstance(segment, dict):
             continue
         segment_id = str(segment.get("segment_id") or f"overview-segment-{index + 1:04d}")
-        start_location = relocate_evidence_quote(
+        start_key = f"{segment_id}:start_quote"
+        end_key = f"{segment_id}:end_quote"
+        start_location = precomputed.get(start_key) or relocate_evidence_quote(
             text,
             str(segment.get("start_quote") or ""),
-            evidence_id=f"{segment_id}:start_quote",
+            evidence_id=start_key,
         )
-        end_location = relocate_evidence_quote(
+        end_location = precomputed.get(end_key) or relocate_evidence_quote(
             text,
             str(segment.get("end_quote") or ""),
-            evidence_id=f"{segment_id}:end_quote",
+            evidence_id=end_key,
         )
         if (
             start_location.start is None
