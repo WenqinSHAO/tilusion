@@ -243,7 +243,7 @@ def test_unit_timeline_composition_extends_repair() -> None:
     repair = build_unit_repair_composition()
     timeline = build_unit_timeline_composition()
 
-    assert timeline.composition_id == "unit-timeline-v0.2"
+    assert timeline.composition_id == "unit-timeline-v0.3"
     assert len(timeline.parts) == 3
     assert timeline.parts[0].part_id == "unit-finalization-contract"
     assert timeline.parts[0].content == repair.parts[0].content
