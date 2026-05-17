@@ -162,7 +162,10 @@ def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -
     for path in first.artifact_paths.values():
         assert Path(path).exists()
     assert "validation_report" in first.artifact_paths
+    assert "validated_result" in first.artifact_paths
     assert first.validation_report.to_dict()["evidence_location_summary"]["exact"] == 1
+    validated_result = Path(first.artifact_paths["validated_result"]).read_text(encoding="utf-8")
+    assert "source_location" in validated_result
 
 
 def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) -> None:
@@ -271,6 +274,7 @@ def test_extraction_quality_report_passes_clean_result() -> None:
     assert report.passed
     assert report.issue_count == 0
     assert report.to_repair_payload()["quality_summary"]["passed"] is True
+    assert report.to_repair_payload()["quality_summary"]["llm_actionable_issue_count"] == 0
 
 
 def test_evidence_relocation_accepts_missing_note_marker() -> None:
@@ -385,6 +389,80 @@ def test_surface_grounding_uses_reconstructed_evidence_context() -> None:
     assert report.issue_count == 0
 
 
+def test_surface_grounding_allows_generic_prefix_suffix_support() -> None:
+    text = "是年冬，值其堂姊出阁，余又随母往。\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "是年冬，值其堂姊出阁",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "芸堂姊",
+                "kind": "person",
+                "summary": "芸的堂姊。",
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [],
+        "event_mentions": [],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+
+    assert report.passed
+    assert [issue.code for issue in report.issues] == []
+
+
+def test_surface_grounding_warning_stays_out_of_llm_repair_payload() -> None:
+    text = "Alice met Bob in Paris.\n\nCharlie stayed home.\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "Alice met Bob in Paris",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "Charlie",
+                "kind": "person",
+                "summary": "Unsupported by the cited paragraph.",
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [],
+        "event_mentions": [],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+    repair_payload = report.to_repair_payload()
+
+    assert report.passed
+    assert [issue.code for issue in report.issues] == ["surface_not_in_evidence_context"]
+    assert repair_payload["quality_summary"]["issue_count"] == 1
+    assert repair_payload["quality_summary"]["llm_actionable_issue_count"] == 0
+    assert repair_payload["issues"] == []
+
+
 def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     text = "Alice met Bob in Paris.\nAlice returned later.\n"
     data = {
@@ -465,6 +543,7 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     assert repair_payload["quality_summary"]["truncated"] is True
     assert repair_payload["repair_instructions"]
     assert len(repair_payload["issues"]) == 3
+    assert all(issue["code"] != "surface_not_in_evidence_context" for issue in repair_payload["issues"])
 
 
 def run_empty_context():

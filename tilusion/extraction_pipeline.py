@@ -600,6 +600,7 @@ def pass_artifact_paths(pass_dir: Path) -> dict[str, str]:
         "raw_response": str(pass_dir / "raw_response.txt"),
         "result": str(pass_dir / "result.json"),
         "validation_report": str(pass_dir / "validation_report.json"),
+        "validated_result": str(pass_dir / "validated_result.json"),
     }
 
 
@@ -841,14 +842,15 @@ def build_chain_repair_hints(
 ) -> dict[str, Any]:
     segment_repairs = []
     for record in segment_passes:
-        payload = record.validation_report.to_repair_payload()
-        if payload["quality_summary"]["issue_count"]:
+        payload = record.validation_report.to_llm_repair_payload()
+        if payload["quality_summary"]["llm_actionable_issue_count"]:
             segment_repairs.append(
                 {
                     "segment_id": record.result.unit_id,
                     "repair_payload": payload,
                     "result_path": record.artifact_paths["result"],
                     "validation_report_path": record.artifact_paths["validation_report"],
+                    "validated_result_path": record.artifact_paths["validated_result"],
                 }
             )
     return {
@@ -888,6 +890,10 @@ def write_pass_artifacts(
     Path(paths["result"]).write_text(result.to_json(), encoding="utf-8")
     Path(paths["validation_report"]).write_text(
         json.dumps(validation_report.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["validated_result"]).write_text(
+        json.dumps(validation_report.to_validated_result(result.data), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     Path(paths["manifest"]).write_text(

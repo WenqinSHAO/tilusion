@@ -282,13 +282,13 @@ Current validation output mixes three audiences:
 
 These should be separated before adding the LLM repair pass.
 
-Planned artifacts:
+Implemented artifact split:
 
 - `validation_report.json`: full local report. Keep all evidence locations, relocation strategies, source windows, warnings, issue metadata, and computed offsets. This is for debugging and human/user inspection.
-- `repair_hints.json`: compact LLM-facing payload. Include only actionable issues that need semantic correction, such as missing/ambiguous evidence, unresolved references, schema/type errors, and selected high-confidence warnings.
+- `repair_hints.json`: compact LLM-facing payload. Include only actionable issues that need semantic correction, such as missing/ambiguous evidence, unresolved references, schema/type errors, and selected high-confidence warnings. Low-priority local warnings, such as surface grounding warnings that require human interpretation, are excluded by default.
 - `validated_result.json`: enriched machine-facing result. Preserve the original extraction objects and add deterministic locator metadata, such as computed evidence `start`, `end`, `match_text`, and relocation status.
 
-Clean evidence locations with computed `start` and `end` should normally stay local.
+Clean evidence locations with computed `start` and `end` normally stay local.
 
 They are useful for go-to-location review, UI navigation, downstream merge, and proving that evidence was not hallucinated.
 
@@ -298,11 +298,15 @@ The older `surface_not_in_cited_evidence` warning was too broad.
 
 The validator should check reconstructed evidence context, not only the exact locator quote.
 
-The intended refinement:
+Current refinement:
 
 1. If the surface appears in a cited evidence quote, pass.
 2. If the surface appears in the resolved evidence window or paragraph around the cited quote, treat it as locator-supported and keep it local or low-priority.
 3. If the surface appears elsewhere in the segment, warn that the object may need better cited evidence.
+
+Surface matching allows conservative prefix/suffix support after normalization.
+
+This avoids text-specific rules such as hard-coded relational prefixes while still accepting cases where the extracted surface includes a local possessor or relation but the source support contains the core surface.
 4. If the surface is not found in the segment, flag it as likely hallucinated or unsupported.
 
 This matters because some evidence quotes are being used as paragraph/scene locators, not as complete semantic support snippets.
@@ -747,11 +751,12 @@ For `run-chain`, inspect these files:
 - `segments/<segment_id>/*/system_prompt.md`: the composed system prompt.
 - `segments/<segment_id>/*/result.json`: parsed per-segment extraction result.
 - `segments/<segment_id>/*/validation_report.json`: deterministic quality report for the per-segment result.
+- `segments/<segment_id>/*/validated_result.json`: parsed extraction result enriched with deterministic source locations for evidence spans.
 - `repair_hints.json`: compact repair payloads for segments with deterministic issues.
 
-Current caveat: `repair_hints.json` may still include too many warnings, especially low-priority surface grounding warnings.
+`repair_hints.json` is now intentionally narrower than `validation_report.json`.
 
-Until the audience split is implemented, treat it as a diagnostic artifact rather than a ready-to-send LLM repair prompt.
+Use it as the default input candidate for a later repair pass, but keep `validation_report.json` and `validated_result.json` local for debugging, navigation, and human review.
 
 How to judge whether the chain improved:
 
@@ -760,6 +765,7 @@ How to judge whether the chain improved:
 - Check `resolved_segments.json` for segment sizes; very large segments mean the overview pass under-segmented, very tiny segments mean it over-segmented.
 - Open each `request_payload.json` to confirm the detailed pass received the intended segment text.
 - Use each segment `validation_report.json` to see whether evidence is exact, relocated, ambiguous, or missing.
+- Use each segment `validated_result.json` to inspect deterministic source offsets without rereading the full local report.
 - Use `repair_hints.json` to find deterministic issues ready for a later LLM repair pass.
 - Treat surface grounding warnings as review targets, not automatic hallucination.
 

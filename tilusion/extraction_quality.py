@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import re
 from typing import Any
@@ -63,25 +64,28 @@ class ExtractionQualityReport:
         }
 
     def to_repair_payload(self, *, max_issues: int = 40) -> dict[str, Any]:
-        selected = self.issues[:max_issues]
+        return self.to_llm_repair_payload(max_issues=max_issues)
+
+    def actionable_issues(self) -> list[ExtractionQualityIssue]:
+        return [issue for issue in self.issues if is_llm_actionable_issue(issue)]
+
+    def to_llm_repair_payload(self, *, max_issues: int = 40) -> dict[str, Any]:
+        actionable_issues = self.actionable_issues()
+        selected = actionable_issues[:max_issues]
         unresolved_locations = [
             location
             for location in self.evidence_locations
             if location.status in {"ambiguous", "missing"}
-        ]
-        relocated_ids = [
-            location.evidence_id
-            for location in self.evidence_locations
-            if location.status == "relocated"
         ]
         return {
             "unit_id": self.unit_id,
             "quality_summary": {
                 "passed": self.passed,
                 "issue_count": self.issue_count,
+                "llm_actionable_issue_count": len(actionable_issues),
                 "error_count": self.error_count,
                 "warning_count": self.warning_count,
-                "truncated": len(self.issues) > len(selected),
+                "truncated": len(actionable_issues) > len(selected),
             },
             "repair_instructions": [
                 "Fix the listed issues while preserving valid extracted objects whenever possible.",
@@ -92,10 +96,38 @@ class ExtractionQualityReport:
             "evidence_relocation": {
                 "summary": evidence_location_summary(self.evidence_locations),
                 "unresolved": [location.to_dict() for location in unresolved_locations],
-                "accepted_relocated_ids": relocated_ids[:50],
-                "relocated_ids_truncated": len(relocated_ids) > 50,
             },
             "issues": [issue.to_dict() for issue in selected],
+        }
+
+    def to_validated_result(self, data: dict[str, Any]) -> dict[str, Any]:
+        enriched = deepcopy(data)
+        locations_by_id = {
+            location.evidence_id: location.to_dict()
+            for location in self.evidence_locations
+            if location.evidence_id
+        }
+        evidence_spans = enriched.get("evidence_spans")
+        if isinstance(evidence_spans, list):
+            for evidence in evidence_spans:
+                if not isinstance(evidence, dict):
+                    continue
+                evidence_id = evidence.get("evidence_id")
+                if isinstance(evidence_id, str) and evidence_id in locations_by_id:
+                    evidence["source_location"] = locations_by_id[evidence_id]
+        return {
+            "unit_id": self.unit_id,
+            "passed": self.passed,
+            "validation_summary": {
+                "issue_count": self.issue_count,
+                "error_count": self.error_count,
+                "warning_count": self.warning_count,
+                "evidence_location_summary": evidence_location_summary(self.evidence_locations),
+            },
+            "source_locations": {
+                "evidence_spans": locations_by_id,
+            },
+            "data": enriched,
         }
 
 
@@ -106,6 +138,18 @@ def evidence_location_summary(locations: list[EvidenceLocation]) -> dict[str, in
             summary[location.status] = 0
         summary[location.status] += 1
     return summary
+
+
+LLM_ACTIONABLE_WARNING_CODES = {
+    "evidence_quote_ambiguous",
+    "evidence_quote_too_long",
+}
+
+
+def is_llm_actionable_issue(issue: ExtractionQualityIssue) -> bool:
+    if issue.severity == "error":
+        return True
+    return issue.code in LLM_ACTIONABLE_WARNING_CODES
 
 
 def validate_extraction_quality(
@@ -722,19 +766,23 @@ def surface_supported_by_texts(surface: str, texts: list[str]) -> bool:
     needles = surface_needles(surface)
     normalized_texts = [normalize_support_text(text) for text in texts]
     for needle in needles:
-        normalized_needle = normalize_support_text(needle)
-        if normalized_needle and any(normalized_needle in text for text in normalized_texts):
+        if needle and any(needle in text for text in normalized_texts):
             return True
     return False
 
 
 def surface_needles(surface: str) -> list[str]:
-    needles = [surface]
-    if len(surface) >= 3 and surface[0] in RELATIONAL_SURFACE_PREFIXES:
-        needles.append(surface[1:])
+    normalized = normalize_support_text(surface)
+    needles = [normalized]
+    if len(normalized) >= 3:
+        needles.append(normalized[1:])
+        needles.append(normalized[:-1])
+    if len(normalized) >= 5:
+        needles.append(normalized[2:])
+        needles.append(normalized[:-2])
     unique = []
     for needle in needles:
-        if needle and needle not in unique:
+        if len(needle) >= 2 and needle not in unique:
             unique.append(needle)
     return unique
 
@@ -744,9 +792,6 @@ def normalize_support_text(text: str) -> str:
         text, strip_notes=True, fold_punctuation=True, drop_punctuation=True
     )
     return normalized
-
-
-RELATIONAL_SURFACE_PREFIXES = {"芸", "余", "吾", "我", "其"}
 
 
 def validate_link_refs(
