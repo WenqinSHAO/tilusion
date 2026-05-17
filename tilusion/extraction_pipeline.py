@@ -30,6 +30,7 @@ from .extraction_quality import (
     ExtractionQualityReport,
     relocate_evidence_quote,
     validate_extraction_quality,
+    is_llm_actionable_issue,
 )
 
 
@@ -268,6 +269,29 @@ def run_segment_extraction_pass(
     return record
 
 
+def _build_segment_cache_map(segments_dir: Path) -> dict[str, Path]:
+    cache_map: dict[str, Path] = {}
+    if not segments_dir.exists():
+        return cache_map
+    for segment_dir in segments_dir.iterdir():
+        if not segment_dir.is_dir():
+            continue
+        for pass_dir in segment_dir.iterdir():
+            if not pass_dir.is_dir():
+                continue
+            result_path = pass_dir / "result.json"
+            if not result_path.exists():
+                continue
+            try:
+                result_data = json.loads(result_path.read_text(encoding="utf-8"))
+                text_hash = result_data.get("source_text_hash")
+                if text_hash and text_hash not in cache_map:
+                    cache_map[text_hash] = result_path
+            except (json.JSONDecodeError, OSError):
+                continue
+    return cache_map
+
+
 def run_chained_extraction(
     book_path: str | Path,
     unit_id: str,
@@ -293,6 +317,8 @@ def run_chained_extraction(
     resolved_segments, overview_repairs = resolve_overview_segments(
         overview.data, text, anchor_locations=overview.anchor_locations
     )
+    segments_dir = root_dir / "segments"
+    cache_map = _build_segment_cache_map(segments_dir) if use_cache else {}
     segment_passes = []
     for segment in resolved_segments:
         segment_context = ExtractionContext(
@@ -323,15 +349,21 @@ def run_chained_extraction(
                 metadata={"segment_id": segment.segment_id},
             )
         ]
+        segment_text_hash = sha256_text(segment.text)
+        cached_result_path = cache_map.get(segment_text_hash)
+        cached_result = None
+        if cached_result_path and cached_result_path.exists():
+            cached_result = result_from_json(cached_result_path.read_text(encoding="utf-8"))
         segment_passes.append(
             run_text_segment_extraction_pass(
                 parent_unit=unit,
                 segment=segment,
                 context=segment_context,
                 backend=llm,
-                cache_dir=root_dir / "segments",
+                cache_dir=segments_dir,
                 use_cache=use_cache,
                 generated_prompt_parts=generated_parts,
+                cached_result=cached_result,
             )
         )
     validation_report = build_chain_validation_report(
@@ -511,6 +543,7 @@ def run_text_segment_extraction_pass(
     cache_dir: Path,
     use_cache: bool,
     generated_prompt_parts: list[PromptPart],
+    cached_result: LocalBundleResult | None = None,
 ) -> ExtractionPassRecord:
     segment_unit = {
         "id": segment.segment_id,
@@ -532,11 +565,12 @@ def run_text_segment_extraction_pass(
         "text": segment.text,
     }
     prompt = build_segment_extraction_composition(generated_prompt_parts)
-    check_extraction_budget(
-        prompt.content,
-        payload,
-        max_output_tokens=getattr(backend, "max_tokens", DEFAULT_MAX_TOKENS),
-    )
+    if cached_result is None:
+        check_extraction_budget(
+            prompt.content,
+            payload,
+            max_output_tokens=getattr(backend, "max_tokens", DEFAULT_MAX_TOKENS),
+        )
     cache_key = build_pass_cache_key(
         pass_name="segment-extraction",
         prompt=prompt,
@@ -547,7 +581,12 @@ def run_text_segment_extraction_pass(
     paths = pass_artifact_paths(pass_dir)
     result_path = Path(paths["result"])
     cache_hit = use_cache and result_path.exists()
-    if cache_hit:
+    if cached_result is not None:
+        result = cached_result
+        if result.data.get("unit_id") != segment.segment_id:
+            result.data["unit_id"] = segment.segment_id
+        cache_hit = True
+    elif cache_hit:
         result = result_from_json(result_path.read_text(encoding="utf-8"))
     else:
         raw_response = backend.complete_json(prompt.content, payload)
@@ -1094,6 +1133,30 @@ def build_cached_chain_validation_report(
     }
 
 
+def _build_non_actionable_warning_summary(
+    segment_passes: list[ExtractionPassRecord],
+) -> dict[str, Any]:
+    by_code: dict[str, int] = {}
+    affected_segments: list[str] = []
+    total = 0
+    for record in segment_passes:
+        segment_id = record.result.unit_id
+        segment_has_non_actionable = False
+        for issue in record.validation_report.issues:
+            if not is_llm_actionable_issue(issue):
+                code = issue.code
+                by_code[code] = by_code.get(code, 0) + 1
+                total += 1
+                segment_has_non_actionable = True
+        if segment_has_non_actionable:
+            affected_segments.append(segment_id)
+    return {
+        "total": total,
+        "by_code": by_code,
+        "affected_segments": affected_segments,
+    }
+
+
 def build_chain_repair_hints(
     overview_repairs: list[dict[str, Any]],
     segment_passes: list[ExtractionPassRecord],
@@ -1112,10 +1175,12 @@ def build_chain_repair_hints(
                     "validated_result_path": record.artifact_paths["validated_result"],
                 }
             )
+    non_actionable = _build_non_actionable_warning_summary(segment_passes)
     return {
         "ready_for_llm_repair": bool(overview_repairs or segment_repairs),
         "overview_repairs": overview_repairs,
         "segment_repairs": segment_repairs,
+        "non_actionable_warnings": non_actionable,
         "summary": {
             "passed": validation_report["passed"],
             "error_count": validation_report["error_count"],

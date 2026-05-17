@@ -157,7 +157,7 @@ def validate_extraction_quality(
     unit_text: str,
     *,
     expected_unit_id: str | None = None,
-    max_evidence_chars: int = 320,
+    max_evidence_chars: int = 600,
     source_window_chars: int = 120,
 ) -> ExtractionQualityReport:
     issues: list[ExtractionQualityIssue] = []

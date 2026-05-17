@@ -218,6 +218,14 @@ def format_chain_refresh_text(manifest: dict) -> str:
                 f", evidence=[{evidence_str}]"
                 f"{', issues={' + issue_str + '}' if issue_str else ''}"
             )
+    non_actionable = repair_hints.get("non_actionable_warnings", {})
+    if non_actionable and non_actionable.get("total"):
+        by_code = non_actionable.get("by_code", {})
+        code_summary = ", ".join(f"{code}:{count}" for code, count in by_code.items())
+        lines.append(
+            f"non-actionable warnings: {non_actionable['total']} total"
+            f"{' (' + code_summary + ')' if code_summary else ''}"
+        )
     return "\n".join(lines)
 
 
