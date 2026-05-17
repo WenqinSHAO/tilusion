@@ -16,6 +16,7 @@ from .extraction import (
 )
 from .extraction_pipeline import (
     refresh_chain_validation_cache,
+    run_all_passes,
     run_chained_extraction,
     run_segment_extraction_pass,
     run_unit_finalization_pass,
@@ -103,6 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
     timeline_repair_parser.add_argument("timeline_pass_dir")
     _add_llm_backend_args(timeline_repair_parser)
     timeline_repair_parser.add_argument("--no-cache", action="store_true")
+
+    run_all_parser = subparsers.add_parser(
+        "run-all",
+        help="Run the full extraction pipeline (chain → finalize → repair → timeline → timeline-repair)",
+    )
+    run_all_parser.add_argument("book")
+    run_all_parser.add_argument("unit_id")
+    _add_llm_backend_args(run_all_parser)
+    run_all_parser.add_argument("--cache-dir", default=".tilusion_cache")
+    run_all_parser.add_argument("--no-cache", action="store_true")
+    run_all_parser.add_argument(
+        "--skip-repair",
+        action="store_true",
+        help="Skip repair passes even when issues are detected",
+    )
 
     validate_parser = subparsers.add_parser(
         "validate-result", help="Validate an extraction result against source text"
@@ -230,6 +246,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"timeline repair failed: {error}", file=sys.stderr)
             return 1
         print(record.to_json())
+        return 0
+
+    if args.command == "run-all":
+        try:
+            record = run_all_passes(
+                args.book,
+                args.unit_id,
+                backend=build_backend(args),
+                cache_dir=args.cache_dir,
+                use_cache=not args.no_cache,
+                skip_repair=args.skip_repair,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"run-all failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        print(f"package: {record.unit_package_path}", file=sys.stderr)
         return 0
 
     if args.command == "validate-result":

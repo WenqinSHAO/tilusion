@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from importlib import resources
 import json
 from pathlib import Path
+import sys
+import time
 from typing import Any
 
 from .book_reader import build_book_index, extract_unit_text
@@ -180,6 +182,7 @@ class ChainedExtractionRecord:
     validation_report: dict[str, Any]
     repair_hints: dict[str, Any]
     artifact_paths: dict[str, str]
+    overview_result_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,6 +191,7 @@ class ChainedExtractionRecord:
             "source_length": self.source_length,
             "artifact_paths": self.artifact_paths,
             "overview": self.overview.to_dict(),
+            "overview_result_hash": self.overview_result_hash,
             "resolved_segments": [segment.to_dict() for segment in self.resolved_segments],
             "segment_passes": [record.to_dict() for record in self.segment_passes],
             "validation_report": self.validation_report,
@@ -246,6 +250,29 @@ class UnitTimelineRecord:
             "raw_response": self.raw_response,
             "data": self.data,
             "validation_report": self.validation_report,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+
+@dataclass(slots=True)
+class RunAllRecord:
+    unit_id: str
+    elapsed_ms: int
+    unit_package_path: str
+    passes: dict[str, dict[str, Any]]
+    data: dict[str, Any]
+    validation: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "unit_id": self.unit_id,
+            "elapsed_ms": self.elapsed_ms,
+            "unit_package_path": self.unit_package_path,
+            "passes": self.passes,
+            "data": self.data,
+            "validation": self.validation,
         }
 
     def to_json(self) -> str:
@@ -368,40 +395,17 @@ def run_chained_extraction(
         raise ValueError(f"unknown unit_id: {unit_id}")
     text = extract_unit_text(book_path, unit)
     llm = backend or MockExtractionBackend()
-
-    prelim_key = chain_cache_key(unit_id=unit_id, text=text, model_identity=llm.model_identity)
-    prelim_dir = Path(cache_dir) / prelim_key
+    root_dir = Path(cache_dir) / chain_cache_key(unit_id=unit_id, text=text, model_identity=llm.model_identity)
     overview = run_overview_segmentation_pass(
         unit=unit,
         text=text,
         backend=llm,
-        cache_dir=prelim_dir / "overview",
+        cache_dir=root_dir / "overview",
         use_cache=use_cache,
     )
     resolved_segments, overview_repairs = resolve_overview_segments(
         overview.data, text, anchor_locations=overview.anchor_locations
     )
-
-    final_key = chain_cache_key(
-        unit_id=unit_id,
-        text=text,
-        model_identity=llm.model_identity,
-        overview_result_hash=sha256_json(overview.data),
-    )
-    root_dir = Path(cache_dir) / final_key
-    if prelim_dir != root_dir:
-        if prelim_dir.exists() and not root_dir.exists():
-            prelim_dir.rename(root_dir)
-        else:
-            root_dir.mkdir(parents=True, exist_ok=True)
-        _old_prefix = str(prelim_dir)
-        _new_prefix = str(root_dir)
-        overview.artifact_paths = {
-            key: p.replace(_old_prefix, _new_prefix)
-            for key, p in overview.artifact_paths.items()
-        }
-        overview.cache_dir = overview.cache_dir.replace(_old_prefix, _new_prefix)
-
     segments_dir = root_dir / "segments"
     cache_map = _build_segment_cache_map(segments_dir) if use_cache else {}
     segment_passes = []
@@ -466,6 +470,7 @@ def run_chained_extraction(
         validation_report=validation_report,
         repair_hints=repair_hints,
         artifact_paths=paths,
+        overview_result_hash=sha256_json(overview.data),
     )
     if use_cache:
         write_chain_artifacts(root_dir, paths, record)
@@ -1298,24 +1303,17 @@ def unit_timeline_repair_artifact_paths(pass_dir: Path) -> dict[str, str]:
     }
 
 
-def chain_cache_key(
-    *,
-    unit_id: str,
-    text: str,
-    model_identity: str,
-    overview_result_hash: str | None = None,
-) -> str:
-    components: dict[str, Any] = {
-        "pipeline": "overview-plus-segment-extraction-v0.1",
-        "unit_id": unit_id,
-        "source_text_hash": sha256_text(text),
-        "model_identity": model_identity,
-        "overview_prompt_version": OVERVIEW_PROMPT_VERSION,
-        "segment_prompt_version": PROMPT_VERSION,
-    }
-    if overview_result_hash is not None:
-        components["overview_result_hash"] = overview_result_hash
-    return sha256_json(components)
+def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
+    return sha256_json(
+        {
+            "pipeline": "overview-plus-segment-extraction-v0.1",
+            "unit_id": unit_id,
+            "source_text_hash": sha256_text(text),
+            "model_identity": model_identity,
+            "overview_prompt_version": OVERVIEW_PROMPT_VERSION,
+            "segment_prompt_version": PROMPT_VERSION,
+        }
+    )
 
 
 def build_unit_finalization_payload(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -2403,6 +2401,248 @@ def format_unit_timeline_view(data: dict[str, Any], validation_report: dict[str,
             if rationale:
                 lines.append(f"  rationale: {rationale}")
     return "\n".join(lines) + "\n"
+
+
+def _log_progress(
+    step: int,
+    total: int,
+    description: str,
+    status: str,
+    elapsed_ms: int,
+) -> None:
+    elapsed_s = elapsed_ms / 1000
+    print(
+        f"[{step}/{total}] {description}... {status} ({elapsed_s:.1f}s)",
+        file=sys.stderr,
+    )
+
+
+def run_all_passes(
+    book_path: str | Path,
+    unit_id: str,
+    *,
+    backend: LLMBackend | None = None,
+    cache_dir: str | Path = ".tilusion_cache",
+    use_cache: bool = True,
+    skip_repair: bool = False,
+) -> RunAllRecord:
+    llm = backend or MockExtractionBackend()
+    root = Path(cache_dir)
+    total_start = time.monotonic()
+    pass_summaries: dict[str, dict[str, Any]] = {}
+    final_data: dict[str, Any] = {}
+
+    chain_dir: str | None = None
+    finalization_dir: str | None = None
+    repair_dir: str | None = None
+    timeline_dir: str | None = None
+
+    # ---- Step 1: Chain (overview + segments) ----
+    t0 = time.monotonic()
+    try:
+        chain_record = run_chained_extraction(
+            book_path, unit_id, backend=llm,
+            cache_dir=root / "extraction_chains", use_cache=use_cache,
+        )
+    except Exception:
+        _log_progress(1, 5, "overview+segments", "FAILED", _elapsed_ms(t0))
+        raise
+    chain_dir = chain_record.cache_dir
+    pass_summaries["chain"] = {
+        "cache_key": chain_record.overview.cache_key,
+        "cache_hit": chain_record.overview.cache_hit,
+        "elapsed_ms": _elapsed_ms(t0),
+        "segments_resolved": len(chain_record.resolved_segments),
+        "segments_total": len(chain_record.overview.data.get("overview_segments", [])),
+    }
+    _log_progress(
+        1, 5, "overview+segments",
+        "cache hit" if chain_record.overview.cache_hit else "LLM call",
+        pass_summaries["chain"]["elapsed_ms"],
+    )
+
+    # ---- Step 2: Unit finalization ----
+    t0 = time.monotonic()
+    try:
+        finalization_record = run_unit_finalization_pass(
+            chain_dir, backend=llm, use_cache=use_cache,
+        )
+    except Exception:
+        _log_progress(2, 5, "unit finalization", "FAILED", _elapsed_ms(t0))
+        raise
+    finalization_dir = finalization_record.cache_dir
+    pass_summaries["finalization"] = {
+        "cache_key": finalization_record.cache_key,
+        "cache_hit": finalization_record.cache_hit,
+        "elapsed_ms": _elapsed_ms(t0),
+    }
+    _log_progress(
+        2, 5, "unit finalization",
+        "cache hit" if finalization_record.cache_hit else "LLM call",
+        pass_summaries["finalization"]["elapsed_ms"],
+    )
+
+    # ---- Step 3: Unit repair (conditional) ----
+    t0 = time.monotonic()
+    repair_record = None
+    repair_hints = chain_record.repair_hints
+    repair_needed = (
+        not skip_repair
+        and isinstance(repair_hints, dict)
+        and repair_hints.get("ready_for_llm_repair") is True
+    )
+    if repair_needed:
+        try:
+            repair_record = run_unit_repair_pass(
+                finalization_dir, backend=llm, use_cache=use_cache,
+            )
+        except Exception:
+            _log_progress(3, 5, "unit repair", "FAILED (continuing)", _elapsed_ms(t0))
+        else:
+            repair_dir = repair_record.cache_dir
+            pass_summaries["repair"] = {
+                "cache_key": repair_record.cache_key,
+                "cache_hit": repair_record.cache_hit,
+                "elapsed_ms": _elapsed_ms(t0),
+                "skipped": False,
+            }
+            _log_progress(
+                3, 5, "unit repair",
+                "cache hit" if repair_record.cache_hit else "LLM call",
+                pass_summaries["repair"]["elapsed_ms"],
+            )
+    if "repair" not in pass_summaries:
+        reason = "nothing actionable" if not skip_repair else "repair skipped by flag"
+        pass_summaries["repair"] = {"skipped": True, "reason": reason}
+        _log_progress(3, 5, "unit repair", f"skipped ({reason})", _elapsed_ms(t0))
+
+    # The input to timeline is the repaired data if repair ran, else finalization
+    timeline_input_dir = repair_dir or finalization_dir  # type: ignore[assignment]
+
+    # ---- Step 4: Timeline construction ----
+    t0 = time.monotonic()
+    try:
+        timeline_record = run_unit_timeline_pass(
+            timeline_input_dir, backend=llm, use_cache=use_cache,
+        )
+    except Exception:
+        _log_progress(4, 5, "timeline construction", "FAILED", _elapsed_ms(t0))
+        raise
+    timeline_dir = timeline_record.cache_dir
+    pass_summaries["timeline"] = {
+        "cache_key": timeline_record.cache_key,
+        "cache_hit": timeline_record.cache_hit,
+        "elapsed_ms": _elapsed_ms(t0),
+    }
+    _log_progress(
+        4, 5, "timeline construction",
+        "cache hit" if timeline_record.cache_hit else "LLM call",
+        pass_summaries["timeline"]["elapsed_ms"],
+    )
+    final_data = timeline_record.data
+
+    # ---- Step 5: Timeline repair (conditional) ----
+    t0 = time.monotonic()
+    tl_validation = timeline_record.validation_report
+    tl_errors = tl_validation.get("error_count", 0) if isinstance(tl_validation, dict) else 0
+    if not skip_repair and isinstance(tl_errors, int) and tl_errors > 0:
+        try:
+            tl_repair_record = run_unit_timeline_repair_pass(
+                timeline_dir, backend=llm, use_cache=use_cache,
+            )
+        except Exception:
+            _log_progress(5, 5, "timeline repair", "FAILED (continuing)", _elapsed_ms(t0))
+        else:
+            pass_summaries["timeline_repair"] = {
+                "cache_key": tl_repair_record.cache_key,
+                "cache_hit": tl_repair_record.cache_hit,
+                "elapsed_ms": _elapsed_ms(t0),
+                "skipped": False,
+            }
+            final_data = tl_repair_record.data
+            _log_progress(
+                5, 5, "timeline repair",
+                "cache hit" if tl_repair_record.cache_hit else "LLM call",
+                pass_summaries["timeline_repair"]["elapsed_ms"],
+            )
+    if "timeline_repair" not in pass_summaries:
+        reason = "no timeline errors" if tl_errors == 0 else "repair skipped by flag"
+        pass_summaries["timeline_repair"] = {"skipped": True, "reason": reason}
+        _log_progress(5, 5, "timeline repair", f"skipped ({reason})", _elapsed_ms(t0))
+
+    total_elapsed = _elapsed_ms(total_start)
+
+    # Validation summary from the final pass
+    validation_summary = _validation_summary(final_data)
+
+    # Write unit package
+    package_path = write_unit_package(
+        unit_id=unit_id,
+        book_path=str(book_path),
+        passes=pass_summaries,
+        data=final_data,
+        validation=validation_summary,
+        cache_root=root,
+    )
+
+    return RunAllRecord(
+        unit_id=unit_id,
+        elapsed_ms=total_elapsed,
+        unit_package_path=package_path,
+        passes=pass_summaries,
+        data=final_data,
+        validation=validation_summary,
+    )
+
+
+def write_unit_package(
+    *,
+    unit_id: str,
+    book_path: str,
+    passes: dict[str, dict[str, Any]],
+    data: dict[str, Any],
+    validation: dict[str, Any],
+    cache_root: Path,
+) -> str:
+    package_dir = cache_root / "units" / unit_id
+    package_dir.mkdir(parents=True, exist_ok=True)
+    package_path = package_dir / "unit_package.json"
+    source_length = data.get("source_length", {})
+    package = {
+        "unit_id": unit_id,
+        "source": {
+            "book_path": book_path,
+            "char_count": source_length.get("char_count") if isinstance(source_length, dict) else None,
+            "line_count": source_length.get("line_count") if isinstance(source_length, dict) else None,
+        },
+        "passes": passes,
+        "data": data,
+        "validation": validation,
+    }
+    package_path.write_text(
+        json.dumps(package, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return str(package_path)
+
+
+def _elapsed_ms(since: float) -> int:
+    return int((time.monotonic() - since) * 1000)
+
+
+def _validation_summary(data: dict[str, Any]) -> dict[str, Any]:
+    event_count = len(data.get("event_records", []) or [])
+    entity_count = len(data.get("entity_records", []) or [])
+    location_count = len(data.get("location_records", []) or [])
+    thread_count = len(data.get("thread_records", []) or [])
+    timeline_count = len(data.get("timelines", []) or [])
+    return {
+        "event_count": event_count,
+        "entity_count": entity_count,
+        "location_count": location_count,
+        "thread_count": thread_count,
+        "timeline_count": timeline_count,
+    }
 
 
 def text_length_stats(text: str) -> dict[str, int]:
