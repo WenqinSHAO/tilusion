@@ -104,6 +104,8 @@ class MockExtractionBackend:
             return json.dumps(mock_overview_response(user_payload), ensure_ascii=False)
         if user_payload.get("task") == "unit_finalization":
             return json.dumps(mock_unit_finalization_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_repair":
+            return json.dumps(mock_unit_repair_response(user_payload), ensure_ascii=False)
         if user_payload.get("task") == "unit_timeline":
             return json.dumps(mock_unit_timeline_response(user_payload), ensure_ascii=False)
         if user_payload.get("task") == "unit_timeline_repair":
@@ -530,6 +532,38 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
         },
         "warnings": ["mock backend used; finalization output is structural placeholder only"],
     }
+
+
+def mock_unit_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_records = user_payload.get("unit_records", {})
+    repair_targets = user_payload.get("repair_targets", {})
+    unresolved = list(unit_records.get("unresolved_items", []))
+    # Simulate repair: move blocking concerns to resolved quality notes
+    resolved_count = 0
+    remaining = []
+    for item in unresolved:
+        if isinstance(item, dict) and item.get("severity") == "error":
+            resolved_count += 1
+        else:
+            remaining.append(item)
+    quality_notes = dict(unit_records.get("quality_notes", {}))
+    if resolved_count:
+        quality_notes["repair_summary"] = (
+            f"Mock repair resolved {resolved_count} blocking concern(s); "
+            f"{len(remaining)} unresolved items remain."
+        )
+    return {
+        "unit_id": user_payload["unit_id"],
+        "entity_records": unit_records.get("entity_records", []),
+        "location_records": unit_records.get("location_records", []),
+        "event_records": unit_records.get("event_records", []),
+        "thread_records": unit_records.get("thread_records", []),
+        "unresolved_items": remaining,
+        "quality_notes": quality_notes,
+        "warnings": unit_records.get("warnings", [])
+        + ["mock backend used; repair output is structural placeholder only"],
+    }
+
 
 def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     unit_id = user_payload["unit_id"]
