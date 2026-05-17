@@ -38,6 +38,8 @@ OVERVIEW_PROMPT_VERSION = "overview-segmentation-v0.1"
 OVERVIEW_PROMPT_RESOURCE = "overview_segmentation_v0.1.md"
 UNIT_FINALIZATION_PROMPT_VERSION = "unit-finalization-v0.1"
 UNIT_FINALIZATION_PROMPT_RESOURCE = "unit_finalization_v0.1.md"
+UNIT_REPAIR_PROMPT_VERSION = "unit-repair-v0.1"
+UNIT_REPAIR_PROMPT_RESOURCE = "unit_repair_v0.1.md"
 
 
 @dataclass(slots=True)
@@ -523,6 +525,73 @@ def run_unit_finalization_pass(
     return record
 
 
+def run_unit_repair_pass(
+    finalization_pass_dir: str | Path,
+    *,
+    backend: LLMBackend | None = None,
+    use_cache: bool = True,
+) -> UnitFinalizationRecord:
+    pass_dir = Path(finalization_pass_dir)
+    result_path = pass_dir / "result.json"
+    if not result_path.exists():
+        raise ValueError(f"missing finalization result: {result_path}")
+    finalization_data = json.loads(result_path.read_text(encoding="utf-8"))
+    chain_dir = pass_dir.parent.parent
+    manifest_path = chain_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    llm = backend or MockExtractionBackend()
+    prompt = build_unit_repair_composition()
+    payload = build_unit_repair_payload(manifest, finalization_data)
+    check_extraction_budget(
+        prompt.content,
+        payload,
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
+    cache_key = build_pass_cache_key(
+        pass_name="unit-repair",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=llm.model_identity,
+    )
+    repair_pass_dir = chain_dir / "unit_repair" / cache_key
+    paths = unit_repair_artifact_paths(repair_pass_dir)
+    repair_result_path = Path(paths["result"])
+    cache_hit = use_cache and repair_result_path.exists()
+    if cache_hit:
+        data = json.loads(repair_result_path.read_text(encoding="utf-8"))
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    else:
+        raw_response = llm.complete_json(prompt.content, payload)
+        data = parse_json_response(raw_response)
+    validation_report = validate_unit_finalization_result(
+        data, expected_unit_id=manifest["unit_id"]
+    )
+    record = UnitFinalizationRecord(
+        unit_id=manifest["unit_id"],
+        cache_key=cache_key,
+        cache_dir=str(repair_pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    if use_cache:
+        write_unit_repair_artifacts(
+            pass_dir=repair_pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=data,
+            validation_report=validation_report,
+            record=record,
+        )
+    return record
+
+
 def run_overview_segmentation_pass(
     *,
     unit,
@@ -808,6 +877,24 @@ def build_unit_finalization_composition(
     return PromptComposition(composition_id=UNIT_FINALIZATION_PROMPT_VERSION, parts=parts)
 
 
+def build_unit_repair_composition() -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-finalization-contract",
+            role="static_task_contract",
+            resource_name=UNIT_FINALIZATION_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_FINALIZATION_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-repair-instructions",
+            role="generated_repair_instructions",
+            resource_name=UNIT_REPAIR_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_REPAIR_PROMPT_VERSION},
+        ),
+    ]
+    return PromptComposition(composition_id=UNIT_REPAIR_PROMPT_VERSION, parts=parts)
+
+
 def generated_prompt_part(
     part_id: str,
     *,
@@ -909,6 +996,21 @@ def unit_finalization_artifact_paths(pass_dir: Path) -> dict[str, str]:
     }
 
 
+def unit_repair_artifact_paths(pass_dir: Path) -> dict[str, str]:
+    return {
+        "manifest": str(pass_dir / "manifest.json"),
+        "prompt_composition": str(pass_dir / "prompt_composition.json"),
+        "system_prompt": str(pass_dir / "system_prompt.md"),
+        "request_payload": str(pass_dir / "request_payload.json"),
+        "raw_response": str(pass_dir / "raw_response.txt"),
+        "result": str(pass_dir / "result.json"),
+        "validation_report": str(pass_dir / "validation_report.json"),
+        "unit_extraction": str(pass_dir / "unit_extraction.json"),
+        "unit_qc_report": str(pass_dir / "unit_qc_report.json"),
+        "unit_reader_view": str(pass_dir / "unit_reader_view.md"),
+    }
+
+
 def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
     return sha256_json(
         {
@@ -938,6 +1040,23 @@ def build_unit_finalization_payload(manifest: dict[str, Any]) -> dict[str, Any]:
             for record in manifest.get("segment_passes", [])
         ],
     }
+
+
+def build_unit_repair_payload(
+    manifest: dict[str, Any],
+    finalization_data: dict[str, Any],
+) -> dict[str, Any]:
+    payload = build_unit_finalization_payload(manifest)
+    payload["repair_targets"] = {
+        "unresolved_items": finalization_data.get("unresolved_items", []),
+        "blocking_concerns": (
+            finalization_data.get("quality_notes", {}).get("blocking_concerns", [])
+            if isinstance(finalization_data.get("quality_notes"), dict)
+            else []
+        ),
+        "warnings": finalization_data.get("warnings", []),
+    }
+    return payload
 
 
 def compact_resolved_segment(segment: dict[str, Any]) -> dict[str, Any]:
@@ -1531,6 +1650,51 @@ def write_chain_artifacts(
 
 
 def write_unit_finalization_artifacts(
+    *,
+    pass_dir: Path,
+    paths: dict[str, str],
+    prompt: PromptComposition,
+    user_payload: dict[str, Any],
+    raw_response: str,
+    data: dict[str, Any],
+    validation_report: dict[str, Any],
+    record: UnitFinalizationRecord,
+) -> None:
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    Path(paths["prompt_composition"]).write_text(
+        json.dumps(prompt.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["system_prompt"]).write_text(prompt.content, encoding="utf-8")
+    Path(paths["request_payload"]).write_text(
+        json.dumps(user_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["raw_response"]).write_text(raw_response, encoding="utf-8")
+    Path(paths["result"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_extraction"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_qc_report"]).write_text(
+        json.dumps(build_unit_qc_report(data, validation_report), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_reader_view"]).write_text(
+        format_unit_reader_view(data, validation_report),
+        encoding="utf-8",
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def write_unit_repair_artifacts(
     *,
     pass_dir: Path,
     paths: dict[str, str],

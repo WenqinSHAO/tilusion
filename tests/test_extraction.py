@@ -36,11 +36,14 @@ from tilusion.extraction_pipeline import (
     build_overview_composition,
     build_segment_extraction_composition,
     build_unit_finalization_composition,
+    build_unit_repair_composition,
+    build_unit_repair_payload,
     generated_prompt_part,
     refresh_chain_validation_cache,
     run_chained_extraction,
     run_segment_extraction_pass,
     run_unit_finalization_pass,
+    run_unit_repair_pass,
 )
 
 
@@ -155,6 +158,78 @@ def test_unit_finalization_composition_tracks_static_prompt_contract() -> None:
     assert "You finalize source-grounded extraction" in prompt.content
     assert "entity_records" in prompt.content
     assert "Do not construct a final timeline" in prompt.content
+
+
+def test_unit_repair_composition_shares_finalization_prefix() -> None:
+    final = build_unit_finalization_composition()
+    repair = build_unit_repair_composition()
+
+    assert repair.composition_id == "unit-repair-v0.1"
+    assert len(repair.parts) == 2
+    assert repair.parts[0].part_id == "unit-finalization-contract"
+    assert repair.parts[0].content == final.parts[0].content
+    assert repair.parts[1].part_id == "unit-repair-instructions"
+    assert "repairing a completed unit finalization" in repair.parts[1].content
+
+
+def test_unit_repair_payload_includes_repair_targets() -> None:
+    manifest = {
+        "unit_id": "unit-0001",
+        "source_length": {"chars": 100},
+        "resolved_segments": [],
+        "validation_report": {"segment_pass_count": 1, "resolved_segment_count": 1},
+        "repair_hints": {},
+        "segment_passes": [],
+    }
+    finalization_data = {
+        "unresolved_items": [{"code": "test_issue", "path": "entity-0001"}],
+        "quality_notes": {
+            "summary": "Test finalization.",
+            "blocking_concerns": ["Missing evidence for entity-0001"],
+        },
+        "warnings": ["Some quotes are ambiguous"],
+    }
+    payload = build_unit_repair_payload(manifest, finalization_data)
+
+    assert payload["task"] == "unit_finalization"
+    assert payload["unit_id"] == "unit-0001"
+    assert "repair_targets" in payload
+    assert payload["repair_targets"]["unresolved_items"] == finalization_data["unresolved_items"]
+    assert payload["repair_targets"]["blocking_concerns"] == ["Missing evidence for entity-0001"]
+    assert payload["repair_targets"]["warnings"] == ["Some quotes are ambiguous"]
+
+
+def test_unit_repair_pass_completes_and_caches(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n" * 20, encoding="utf-8")
+    chain_dir = tmp_path / "chain"
+    record = run_chained_extraction(
+        book, "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=chain_dir,
+    )
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert not final.cache_hit
+
+    final_pass_dir = str(Path(final.artifact_paths["manifest"]).parent)
+    repair = run_unit_repair_pass(
+        final_pass_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert not repair.cache_hit
+    assert repair.validation_report["passed"]
+    assert repair.data["unit_id"] == "unit-0001"
+    for path in repair.artifact_paths.values():
+        assert Path(path).exists()
+
+    cached_repair = run_unit_repair_pass(
+        final_pass_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert cached_repair.cache_hit
 
 
 def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -> None:

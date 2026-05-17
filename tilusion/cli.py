@@ -17,6 +17,7 @@ from .extraction_pipeline import (
     run_chained_extraction,
     run_segment_extraction_pass,
     run_unit_finalization_pass,
+    run_unit_repair_pass,
 )
 from .extraction_quality import validate_extraction_quality
 
@@ -76,6 +77,18 @@ def build_parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
     finalize_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     finalize_parser.add_argument("--no-cache", action="store_true")
+
+    repair_parser = subparsers.add_parser(
+        "repair-unit",
+        help="Run unit-level repair pass over an existing unit finalization cache",
+    )
+    repair_parser.add_argument("finalization_pass_dir")
+    repair_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
+    repair_parser.add_argument("--model", default="deepseek-v4-flash")
+    repair_parser.add_argument("--thinking", action="store_true")
+    repair_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
+    repair_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    repair_parser.add_argument("--no-cache", action="store_true")
 
     validate_parser = subparsers.add_parser(
         "validate-result", help="Validate an extraction result against source text"
@@ -162,6 +175,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (ExtractionError, OSError, ValueError, KeyError) as error:
             print(f"unit finalization failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command == "repair-unit":
+        try:
+            record = run_unit_repair_pass(
+                args.finalization_pass_dir,
+                backend=build_backend(args),
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"unit repair failed: {error}", file=sys.stderr)
             return 1
         print(record.to_json())
         return 0
