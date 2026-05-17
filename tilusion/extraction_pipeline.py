@@ -368,17 +368,40 @@ def run_chained_extraction(
         raise ValueError(f"unknown unit_id: {unit_id}")
     text = extract_unit_text(book_path, unit)
     llm = backend or MockExtractionBackend()
-    root_dir = Path(cache_dir) / chain_cache_key(unit_id=unit_id, text=text, model_identity=llm.model_identity)
+
+    prelim_key = chain_cache_key(unit_id=unit_id, text=text, model_identity=llm.model_identity)
+    prelim_dir = Path(cache_dir) / prelim_key
     overview = run_overview_segmentation_pass(
         unit=unit,
         text=text,
         backend=llm,
-        cache_dir=root_dir / "overview",
+        cache_dir=prelim_dir / "overview",
         use_cache=use_cache,
     )
     resolved_segments, overview_repairs = resolve_overview_segments(
         overview.data, text, anchor_locations=overview.anchor_locations
     )
+
+    final_key = chain_cache_key(
+        unit_id=unit_id,
+        text=text,
+        model_identity=llm.model_identity,
+        overview_result_hash=sha256_json(overview.data),
+    )
+    root_dir = Path(cache_dir) / final_key
+    if prelim_dir != root_dir:
+        if prelim_dir.exists() and not root_dir.exists():
+            prelim_dir.rename(root_dir)
+        else:
+            root_dir.mkdir(parents=True, exist_ok=True)
+        _old_prefix = str(prelim_dir)
+        _new_prefix = str(root_dir)
+        overview.artifact_paths = {
+            key: p.replace(_old_prefix, _new_prefix)
+            for key, p in overview.artifact_paths.items()
+        }
+        overview.cache_dir = overview.cache_dir.replace(_old_prefix, _new_prefix)
+
     segments_dir = root_dir / "segments"
     cache_map = _build_segment_cache_map(segments_dir) if use_cache else {}
     segment_passes = []
@@ -1275,17 +1298,24 @@ def unit_timeline_repair_artifact_paths(pass_dir: Path) -> dict[str, str]:
     }
 
 
-def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
-    return sha256_json(
-        {
-            "pipeline": "overview-plus-segment-extraction-v0.1",
-            "unit_id": unit_id,
-            "source_text_hash": sha256_text(text),
-            "model_identity": model_identity,
-            "overview_prompt_version": OVERVIEW_PROMPT_VERSION,
-            "segment_prompt_version": PROMPT_VERSION,
-        }
-    )
+def chain_cache_key(
+    *,
+    unit_id: str,
+    text: str,
+    model_identity: str,
+    overview_result_hash: str | None = None,
+) -> str:
+    components: dict[str, Any] = {
+        "pipeline": "overview-plus-segment-extraction-v0.1",
+        "unit_id": unit_id,
+        "source_text_hash": sha256_text(text),
+        "model_identity": model_identity,
+        "overview_prompt_version": OVERVIEW_PROMPT_VERSION,
+        "segment_prompt_version": PROMPT_VERSION,
+    }
+    if overview_result_hash is not None:
+        components["overview_result_hash"] = overview_result_hash
+    return sha256_json(components)
 
 
 def build_unit_finalization_payload(manifest: dict[str, Any]) -> dict[str, Any]:
