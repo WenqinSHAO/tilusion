@@ -210,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "repair-unit":
+        _warn_if_repair_unnecessary(args.finalization_pass_dir)
         try:
             record = run_unit_repair_pass(
                 args.finalization_pass_dir,
@@ -236,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "repair-timeline":
+        _warn_if_timeline_repair_unnecessary(args.timeline_pass_dir)
         try:
             record = run_unit_timeline_repair_pass(
                 args.timeline_pass_dir,
@@ -367,6 +369,41 @@ def build_backend(args):
             max_retries=getattr(args, "retries", DEEPSEEK_DEFAULT_MAX_RETRIES),
         )
     )
+
+
+def _warn_if_repair_unnecessary(finalization_pass_dir: str) -> None:
+    """Warn if repair hints indicate no actionable issues, but don't block the run."""
+    chain_dir = Path(finalization_pass_dir).parent.parent
+    repair_hints_path = chain_dir / "repair_hints.json"
+    if not repair_hints_path.exists():
+        return
+    try:
+        hints = json.loads(repair_hints_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if hints.get("ready_for_llm_repair") is not True:
+        print(
+            "warning: repair_hints.ready_for_llm_repair is not true; "
+            "repair pass may have nothing to fix",
+            file=sys.stderr,
+        )
+
+
+def _warn_if_timeline_repair_unnecessary(timeline_pass_dir: str) -> None:
+    """Warn if timeline validation shows no errors, but don't block the run."""
+    validation_path = Path(timeline_pass_dir) / "validation_report.json"
+    if not validation_path.exists():
+        return
+    try:
+        report = json.loads(validation_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if report.get("error_count", 0) == 0:
+        print(
+            "warning: timeline validation report shows 0 errors; "
+            "repair pass may have nothing to fix",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
