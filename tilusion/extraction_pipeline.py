@@ -36,6 +36,8 @@ from .extraction_quality import (
 
 OVERVIEW_PROMPT_VERSION = "overview-segmentation-v0.1"
 OVERVIEW_PROMPT_RESOURCE = "overview_segmentation_v0.1.md"
+UNIT_FINALIZATION_PROMPT_VERSION = "unit-finalization-v0.1"
+UNIT_FINALIZATION_PROMPT_RESOURCE = "unit_finalization_v0.1.md"
 
 
 @dataclass(slots=True)
@@ -184,6 +186,33 @@ class ChainedExtractionRecord:
             "segment_passes": [record.to_dict() for record in self.segment_passes],
             "validation_report": self.validation_report,
             "repair_hints": self.repair_hints,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+
+@dataclass(slots=True)
+class UnitFinalizationRecord:
+    unit_id: str
+    cache_key: str
+    cache_dir: str
+    cache_hit: bool
+    raw_response: str
+    data: dict[str, Any]
+    validation_report: dict[str, Any]
+    artifact_paths: dict[str, str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "unit_id": self.unit_id,
+            "cache_key": self.cache_key,
+            "cache_dir": self.cache_dir,
+            "cache_hit": self.cache_hit,
+            "artifact_paths": self.artifact_paths,
+            "raw_response": self.raw_response,
+            "data": self.data,
+            "validation_report": self.validation_report,
         }
 
     def to_json(self) -> str:
@@ -432,6 +461,66 @@ def refresh_chain_validation_cache(chain_dir: str | Path) -> dict[str, Any]:
         encoding="utf-8",
     )
     return refreshed_manifest
+
+
+def run_unit_finalization_pass(
+    chain_dir: str | Path,
+    *,
+    backend: LLMBackend | None = None,
+    use_cache: bool = True,
+) -> UnitFinalizationRecord:
+    root_dir = Path(chain_dir)
+    manifest_path = root_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    llm = backend or MockExtractionBackend()
+    prompt = build_unit_finalization_composition()
+    payload = build_unit_finalization_payload(manifest)
+    check_extraction_budget(
+        prompt.content,
+        payload,
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
+    cache_key = build_pass_cache_key(
+        pass_name="unit-finalization",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=llm.model_identity,
+    )
+    pass_dir = root_dir / "unit_finalization" / cache_key
+    paths = unit_finalization_artifact_paths(pass_dir)
+    result_path = Path(paths["result"])
+    cache_hit = use_cache and result_path.exists()
+    if cache_hit:
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    else:
+        raw_response = llm.complete_json(prompt.content, payload)
+        data = parse_json_response(raw_response)
+    validation_report = validate_unit_finalization_result(data, expected_unit_id=manifest["unit_id"])
+    record = UnitFinalizationRecord(
+        unit_id=manifest["unit_id"],
+        cache_key=cache_key,
+        cache_dir=str(pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    if use_cache:
+        write_unit_finalization_artifacts(
+            pass_dir=pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=data,
+            validation_report=validation_report,
+            record=record,
+        )
+    return record
 
 
 def run_overview_segmentation_pass(
@@ -704,6 +793,21 @@ def build_overview_composition(
     return PromptComposition(composition_id=OVERVIEW_PROMPT_VERSION, parts=parts)
 
 
+def build_unit_finalization_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-finalization-contract",
+            role="static_task_contract",
+            resource_name=UNIT_FINALIZATION_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_FINALIZATION_PROMPT_VERSION},
+        )
+    ]
+    parts.extend(generated_prompt_parts or [])
+    return PromptComposition(composition_id=UNIT_FINALIZATION_PROMPT_VERSION, parts=parts)
+
+
 def generated_prompt_part(
     part_id: str,
     *,
@@ -790,6 +894,21 @@ def chain_artifact_paths(chain_dir: Path) -> dict[str, str]:
     }
 
 
+def unit_finalization_artifact_paths(pass_dir: Path) -> dict[str, str]:
+    return {
+        "manifest": str(pass_dir / "manifest.json"),
+        "prompt_composition": str(pass_dir / "prompt_composition.json"),
+        "system_prompt": str(pass_dir / "system_prompt.md"),
+        "request_payload": str(pass_dir / "request_payload.json"),
+        "raw_response": str(pass_dir / "raw_response.txt"),
+        "result": str(pass_dir / "result.json"),
+        "validation_report": str(pass_dir / "validation_report.json"),
+        "unit_extraction": str(pass_dir / "unit_extraction.json"),
+        "unit_qc_report": str(pass_dir / "unit_qc_report.json"),
+        "unit_reader_view": str(pass_dir / "unit_reader_view.md"),
+    }
+
+
 def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
     return sha256_json(
         {
@@ -801,6 +920,130 @@ def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
             "segment_prompt_version": PROMPT_VERSION,
         }
     )
+
+
+def build_unit_finalization_payload(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task": "unit_finalization",
+        "unit_id": manifest["unit_id"],
+        "source_length": manifest.get("source_length", {}),
+        "resolved_segments": [
+            compact_resolved_segment(segment)
+            for segment in manifest.get("resolved_segments", [])
+        ],
+        "chain_validation": compact_chain_validation(manifest.get("validation_report", {})),
+        "repair_hints": manifest.get("repair_hints", {}),
+        "segment_results": [
+            compact_segment_result(record)
+            for record in manifest.get("segment_passes", [])
+        ],
+    }
+
+
+def compact_resolved_segment(segment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "segment_id": segment.get("segment_id"),
+        "title": segment.get("title"),
+        "summary": segment.get("summary"),
+        "start": segment.get("start"),
+        "end": segment.get("end"),
+        "length": segment.get("length", {}),
+        "source": {
+            "start_quote": (segment.get("source") or {}).get("start_quote"),
+            "end_quote": (segment.get("source") or {}).get("end_quote"),
+        },
+    }
+
+
+def compact_chain_validation(validation_report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "segment_pass_count": validation_report.get("segment_pass_count", 0),
+        "resolved_segment_count": validation_report.get("resolved_segment_count", 0),
+        "segment_quality_overview": validation_report.get("segment_quality_overview", {}),
+    }
+
+
+def compact_segment_result(record: dict[str, Any]) -> dict[str, Any]:
+    result = record.get("result", {})
+    data = result.get("data", {})
+    validation = record.get("validation_report", {})
+    return {
+        "segment_id": result.get("unit_id"),
+        "validation": {
+            "passed": validation.get("passed"),
+            "error_count": validation.get("error_count", 0),
+            "warning_count": validation.get("warning_count", 0),
+            "issue_codes": [
+                issue.get("code")
+                for issue in validation.get("issues", [])
+                if isinstance(issue, dict)
+            ],
+        },
+        "evidence_spans": data.get("evidence_spans", []),
+        "entity_mentions": data.get("entity_mentions", []),
+        "location_mentions": data.get("location_mentions", []),
+        "event_mentions": data.get("event_mentions", []),
+        "time_expressions": data.get("time_expressions", []),
+        "thread_candidates": data.get("thread_candidates", []),
+        "warnings": data.get("warnings", []),
+    }
+
+
+def validate_unit_finalization_result(
+    data: dict[str, Any],
+    *,
+    expected_unit_id: str,
+) -> dict[str, Any]:
+    issues = []
+    required = {
+        "unit_id": str,
+        "entity_records": list,
+        "location_records": list,
+        "event_records": list,
+        "thread_records": list,
+        "unresolved_items": list,
+        "quality_notes": dict,
+        "warnings": list,
+    }
+    for key, expected_type in required.items():
+        if key not in data:
+            issues.append(unit_finalization_issue("error", "missing_required_field", key))
+        elif not isinstance(data[key], expected_type):
+            issues.append(unit_finalization_issue("error", "wrong_field_type", key))
+    if data.get("unit_id") != expected_unit_id:
+        issues.append(
+            {
+                "severity": "error",
+                "code": "unit_id_mismatch",
+                "path": "unit_id",
+                "message": f"Expected `{expected_unit_id}` but got `{data.get('unit_id')}`.",
+            }
+        )
+    quality_notes = data.get("quality_notes")
+    if isinstance(quality_notes, dict):
+        if not isinstance(quality_notes.get("summary"), str):
+            issues.append(unit_finalization_issue("error", "wrong_field_type", "quality_notes.summary"))
+        for key in ["blocking_concerns"]:
+            if not isinstance(quality_notes.get(key), list):
+                issues.append(unit_finalization_issue("error", "wrong_field_type", f"quality_notes.{key}"))
+    error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    return {
+        "passed": error_count == 0,
+        "issue_count": len(issues),
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "issues": issues,
+    }
+
+
+def unit_finalization_issue(severity: str, code: str, path: str) -> dict[str, Any]:
+    return {
+        "severity": severity,
+        "code": code,
+        "path": path,
+        "message": f"{path} failed unit finalization validation.",
+    }
 
 
 def validate_overview_result(data: dict[str, Any]) -> None:
@@ -1285,6 +1528,96 @@ def write_chain_artifacts(
         encoding="utf-8",
     )
     Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def write_unit_finalization_artifacts(
+    *,
+    pass_dir: Path,
+    paths: dict[str, str],
+    prompt: PromptComposition,
+    user_payload: dict[str, Any],
+    raw_response: str,
+    data: dict[str, Any],
+    validation_report: dict[str, Any],
+    record: UnitFinalizationRecord,
+) -> None:
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    Path(paths["prompt_composition"]).write_text(
+        json.dumps(prompt.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["system_prompt"]).write_text(prompt.content, encoding="utf-8")
+    Path(paths["request_payload"]).write_text(
+        json.dumps(user_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["raw_response"]).write_text(raw_response, encoding="utf-8")
+    Path(paths["result"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_extraction"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_qc_report"]).write_text(
+        json.dumps(build_unit_qc_report(data, validation_report), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_reader_view"]).write_text(
+        format_unit_reader_view(data, validation_report),
+        encoding="utf-8",
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def build_unit_qc_report(data: dict[str, Any], validation_report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "unit_id": data.get("unit_id"),
+        "validation_report": validation_report,
+        "quality_notes": data.get("quality_notes", {}),
+        "unresolved_items": data.get("unresolved_items", []),
+        "warnings": data.get("warnings", []),
+    }
+
+
+def format_unit_reader_view(data: dict[str, Any], validation_report: dict[str, Any]) -> str:
+    quality_notes = data.get("quality_notes", {}) if isinstance(data.get("quality_notes"), dict) else {}
+    lines = [
+        f"# Unit Extraction: {data.get('unit_id', '')}",
+        "",
+        f"- validation_passed: {str(validation_report.get('passed')).lower()}",
+        f"- entities: {len(data.get('entity_records', []) or [])}",
+        f"- locations: {len(data.get('location_records', []) or [])}",
+        f"- events: {len(data.get('event_records', []) or [])}",
+        f"- threads: {len(data.get('thread_records', []) or [])}",
+        f"- unresolved_items: {len(data.get('unresolved_items', []) or [])}",
+        "",
+        "## Quality Notes",
+        "",
+        quality_notes.get("summary") or "No model quality summary provided.",
+        "",
+        "## Blocking Concerns",
+    ]
+    concerns = quality_notes.get("blocking_concerns") or []
+    if concerns:
+        lines.extend(f"- {concern}" for concern in concerns)
+    else:
+        lines.append("- none")
+    lines.extend([
+        "",
+        "## Warnings",
+    ])
+    warnings = data.get("warnings") or []
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
+    else:
+        lines.append("- none")
+    return "\n".join(lines) + "\n"
 
 
 def text_length_stats(text: str) -> dict[str, int]:
