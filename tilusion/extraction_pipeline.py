@@ -30,6 +30,7 @@ from .extraction_quality import (
     ExtractionQualityReport,
     relocate_evidence_quote,
     validate_extraction_quality,
+    is_llm_actionable_issue,
 )
 
 
@@ -117,6 +118,7 @@ class JsonPassRecord:
     data: dict[str, Any]
     validation_report: dict[str, Any]
     artifact_paths: dict[str, str]
+    anchor_locations: dict[str, EvidenceLocation] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -267,6 +269,29 @@ def run_segment_extraction_pass(
     return record
 
 
+def _build_segment_cache_map(segments_dir: Path) -> dict[str, Path]:
+    cache_map: dict[str, Path] = {}
+    if not segments_dir.exists():
+        return cache_map
+    for segment_dir in segments_dir.iterdir():
+        if not segment_dir.is_dir():
+            continue
+        for pass_dir in segment_dir.iterdir():
+            if not pass_dir.is_dir():
+                continue
+            result_path = pass_dir / "result.json"
+            if not result_path.exists():
+                continue
+            try:
+                result_data = json.loads(result_path.read_text(encoding="utf-8"))
+                text_hash = result_data.get("source_text_hash")
+                if text_hash and text_hash not in cache_map:
+                    cache_map[text_hash] = result_path
+            except (json.JSONDecodeError, OSError):
+                continue
+    return cache_map
+
+
 def run_chained_extraction(
     book_path: str | Path,
     unit_id: str,
@@ -289,7 +314,11 @@ def run_chained_extraction(
         cache_dir=root_dir / "overview",
         use_cache=use_cache,
     )
-    resolved_segments, overview_repairs = resolve_overview_segments(overview.data, text)
+    resolved_segments, overview_repairs = resolve_overview_segments(
+        overview.data, text, anchor_locations=overview.anchor_locations
+    )
+    segments_dir = root_dir / "segments"
+    cache_map = _build_segment_cache_map(segments_dir) if use_cache else {}
     segment_passes = []
     for segment in resolved_segments:
         segment_context = ExtractionContext(
@@ -320,18 +349,26 @@ def run_chained_extraction(
                 metadata={"segment_id": segment.segment_id},
             )
         ]
+        segment_text_hash = sha256_text(segment.text)
+        cached_result_path = cache_map.get(segment_text_hash)
+        cached_result = None
+        if cached_result_path and cached_result_path.exists():
+            cached_result = result_from_json(cached_result_path.read_text(encoding="utf-8"))
         segment_passes.append(
             run_text_segment_extraction_pass(
                 parent_unit=unit,
                 segment=segment,
                 context=segment_context,
                 backend=llm,
-                cache_dir=root_dir / "segments",
+                cache_dir=segments_dir,
                 use_cache=use_cache,
                 generated_prompt_parts=generated_parts,
+                cached_result=cached_result,
             )
         )
-    validation_report = build_chain_validation_report(overview, resolved_segments, segment_passes)
+    validation_report = build_chain_validation_report(
+        overview, resolved_segments, segment_passes, overview_repairs=overview_repairs
+    )
     repair_hints = build_chain_repair_hints(overview_repairs, segment_passes, validation_report)
     paths = chain_artifact_paths(root_dir)
     record = ChainedExtractionRecord(
@@ -363,12 +400,17 @@ def refresh_chain_validation_cache(chain_dir: str | Path) -> dict[str, Any]:
         for record in manifest.get("segment_passes", [])
     ]
     resolved_segments = manifest.get("resolved_segments", [])
+    total_overview = len(overview.data.get("overview_segments") or [])
+    cached_hints = manifest.get("repair_hints") if isinstance(manifest.get("repair_hints"), dict) else {}
+    cached_overview_repairs = cached_hints.get("overview_repairs", [])
     validation_report = build_cached_chain_validation_report(
         overview.validation_report,
         resolved_segments,
         [record.validation_report.to_dict() for record in segment_passes],
+        total_overview_segments=total_overview,
+        overview_repairs=cached_overview_repairs,
     )
-    repair_hints = build_chain_repair_hints([], segment_passes, validation_report)
+    repair_hints = build_chain_repair_hints(cached_overview_repairs, segment_passes, validation_report)
     paths = chain_artifact_paths(root_dir)
     Path(paths["validation_report"]).write_text(
         json.dumps(validation_report, ensure_ascii=False, indent=2),
@@ -437,7 +479,7 @@ def run_overview_segmentation_pass(
         raw_response = backend.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
         validate_overview_result(data)
-    validation_report = validate_overview_structure(data, text)
+    validation_report, anchor_locations = validate_overview_structure(data, text)
     record = JsonPassRecord(
         pass_name="overview-segmentation",
         cache_key=cache_key,
@@ -447,6 +489,7 @@ def run_overview_segmentation_pass(
         data=data,
         validation_report=validation_report,
         artifact_paths=paths,
+        anchor_locations=anchor_locations,
     )
     if use_cache:
         write_json_pass_artifacts(
@@ -468,7 +511,7 @@ def refresh_cached_overview_record(record_data: dict[str, Any]) -> JsonPassRecor
     data = json.loads(Path(paths["result"]).read_text(encoding="utf-8"))
     raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
     text = payload["text"]
-    validation_report = validate_overview_structure(data, text)
+    validation_report, anchor_locations = validate_overview_structure(data, text)
     record = JsonPassRecord(
         pass_name=record_data["pass_name"],
         cache_key=record_data["cache_key"],
@@ -478,6 +521,7 @@ def refresh_cached_overview_record(record_data: dict[str, Any]) -> JsonPassRecor
         data=data,
         validation_report=validation_report,
         artifact_paths=paths,
+        anchor_locations=anchor_locations,
     )
     Path(paths["validation_report"]).write_text(
         json.dumps(validation_report, ensure_ascii=False, indent=2),
@@ -499,6 +543,7 @@ def run_text_segment_extraction_pass(
     cache_dir: Path,
     use_cache: bool,
     generated_prompt_parts: list[PromptPart],
+    cached_result: LocalBundleResult | None = None,
 ) -> ExtractionPassRecord:
     segment_unit = {
         "id": segment.segment_id,
@@ -520,11 +565,12 @@ def run_text_segment_extraction_pass(
         "text": segment.text,
     }
     prompt = build_segment_extraction_composition(generated_prompt_parts)
-    check_extraction_budget(
-        prompt.content,
-        payload,
-        max_output_tokens=getattr(backend, "max_tokens", DEFAULT_MAX_TOKENS),
-    )
+    if cached_result is None:
+        check_extraction_budget(
+            prompt.content,
+            payload,
+            max_output_tokens=getattr(backend, "max_tokens", DEFAULT_MAX_TOKENS),
+        )
     cache_key = build_pass_cache_key(
         pass_name="segment-extraction",
         prompt=prompt,
@@ -535,7 +581,12 @@ def run_text_segment_extraction_pass(
     paths = pass_artifact_paths(pass_dir)
     result_path = Path(paths["result"])
     cache_hit = use_cache and result_path.exists()
-    if cache_hit:
+    if cached_result is not None:
+        result = cached_result
+        if result.data.get("unit_id") != segment.segment_id:
+            result.data["unit_id"] = segment.segment_id
+        cache_hit = True
+    elif cache_hit:
         result = result_from_json(result_path.read_text(encoding="utf-8"))
     else:
         raw_response = backend.complete_json(prompt.content, payload)
@@ -765,8 +816,11 @@ def validate_overview_result(data: dict[str, Any]) -> None:
             raise ValueError(f"overview field {key} must be {expected_type.__name__}")
 
 
-def validate_overview_structure(data: dict[str, Any], text: str) -> dict[str, Any]:
+def validate_overview_structure(
+    data: dict[str, Any], text: str
+) -> tuple[dict[str, Any], dict[str, EvidenceLocation]]:
     issues = []
+    anchor_locations: dict[str, EvidenceLocation] = {}
     segments = data.get("overview_segments") if isinstance(data.get("overview_segments"), list) else []
     for index, segment in enumerate(segments):
         if not isinstance(segment, dict):
@@ -794,11 +848,13 @@ def validate_overview_structure(data: dict[str, Any], text: str) -> dict[str, An
         for field_name in ["start_quote", "end_quote"]:
             quote = segment.get(field_name)
             if isinstance(quote, str) and quote:
+                location_key = f"{segment.get('segment_id') or index}:{field_name}"
                 location = relocate_evidence_quote(
                     text,
                     quote,
-                    evidence_id=f"{segment.get('segment_id') or index}:{field_name}",
+                    evidence_id=location_key,
                 )
+                anchor_locations[location_key] = location
                 if location.status == "missing":
                     issues.append(
                         overview_issue(
@@ -829,7 +885,7 @@ def validate_overview_structure(data: dict[str, Any], text: str) -> dict[str, An
         "error_count": error_count,
         "warning_count": warning_count,
         "issues": issues,
-    }
+    }, anchor_locations
 
 
 def overview_issue(
@@ -852,24 +908,30 @@ def overview_issue(
 
 
 def resolve_overview_segments(
-    overview_data: dict[str, Any], text: str
+    overview_data: dict[str, Any],
+    text: str,
+    *,
+    anchor_locations: dict[str, EvidenceLocation] | None = None,
 ) -> tuple[list[ResolvedOverviewSegment], list[dict[str, Any]]]:
     resolved = []
     repair_hints = []
+    precomputed = anchor_locations or {}
     segments = overview_data.get("overview_segments") or []
     for index, segment in enumerate(segments):
         if not isinstance(segment, dict):
             continue
         segment_id = str(segment.get("segment_id") or f"overview-segment-{index + 1:04d}")
-        start_location = relocate_evidence_quote(
+        start_key = f"{segment_id}:start_quote"
+        end_key = f"{segment_id}:end_quote"
+        start_location = precomputed.get(start_key) or relocate_evidence_quote(
             text,
             str(segment.get("start_quote") or ""),
-            evidence_id=f"{segment_id}:start_quote",
+            evidence_id=start_key,
         )
-        end_location = relocate_evidence_quote(
+        end_location = precomputed.get(end_key) or relocate_evidence_quote(
             text,
             str(segment.get("end_quote") or ""),
-            evidence_id=f"{segment_id}:end_quote",
+            evidence_id=end_key,
         )
         if (
             start_location.start is None
@@ -917,10 +979,83 @@ def segment_hint_payload(segment: ResolvedOverviewSegment) -> dict[str, Any]:
     }
 
 
+def _derive_unresolved_detail(repair: dict[str, Any]) -> str:
+    start = repair.get("start_location", {}) if isinstance(repair.get("start_location"), dict) else {}
+    end = repair.get("end_location", {}) if isinstance(repair.get("end_location"), dict) else {}
+    start_status = start.get("status", "unknown")
+    end_status = end.get("status", "unknown")
+    if start_status == "missing" or end_status == "missing":
+        return "unrelocatable anchor(s)"
+    if start_status == "ambiguous" or end_status == "ambiguous":
+        parts = []
+        if start_status == "ambiguous":
+            parts.append(f"start_quote ({start.get('candidate_count', 0)} candidates)")
+        if end_status == "ambiguous":
+            parts.append(f"end_quote ({end.get('candidate_count', 0)} candidates)")
+        return f"ambiguous: {', '.join(parts)}"
+    if isinstance(start.get("start"), int) and isinstance(end.get("end"), int):
+        if end["end"] < start["start"]:
+            return "inverted span (end before start)"
+    return repair.get("repair_hint", "unresolved")
+
+
+def _dominant_issue_codes(segment_reports: list[dict[str, Any]]) -> list[str]:
+    code_counts: dict[str, int] = {}
+    for report in segment_reports:
+        for issue in report.get("issues", []):
+            code = issue.get("code", "unknown")
+            code_counts[code] = code_counts.get(code, 0) + 1
+    return sorted(code_counts, key=code_counts.get, reverse=True)
+
+
+def _build_segment_quality_overview(
+    total_overview_segments: int,
+    overview_repairs: list[dict[str, Any]],
+    segment_reports: list[dict[str, Any]],
+    segment_lengths: list[dict[str, Any]],
+) -> dict[str, Any]:
+    resolved_count = len(segment_reports)
+    unresolved_count = max(0, total_overview_segments - resolved_count)
+    unresolved_reasons = []
+    for repair in overview_repairs:
+        unresolved_reasons.append(
+            {
+                "segment_id": repair.get("segment_id"),
+                "code": repair.get("code"),
+                "detail": _derive_unresolved_detail(repair),
+            }
+        )
+    per_segment = []
+    for lengths_entry, report in zip(segment_lengths, segment_reports):
+        issue_codes: dict[str, int] = {}
+        for issue in report.get("issues", []):
+            code = issue.get("code", "unknown")
+            issue_codes[code] = issue_codes.get(code, 0) + 1
+        per_segment.append(
+            {
+                "segment_id": lengths_entry.get("segment_id"),
+                "chars": lengths_entry.get("chars"),
+                "passed": report.get("passed"),
+                "issue_codes": issue_codes,
+                "evidence": report.get("evidence_location_summary", {}),
+            }
+        )
+    return {
+        "total_overview_segments": total_overview_segments,
+        "resolved_segments": resolved_count,
+        "unresolved_segments": unresolved_count,
+        "unresolved_reasons": unresolved_reasons,
+        "per_segment": per_segment,
+        "dominant_issues": _dominant_issue_codes(segment_reports),
+    }
+
+
 def build_chain_validation_report(
     overview: JsonPassRecord,
     resolved_segments: list[ResolvedOverviewSegment],
     segment_passes: list[ExtractionPassRecord],
+    *,
+    overview_repairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     segment_reports = [record.validation_report.to_dict() for record in segment_passes]
     error_count = overview.validation_report["error_count"] + sum(
@@ -929,21 +1064,29 @@ def build_chain_validation_report(
     warning_count = overview.validation_report["warning_count"] + sum(
         report["warning_count"] for report in segment_reports
     )
+    total_overview = len(overview.data.get("overview_segments") or [])
+    segment_lengths = [
+        {
+            "segment_id": segment.segment_id,
+            "start": segment.start,
+            "end": segment.end,
+            **text_length_stats(segment.text),
+        }
+        for segment in resolved_segments
+    ]
     return {
         "passed": error_count == 0,
         "overview": overview.validation_report,
         "resolved_segment_count": len(resolved_segments),
         "segment_pass_count": len(segment_passes),
-        "segment_lengths": [
-            {
-                "segment_id": segment.segment_id,
-                "start": segment.start,
-                "end": segment.end,
-                **text_length_stats(segment.text),
-            }
-            for segment in resolved_segments
-        ],
+        "segment_lengths": segment_lengths,
         "segment_reports": segment_reports,
+        "segment_quality_overview": _build_segment_quality_overview(
+            total_overview_segments=total_overview,
+            overview_repairs=overview_repairs or [],
+            segment_reports=segment_reports,
+            segment_lengths=segment_lengths,
+        ),
         "error_count": error_count,
         "warning_count": warning_count,
     }
@@ -953,6 +1096,9 @@ def build_cached_chain_validation_report(
     overview_report: dict[str, Any],
     resolved_segments: list[dict[str, Any]],
     segment_reports: list[dict[str, Any]],
+    *,
+    total_overview_segments: int = 0,
+    overview_repairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     error_count = overview_report["error_count"] + sum(
         report["error_count"] for report in segment_reports
@@ -960,23 +1106,54 @@ def build_cached_chain_validation_report(
     warning_count = overview_report["warning_count"] + sum(
         report["warning_count"] for report in segment_reports
     )
+    segment_lengths = [
+        {
+            "segment_id": segment["segment_id"],
+            "start": segment["start"],
+            "end": segment["end"],
+            **segment["length"],
+        }
+        for segment in resolved_segments
+    ]
     return {
         "passed": error_count == 0,
         "overview": overview_report,
         "resolved_segment_count": len(resolved_segments),
         "segment_pass_count": len(segment_reports),
-        "segment_lengths": [
-            {
-                "segment_id": segment["segment_id"],
-                "start": segment["start"],
-                "end": segment["end"],
-                **segment["length"],
-            }
-            for segment in resolved_segments
-        ],
+        "segment_lengths": segment_lengths,
         "segment_reports": segment_reports,
+        "segment_quality_overview": _build_segment_quality_overview(
+            total_overview_segments=total_overview_segments,
+            overview_repairs=overview_repairs or [],
+            segment_reports=segment_reports,
+            segment_lengths=segment_lengths,
+        ),
         "error_count": error_count,
         "warning_count": warning_count,
+    }
+
+
+def _build_non_actionable_warning_summary(
+    segment_passes: list[ExtractionPassRecord],
+) -> dict[str, Any]:
+    by_code: dict[str, int] = {}
+    affected_segments: list[str] = []
+    total = 0
+    for record in segment_passes:
+        segment_id = record.result.unit_id
+        segment_has_non_actionable = False
+        for issue in record.validation_report.issues:
+            if not is_llm_actionable_issue(issue):
+                code = issue.code
+                by_code[code] = by_code.get(code, 0) + 1
+                total += 1
+                segment_has_non_actionable = True
+        if segment_has_non_actionable:
+            affected_segments.append(segment_id)
+    return {
+        "total": total,
+        "by_code": by_code,
+        "affected_segments": affected_segments,
     }
 
 
@@ -998,10 +1175,12 @@ def build_chain_repair_hints(
                     "validated_result_path": record.artifact_paths["validated_result"],
                 }
             )
+    non_actionable = _build_non_actionable_warning_summary(segment_passes)
     return {
         "ready_for_llm_repair": bool(overview_repairs or segment_repairs),
         "overview_repairs": overview_repairs,
         "segment_repairs": segment_repairs,
+        "non_actionable_warnings": non_actionable,
         "summary": {
             "passed": validation_report["passed"],
             "error_count": validation_report["error_count"],

@@ -22,5 +22,7 @@
 - Validation outputs now separate full local reports, compact LLM-actionable repair hints, and enriched validated results with evidence source locations.
 - Existing chain caches can be revalidated without backend calls via `refresh-chain-validation <chain_cache_dir>`.
 - Next extraction task: add the LLM-powered repair pass that consumes compact repair hints plus original text/result context.
+- Validation output audit (2026-05-17) identified three gaps before the LLM repair pass. All three (A: segment quality overview, B: unified relocation, C: non-actionable warning summary) are now implemented in commits `69aab40`, `ac66822`, `9db21bb`.
+- First LLM-backed chain trial (2026-05-17) over unit-0002 (浮生六记, ~15.7K chars) completed: 6/6 segments resolved, 0 errors, 16 non-actionable surface_not_in_evidence_context warnings. Trial surfaced five improvement areas documented in `docs/extraction_roadmap.md#first-llm-backed-chain-trial-findings-2026-05-17`: (1) separate canonical_name from surface in schema, (2) evidence-granularity guidance in prompts, (3) CJK-aware surface validation, (4) cross-segment entity aliasing in chain QC, (5) CJK sentence-boundary context windows.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
 - Still untested at true 500MB scale.

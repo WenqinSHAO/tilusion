@@ -179,6 +179,7 @@ def format_quality_report_text(report) -> str:
 def format_chain_refresh_text(manifest: dict) -> str:
     validation = manifest["validation_report"]
     repair_hints = manifest["repair_hints"]
+    overview = validation.get("segment_quality_overview", {})
     lines = [
         f"chain_cache_dir: {manifest['cache_dir']}",
         f"unit_id: {manifest['unit_id']}",
@@ -190,6 +191,41 @@ def format_chain_refresh_text(manifest: dict) -> str:
         f"validation_report: {manifest['artifact_paths']['validation_report']}",
         f"repair_hints: {manifest['artifact_paths']['repair_hints']}",
     ]
+    if overview:
+        resolved = overview["resolved_segments"]
+        total = overview["total_overview_segments"]
+        unresolved = overview["unresolved_segments"]
+        lines.append("")
+        lines.append(
+            f"segments: {resolved}/{total} resolved"
+            f"{' (' + str(unresolved) + ' unresolved)' if unresolved else ''}"
+        )
+        for reason in overview.get("unresolved_reasons", []):
+            lines.append(f"  unresolved: {reason['segment_id']} — {reason['detail']}")
+        if overview.get("dominant_issues"):
+            lines.append(f"dominant issues: {', '.join(overview['dominant_issues'][:5])}")
+        for seg in overview.get("per_segment", []):
+            issue_str = ", ".join(
+                f"{code}:{count}" for code, count in seg.get("issue_codes", {}).items()
+            )
+            evidence_parts = []
+            for k, v in seg.get("evidence", {}).items():
+                if v:
+                    evidence_parts.append(f"{k}={v}")
+            evidence_str = ", ".join(evidence_parts)
+            lines.append(
+                f"  {seg['segment_id']}: {seg['chars']} chars, passed={seg['passed']}"
+                f", evidence=[{evidence_str}]"
+                f"{', issues={' + issue_str + '}' if issue_str else ''}"
+            )
+    non_actionable = repair_hints.get("non_actionable_warnings", {})
+    if non_actionable and non_actionable.get("total"):
+        by_code = non_actionable.get("by_code", {})
+        code_summary = ", ".join(f"{code}:{count}" for code, count in by_code.items())
+        lines.append(
+            f"non-actionable warnings: {non_actionable['total']} total"
+            f"{' (' + code_summary + ')' if code_summary else ''}"
+        )
     return "\n".join(lines)
 
 

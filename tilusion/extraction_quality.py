@@ -157,7 +157,7 @@ def validate_extraction_quality(
     unit_text: str,
     *,
     expected_unit_id: str | None = None,
-    max_evidence_chars: int = 320,
+    max_evidence_chars: int = 600,
     source_window_chars: int = 120,
 ) -> ExtractionQualityReport:
     issues: list[ExtractionQualityIssue] = []
@@ -737,7 +737,8 @@ def validate_surface_grounding(
                     "surface_not_in_evidence_context",
                     f"{collection}[{index}].surface",
                     f"Surface `{surface}` does not appear in the reconstructed cited evidence context.",
-                    "Cite evidence near the surface form, adjust the surface, or keep only if alias/context makes this unavoidable.",
+                    "Move the attested text form into `surface` and the editorial name into `canonical_name`, "
+                    "or cite evidence that contains the surface.",
                     object_id=object_id,
                     source_windows=guess_source_windows_for_quote(unit_text, surface, 80),
                 )
@@ -782,7 +783,7 @@ def surface_needles(surface: str) -> list[str]:
         needles.append(normalized[:-2])
     unique = []
     for needle in needles:
-        if len(needle) >= 2 and needle not in unique:
+        if len(needle) >= 1 and needle not in unique:
             unique.append(needle)
     return unique
 

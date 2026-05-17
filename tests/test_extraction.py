@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from tilusion.extraction import (
     ExtractionBudgetError,
     ExtractionError,
     LOCAL_BUNDLE_SYSTEM_PROMPT,
+    LocalBundleResult,
     MockExtractionBackend,
     PROMPT_VERSION,
     SCHEMA_VERSION,
@@ -22,10 +24,15 @@ from tilusion.extraction import (
     estimate_deepseek_tokens,
     parse_json_response,
     run_local_bundle_extraction,
+    sha256_text,
 )
 from tilusion.book_reader import build_book_index, extract_unit_text
 from tilusion.extraction_quality import relocate_evidence_quote, validate_extraction_quality
 from tilusion.extraction_pipeline import (
+    ExtractionPassRecord,
+    _build_segment_quality_overview,
+    _derive_unresolved_detail,
+    _dominant_issue_codes,
     build_overview_composition,
     build_segment_extraction_composition,
     generated_prompt_part,
@@ -47,8 +54,8 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     model_payload = envelope.to_model_payload()
 
     assert envelope.task == "local_bundle_extraction"
-    assert envelope.prompt_version == "segment-extraction-v0.4"
-    assert envelope.schema_version == "segment-extraction-v0.2"
+    assert envelope.prompt_version == "segment-extraction-v0.5"
+    assert envelope.schema_version == "segment-extraction-v0.3"
     assert envelope.unit["id"] == "unit-0001"
     assert envelope.unit["source_range"]["kind"] == "txt-span"
     assert model_payload == {
@@ -64,8 +71,8 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     assert DEFAULT_MAX_TOKENS == 32768
     assert DEEPSEEK_CONTEXT_TOKENS == 1_000_000
     assert DEEPSEEK_MAX_OUTPUT_TOKENS == 384_000
-    assert PROMPT_VERSION == "segment-extraction-v0.4"
-    assert SCHEMA_VERSION == "segment-extraction-v0.2"
+    assert PROMPT_VERSION == "segment-extraction-v0.5"
+    assert SCHEMA_VERSION == "segment-extraction-v0.3"
 
 
 def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() -> None:
@@ -189,7 +196,19 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
     assert len(record.segment_passes) == 1
     assert record.validation_report["passed"]
     assert record.validation_report["segment_lengths"][0]["segment_id"] == "overview-segment-0001"
+    overview = record.validation_report["segment_quality_overview"]
+    assert overview["total_overview_segments"] == 1
+    assert overview["resolved_segments"] == 1
+    assert overview["unresolved_segments"] == 0
+    assert overview["unresolved_reasons"] == []
+    assert overview["dominant_issues"] == []
+    assert len(overview["per_segment"]) == 1
+    seg = overview["per_segment"][0]
+    assert seg["segment_id"] == "overview-segment-0001"
+    assert seg["passed"] is True
+    assert seg["evidence"]["exact"] == 1
     assert record.repair_hints["ready_for_llm_repair"] is False
+    assert record.repair_hints["non_actionable_warnings"]["total"] == 0
     for path in record.artifact_paths.values():
         assert Path(path).exists()
     assert Path(record.overview.artifact_paths["result"]).exists()
@@ -198,6 +217,9 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
     assert refreshed["overview"]["cache_hit"] is True
     assert refreshed["segment_passes"][0]["cache_hit"] is True
     assert refreshed["segment_passes"][0]["artifact_paths"]["validated_result"]
+    refreshed_overview = refreshed["validation_report"]["segment_quality_overview"]
+    assert refreshed_overview["total_overview_segments"] == 1
+    assert refreshed_overview["resolved_segments"] == 1
 
 
 def test_extraction_budget_rejects_oversized_input() -> None:
@@ -490,7 +512,7 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
             {
                 "evidence_id": "evidence-0003",
                 "unit_id": "unit-0001",
-                "quote": "x" * 321,
+                "quote": "x" * 601,
                 "start_hint": "too broad",
                 "end_hint": "too broad",
             },
@@ -549,6 +571,277 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     assert repair_payload["repair_instructions"]
     assert len(repair_payload["issues"]) == 3
     assert all(issue["code"] != "surface_not_in_evidence_context" for issue in repair_payload["issues"])
+
+
+def test_segment_quality_overview_reports_unresolved_segments_and_dominant_issues() -> None:
+    segment_reports = [
+        {
+            "unit_id": "seg-0001",
+            "passed": True,
+            "issue_count": 2,
+            "issues": [
+                {"code": "surface_not_in_evidence_context", "severity": "warning"},
+                {"code": "surface_not_in_evidence_context", "severity": "warning"},
+            ],
+            "evidence_location_summary": {"exact": 4, "relocated": 2, "ambiguous": 0, "missing": 0},
+        },
+        {
+            "unit_id": "seg-0002",
+            "passed": False,
+            "issue_count": 2,
+            "issues": [
+                {"code": "evidence_quote_missing", "severity": "error"},
+                {"code": "surface_not_in_evidence_context", "severity": "warning"},
+            ],
+            "evidence_location_summary": {"exact": 1, "relocated": 0, "ambiguous": 0, "missing": 1},
+        },
+    ]
+    segment_lengths = [
+        {"segment_id": "seg-0001", "chars": 800, "start": 0, "end": 800},
+        {"segment_id": "seg-0002", "chars": 2400, "start": 800, "end": 3200},
+    ]
+    repairs = [
+        {
+            "segment_id": "seg-0003",
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "ambiguous", "candidate_count": 4},
+            "end_location": {"status": "exact", "start": 5000, "end": 5050},
+        }
+    ]
+
+    overview = _build_segment_quality_overview(
+        total_overview_segments=3,
+        overview_repairs=repairs,
+        segment_reports=segment_reports,
+        segment_lengths=segment_lengths,
+    )
+
+    assert overview["total_overview_segments"] == 3
+    assert overview["resolved_segments"] == 2
+    assert overview["unresolved_segments"] == 1
+    assert len(overview["unresolved_reasons"]) == 1
+    assert overview["unresolved_reasons"][0]["segment_id"] == "seg-0003"
+    assert "ambiguous" in overview["unresolved_reasons"][0]["detail"]
+    assert overview["dominant_issues"] == ["surface_not_in_evidence_context", "evidence_quote_missing"]
+    assert len(overview["per_segment"]) == 2
+    assert overview["per_segment"][0]["issue_codes"] == {"surface_not_in_evidence_context": 2}
+    assert overview["per_segment"][1]["issue_codes"] == {
+        "evidence_quote_missing": 1,
+        "surface_not_in_evidence_context": 1,
+    }
+    assert overview["per_segment"][1]["passed"] is False
+    assert overview["per_segment"][1]["evidence"]["missing"] == 1
+
+
+def test_derive_unresolved_detail_reports_reason() -> None:
+    missing = _derive_unresolved_detail(
+        {
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "missing", "candidate_count": 0},
+            "end_location": {"status": "exact", "start": 100, "end": 200},
+        }
+    )
+    assert "unrelocatable" in missing
+
+    ambiguous = _derive_unresolved_detail(
+        {
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "ambiguous", "candidate_count": 3},
+            "end_location": {"status": "exact", "start": 100, "end": 200},
+        }
+    )
+    assert "ambiguous" in ambiguous
+    assert "3 candidates" in ambiguous
+
+    inverted = _derive_unresolved_detail(
+        {
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "exact", "start": 200, "end": 300},
+            "end_location": {"status": "exact", "start": 50, "end": 150},
+        }
+    )
+    assert "inverted" in inverted
+
+
+def test_dominant_issue_codes_orders_by_frequency() -> None:
+    reports = [
+        {"issues": [{"code": "a"}, {"code": "b"}, {"code": "a"}]},
+        {"issues": [{"code": "c"}, {"code": "a"}]},
+    ]
+    assert _dominant_issue_codes(reports) == ["a", "b", "c"]
+
+
+def test_segment_cache_map_finds_results_by_text_hash(tmp_path: Path) -> None:
+    from tilusion.extraction_pipeline import _build_segment_cache_map
+
+    segments_dir = tmp_path / "segments"
+    seg_a_dir = segments_dir / "seg-a" / "cache-key-a"
+    seg_a_dir.mkdir(parents=True)
+    seg_a_dir.joinpath("result.json").write_text(
+        json.dumps({"source_text_hash": "abc123", "unit_id": "seg-a"}),
+        encoding="utf-8",
+    )
+    seg_b_dir = segments_dir / "seg-b" / "cache-key-b"
+    seg_b_dir.mkdir(parents=True)
+    seg_b_dir.joinpath("result.json").write_text(
+        json.dumps({"source_text_hash": "def456", "unit_id": "seg-b"}),
+        encoding="utf-8",
+    )
+
+    cache_map = _build_segment_cache_map(segments_dir)
+
+    assert len(cache_map) == 2
+    assert "abc123" in cache_map
+    assert "def456" in cache_map
+    assert cache_map["abc123"].name == "result.json"
+
+
+def test_segment_cache_map_skips_non_dirs_and_missing_results(tmp_path: Path) -> None:
+    from tilusion.extraction_pipeline import _build_segment_cache_map
+
+    segments_dir = tmp_path / "segments"
+    segments_dir.mkdir(parents=True)
+    (segments_dir / "empty-dir").mkdir()
+    (segments_dir / "not-a-dir.txt").write_text("", encoding="utf-8")
+
+    cache_map = _build_segment_cache_map(segments_dir)
+    assert len(cache_map) == 0
+
+
+def test_chain_repair_hints_includes_non_actionable_warnings() -> None:
+    from tilusion.extraction_pipeline import _build_non_actionable_warning_summary
+    from tilusion.extraction import MockExtractionBackend
+    import copy
+
+    text = "Alice met Bob in Paris.\n\nCharlie stayed home.\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "Alice met Bob in Paris",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "Charlie",
+                "kind": "person",
+                "summary": "Unsupported by cited evidence",
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [],
+        "event_mentions": [],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+    result = LocalBundleResult(
+        task="segment_extraction",
+        prompt_version="test",
+        schema_version="test",
+        unit_id="unit-0001",
+        source_text_hash=sha256_text(text),
+        context_hash=sha256_text("{}"),
+        model="mock",
+        raw_response="{}",
+        data=data,
+    )
+    record = ExtractionPassRecord(
+        pass_name="segment-extraction",
+        cache_key="test-key",
+        cache_dir=str(Path("/tmp/test")),
+        cache_hit=False,
+        result=result,
+        validation_report=report,
+        artifact_paths={},
+    )
+    summary = _build_non_actionable_warning_summary([record])
+    assert summary["total"] == 1
+    assert summary["by_code"]["surface_not_in_evidence_context"] == 1
+    assert summary["affected_segments"] == ["unit-0001"]
+
+
+def test_canonical_name_avoids_surface_warning_when_surface_is_attested() -> None:
+    """When canonical_name differs from surface, only surface is checked against evidence."""
+    text = "Alice met Bob in Paris.\nCharlie stayed home.\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "Alice met Bob in Paris",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "Alice",
+                "canonical_name": "Alice Johnson",
+                "kind": "person",
+                "summary": "Main character",
+                "alias_candidate_of": None,
+                "alias_confidence": None,
+                "alias_rationale": None,
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [],
+        "event_mentions": [],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+    codes = [issue.code for issue in report.issues]
+    assert "surface_not_in_evidence_context" not in codes
+
+
+def test_surface_warning_still_fires_when_surface_absent_regardless_of_canonical() -> None:
+    """Even with canonical_name set, if surface is not in evidence, warning fires."""
+    text = "Alice met Bob in Paris.\n\nCharlie stayed home.\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "Alice met Bob in Paris",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "Charlie",
+                "canonical_name": "Charles Brown",
+                "kind": "person",
+                "summary": "A character not in the evidence paragraph",
+                "alias_candidate_of": None,
+                "alias_confidence": None,
+                "alias_rationale": None,
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [],
+        "event_mentions": [],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+    assert "surface_not_in_evidence_context" in [
+        issue.code for issue in report.issues
+    ]
 
 
 def run_empty_context():
