@@ -101,6 +101,8 @@ class MockExtractionBackend:
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
         if user_payload.get("task") == "overview_segmentation":
             return json.dumps(mock_overview_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_finalization":
+            return json.dumps(mock_unit_finalization_response(user_payload), ensure_ascii=False)
         text = user_payload["text"]
         unit_id = user_payload["unit"]["id"]
         evidence = first_nonempty_line(text)
@@ -440,6 +442,62 @@ def mock_overview_response(user_payload: dict[str, Any]) -> dict[str, Any]:
         "warnings": ["mock backend used; overview is structural placeholder only"],
     }
 
+
+def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_id = user_payload["unit_id"]
+    segment_results = user_payload.get("segment_results", [])
+    entity_records = []
+    event_records = []
+    for index, segment in enumerate(segment_results, start=1):
+        segment_id = segment["segment_id"]
+        for mention in segment.get("entity_mentions", [])[:1]:
+            entity_records.append(
+                {
+                    "entity_id": f"unit-entity-{len(entity_records) + 1:04d}",
+                    "canonical_name": mention.get("canonical_name") or mention.get("surface"),
+                    "surfaces": [mention.get("surface")],
+                    "kind": mention.get("kind", "other"),
+                    "summary": mention.get("summary", "Mock merged entity."),
+                    "mention_refs": [
+                        {"segment_id": segment_id, "mention_id": mention.get("mention_id")}
+                    ],
+                    "alias_confidence": "low",
+                }
+            )
+        for event in segment.get("event_mentions", [])[:1]:
+            event_records.append(
+                {
+                    "event_id": f"unit-event-{len(event_records) + 1:04d}",
+                    "summary": event.get("summary", "Mock merged event."),
+                    "segment_ids": [segment_id],
+                    "source_order_hint": index,
+                    "participant_entity_ids": [],
+                    "location_ids": [],
+                    "time_refs": [
+                        {"segment_id": segment_id, "time_expression_id": time_id}
+                        for time_id in event.get("time_expression_ids", [])
+                    ],
+                    "evidence_refs": [
+                        {"segment_id": segment_id, "evidence_id": evidence_id}
+                        for evidence_id in event.get("evidence_span_ids", [])
+                    ],
+                    "duplicate_of": None,
+                    "qc_notes": ["mock finalization"],
+                }
+            )
+    return {
+        "unit_id": unit_id,
+        "entity_records": entity_records,
+        "location_records": [],
+        "event_records": event_records,
+        "thread_records": [],
+        "unresolved_items": [],
+        "quality_notes": {
+            "summary": "Mock unit finalization completed with placeholder merged records.",
+            "blocking_concerns": [],
+        },
+        "warnings": ["mock backend used; finalization output is structural placeholder only"],
+    }
 
 def last_nonempty_line(text: str) -> str:
     for line in reversed(text.splitlines()):

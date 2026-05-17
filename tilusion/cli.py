@@ -16,6 +16,7 @@ from .extraction_pipeline import (
     refresh_chain_validation_cache,
     run_chained_extraction,
     run_segment_extraction_pass,
+    run_unit_finalization_pass,
 )
 from .extraction_quality import validate_extraction_quality
 
@@ -63,6 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refresh_chain_parser.add_argument("chain_cache_dir")
     refresh_chain_parser.add_argument("--format", choices=["json", "text"], default="text")
+
+    finalize_parser = subparsers.add_parser(
+        "finalize-unit",
+        help="Run unit-level finalization over an existing extraction chain cache",
+    )
+    finalize_parser.add_argument("chain_cache_dir")
+    finalize_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
+    finalize_parser.add_argument("--model", default="deepseek-v4-flash")
+    finalize_parser.add_argument("--thinking", action="store_true")
+    finalize_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
+    finalize_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    finalize_parser.add_argument("--no-cache", action="store_true")
 
     validate_parser = subparsers.add_parser(
         "validate-result", help="Validate an extraction result against source text"
@@ -138,6 +151,19 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(manifest, ensure_ascii=False, indent=2))
         else:
             print(format_chain_refresh_text(manifest))
+        return 0
+
+    if args.command == "finalize-unit":
+        try:
+            record = run_unit_finalization_pass(
+                args.chain_cache_dir,
+                backend=build_backend(args),
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"unit finalization failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
         return 0
 
     if args.command == "validate-result":
