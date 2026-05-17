@@ -2451,7 +2451,9 @@ def run_all_passes(
     chain_dir = chain_record.cache_dir
     pass_summaries["chain"] = {
         "cache_key": chain_record.overview.cache_key,
+        "cache_dir": chain_record.cache_dir,
         "cache_hit": chain_record.overview.cache_hit,
+        "artifact_paths": chain_record.artifact_paths,
         "elapsed_ms": _elapsed_ms(t0),
         "segments_resolved": len(chain_record.resolved_segments),
         "segments_total": len(chain_record.overview.data.get("overview_segments", [])),
@@ -2474,7 +2476,9 @@ def run_all_passes(
     finalization_dir = finalization_record.cache_dir
     pass_summaries["finalization"] = {
         "cache_key": finalization_record.cache_key,
+        "cache_dir": finalization_record.cache_dir,
         "cache_hit": finalization_record.cache_hit,
+        "artifact_paths": finalization_record.artifact_paths,
         "elapsed_ms": _elapsed_ms(t0),
     }
     _log_progress(
@@ -2503,7 +2507,9 @@ def run_all_passes(
             repair_dir = repair_record.cache_dir
             pass_summaries["repair"] = {
                 "cache_key": repair_record.cache_key,
+                "cache_dir": repair_record.cache_dir,
                 "cache_hit": repair_record.cache_hit,
+                "artifact_paths": repair_record.artifact_paths,
                 "elapsed_ms": _elapsed_ms(t0),
                 "skipped": False,
             }
@@ -2532,7 +2538,9 @@ def run_all_passes(
     timeline_dir = timeline_record.cache_dir
     pass_summaries["timeline"] = {
         "cache_key": timeline_record.cache_key,
+        "cache_dir": timeline_record.cache_dir,
         "cache_hit": timeline_record.cache_hit,
+        "artifact_paths": timeline_record.artifact_paths,
         "elapsed_ms": _elapsed_ms(t0),
     }
     _log_progress(
@@ -2556,7 +2564,9 @@ def run_all_passes(
         else:
             pass_summaries["timeline_repair"] = {
                 "cache_key": tl_repair_record.cache_key,
+                "cache_dir": tl_repair_record.cache_dir,
                 "cache_hit": tl_repair_record.cache_hit,
+                "artifact_paths": tl_repair_record.artifact_paths,
                 "elapsed_ms": _elapsed_ms(t0),
                 "skipped": False,
             }
@@ -2573,8 +2583,31 @@ def run_all_passes(
 
     total_elapsed = _elapsed_ms(total_start)
 
-    # Validation summary from the final pass
-    validation_summary = _validation_summary(final_data)
+    # ---- Deterministic quality summary (overwrites LLM-produced text) ----
+    llm_summary = ""
+    qn = final_data.get("quality_notes")
+    if isinstance(qn, dict):
+        llm_summary = qn.get("summary", "")
+    n_events = len(final_data.get("event_records", []) or [])
+    n_timelines = len(final_data.get("timelines", []) or [])
+    n_unresolved = len(final_data.get("unresolved_items", []) or [])
+    final_data["quality_notes"] = {
+        **({} if not isinstance(qn, dict) else {k: v for k, v in qn.items() if k != "summary"}),
+        "summary": f"Final merged result: {n_events} events across {n_timelines} timelines, {n_unresolved} unresolved items.",
+    }
+    if llm_summary:
+        final_data["quality_notes"]["_llm_summary"] = llm_summary
+
+    # Build pass-level validation summary
+    pass_validation = _build_pass_validation(
+        chain_record=chain_record,
+        finalization_record=finalization_record,
+        repair_record=repair_record,
+        timeline_record=timeline_record,
+        tl_repair_record=tl_repair_record if "timeline_repair" in pass_summaries and not pass_summaries["timeline_repair"].get("skipped") else None,
+        skip_repair=skip_repair,
+    )
+    validation_summary = _validation_summary(final_data, pass_validation)
 
     # Write unit package
     package_path = write_unit_package(
@@ -2584,6 +2617,7 @@ def run_all_passes(
         data=final_data,
         validation=validation_summary,
         cache_root=root,
+        source_length=chain_record.source_length,
     )
 
     return RunAllRecord(
@@ -2604,17 +2638,18 @@ def write_unit_package(
     data: dict[str, Any],
     validation: dict[str, Any],
     cache_root: Path,
+    source_length: dict[str, int] | None = None,
 ) -> str:
     package_dir = cache_root / "units" / unit_id
     package_dir.mkdir(parents=True, exist_ok=True)
     package_path = package_dir / "unit_package.json"
-    source_length = data.get("source_length", {})
+    sl = source_length or {}
     package = {
         "unit_id": unit_id,
         "source": {
             "book_path": book_path,
-            "char_count": source_length.get("char_count") if isinstance(source_length, dict) else None,
-            "line_count": source_length.get("line_count") if isinstance(source_length, dict) else None,
+            "chars": sl.get("chars"),
+            "lines": sl.get("lines"),
         },
         "passes": passes,
         "data": data,
@@ -2631,7 +2666,52 @@ def _elapsed_ms(since: float) -> int:
     return int((time.monotonic() - since) * 1000)
 
 
-def _validation_summary(data: dict[str, Any]) -> dict[str, Any]:
+def _build_pass_validation(
+    *,
+    chain_record: Any,
+    finalization_record: Any,
+    repair_record: Any,
+    timeline_record: Any,
+    tl_repair_record: Any,
+    skip_repair: bool,
+) -> dict[str, Any]:
+    pv: dict[str, Any] = {}
+    # Chain
+    vr = getattr(chain_record, "validation_report", None)
+    pv["chain"] = _validation_status(vr)
+    # Finalization
+    vr = getattr(finalization_record, "validation_report", None)
+    pv["finalization"] = _validation_status(vr)
+    # Repair (may be None if skipped)
+    if repair_record is not None:
+        vr = getattr(repair_record, "validation_report", None)
+        pv["repair"] = _validation_status(vr)
+    else:
+        pv["repair"] = {"passed": None, "error_count": 0, "warning_count": 0, "skipped": not skip_repair}
+    # Timeline
+    vr = getattr(timeline_record, "validation_report", None)
+    pv["timeline"] = _validation_status(vr)
+    # Timeline repair (may be None if skipped)
+    if tl_repair_record is not None:
+        vr = getattr(tl_repair_record, "validation_report", None)
+        pv["timeline_repair"] = _validation_status(vr)
+    else:
+        pv["timeline_repair"] = {"passed": None, "error_count": 0, "warning_count": 0, "skipped": True}
+    return pv
+
+
+def _validation_status(vr: Any) -> dict[str, Any]:
+    """Extract status fields from a validation report dict."""
+    if not isinstance(vr, dict):
+        return {"passed": None, "error_count": 0, "warning_count": 0}
+    return {
+        "passed": vr.get("passed", False),
+        "error_count": vr.get("error_count", 0),
+        "warning_count": vr.get("warning_count", 0),
+    }
+
+
+def _validation_summary(data: dict[str, Any], pass_validation: dict[str, Any]) -> dict[str, Any]:
     event_count = len(data.get("event_records", []) or [])
     entity_count = len(data.get("entity_records", []) or [])
     location_count = len(data.get("location_records", []) or [])
@@ -2643,6 +2723,7 @@ def _validation_summary(data: dict[str, Any]) -> dict[str, Any]:
         "location_count": location_count,
         "thread_count": thread_count,
         "timeline_count": timeline_count,
+        "passes": pass_validation,
     }
 
 

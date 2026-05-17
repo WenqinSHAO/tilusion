@@ -14,12 +14,21 @@ Your job:
 - Do NOT include entity, location, event, or thread records, thread associations, or time expression data in the output. The pipeline already has those records and will merge your timelines onto them.
 
 Ordering signals to use (in priority order):
-1. Explicit time expressions attached to events (via event.time_refs). Events with known dates or relative times form the backbone of each timeline.
-2. Source order hints (event.source_order_hint). This reflects narrative order, which is often but not always chronological. Treat as a weak default, overridden by explicit temporal cues.
-3. Narrative logic from event summaries (e.g., birth before marriage, meeting before parting, departure before return).
-4. Thread membership: events in the same thread often form a causal or temporal sequence. Use as supporting evidence, but do not output thread data.
+
+1. **Explicit temporal cues** (event.time_refs). Events with known dates, reign-era markers, or relative-time expressions form the backbone of each timeline. These are the strongest ordering signal.
+
+2. **Narrative logic** from event summaries. Inherent temporal relationships: birth precedes marriage, meeting precedes parting, departure precedes return. Cite the specific narrative connection in the rationale.
+
+3. **Source order** (event.source_order_hint). This is the event's position in the source text — NOT a timestamp. Narrative order often aligns with chronological order, but not always (e.g., flashbacks, foreshadowing, parallel threads). Treat source order as a weak default, overridden by any explicit temporal cue or narrative logic. When using source_order_hint, state whether narrative order appears to match chronological order for those specific events — do NOT cite bare numbers (e.g., "8 < 3") as if they were timestamps.
+
+4. **Thread membership**: events in the same thread often form a causal or temporal sequence. Use as supporting evidence only, not as primary ordering.
 
 When no ordering evidence exists between two events, leave them unordered — no `before_events` edge between them.
+
+Rationale rules:
+- Cite specific evidence for each edge: time expressions, narrative logic, or source_order_hint.
+- When using source_order_hint, explain WHY narrative order implies chronological order for those events (e.g., "source text narrates birth then childhood in chronological sequence, source_order_hint 1→3").
+- Do NOT cite source_order_hint numbers alone as justification. The hint is a position in the text, not a time value.
 
 Return only one JSON object. Do not include prose, markdown, or code fences.
 
