@@ -1566,10 +1566,10 @@ def validate_unit_timeline_result(
             for eid in overlap:
                 issues.append(
                     {
-                        "severity": "error",
-                        "code": "timeline_duplicate_event",
+                        "severity": "warning",
+                        "code": "timeline_shared_event",
                         "path": f"timelines[{i}],timelines[{j}]",
-                        "message": f"Event {eid} appears in multiple timelines.",
+                        "message": f"Event {eid} appears in multiple timelines. Allowed as intersection point but should be intentional.",
                     }
                 )
 

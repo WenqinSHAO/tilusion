@@ -384,7 +384,7 @@ def test_validate_timeline_result_detects_phantom_ref() -> None:
     assert any(i["code"] == "timeline_phantom_ref" for i in report["issues"])
 
 
-def test_validate_timeline_result_detects_duplicate_event_across_timelines() -> None:
+def test_validate_timeline_result_allows_shared_events_as_intersection() -> None:
     data = {
         "unit_id": "unit-0001",
         "timelines": [
@@ -408,7 +408,9 @@ def test_validate_timeline_result_detects_duplicate_event_across_timelines() -> 
         "event_records": [{"event_id": "unit-event-0001"}],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
-    assert any(i["code"] == "timeline_duplicate_event" for i in report["issues"])
+    shared = [i for i in report["issues"] if i["code"] == "timeline_shared_event"]
+    assert len(shared) == 1
+    assert shared[0]["severity"] == "warning"
 
 
 def test_detect_timeline_cycles_finds_cycle() -> None:

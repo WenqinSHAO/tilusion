@@ -58,7 +58,8 @@ Minimum JSON additions:
 }
 
 Rules:
-- Every event from the input event_records must appear in exactly one timeline's ordered_events. No event may be omitted or duplicated across timelines.
+- Every event from the input event_records must appear in at least one timeline's ordered_events. No event may be omitted.
+- An event MAY appear in multiple timelines when it serves as an intersection point — its temporal relationship to events in different arcs is clear even though the arcs themselves have no direct temporal bridge.
 - `before_events` edges must form a valid DAG (no cycles). If A is in B's before_events, B cannot be in A's before_events, directly or transitively.
 - Use only unit-level event refs (unit-event-N).
 - If an event has no clear temporal relationship to any other event, place it alone in its own timeline (confidence: "low") or as an isolated node in a larger timeline with no before_events edges.
