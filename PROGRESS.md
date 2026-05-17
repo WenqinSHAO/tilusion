@@ -22,5 +22,6 @@
 - Validation outputs now separate full local reports, compact LLM-actionable repair hints, and enriched validated results with evidence source locations.
 - Existing chain caches can be revalidated without backend calls via `refresh-chain-validation <chain_cache_dir>`.
 - Next extraction task: add the LLM-powered repair pass that consumes compact repair hints plus original text/result context.
+- Validation output audit (2026-05-17) identified three gaps before the LLM repair pass: missing chain-level segment quality overview, duplicate relocation work between validation and resolution, and non-actionable warning invisibility in repair hints. Detailed plan and three-part improvement proposal documented in `docs/extraction_roadmap.md#validation-output-refinement`.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction/analysis responsibility.
 - Still untested at true 500MB scale.

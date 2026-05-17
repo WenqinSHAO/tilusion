@@ -323,6 +323,28 @@ Longer term, hints should be optional and secondary:
 - deterministic enrichment: computed `start`, `end`, `match_text`, relocation strategy
 - optional human hint: one natural-language `hint`, or retained `start_hint`/`end_hint` only for display
 
+### Validation Output Refinement
+
+The three-artifact audience split is in place, but the chain-level validation report and repair hints still have gaps that make them harder to scan for humans, agents, and LLM repair passes.
+
+Three problems identified in audit (2026-05-17):
+
+**Gap 1 — No chain-level segment quality overview.** The chain validation report aggregates error/warning totals and includes full per-segment reports, but has no scannable per-segment summary. A human or agent cannot quickly answer: how many overview segments were proposed vs. resolved, which segments have the most problems, or what issue types dominate each segment. Unresolved overview segments (ambiguous or inverted anchors) are counted but not explained.
+
+**Gap 2 — Duplicate relocation work between validation and resolution.** `validate_overview_structure()` calls `relocate_evidence_quote()` on every overview segment anchor for validation, and `resolve_overview_segments()` calls the same function again on the same anchors for actual resolution. The validation results are discarded rather than passed through.
+
+**Gap 3 — Non-actionable warnings invisible in repair hints.** `build_chain_repair_hints()` only includes segments with `llm_actionable_issue_count > 0`. Surface grounding warnings are intentionally excluded from LLM repair input, but there is no summary of them in `repair_hints.json`. A segment that accumulates surface grounding warnings may have a real extraction problem that warrants attention, but the current output provides no signal.
+
+Planned improvements:
+
+**A — Add `segment_quality_overview` to chain validation report.** A new section in `build_chain_validation_report()` with: total vs. resolved vs. unresolved overview segment counts; unresolved reasons per segment; per-segment issue code breakdown; per-segment evidence relocation stats; dominant issue codes across the chain.
+
+**B — Unify relocation: pass validated locations into resolution.** Have `validate_overview_structure()` return computed locations alongside the report dict. `resolve_overview_segments()` accepts pre-computed locations, eliminating the double call and ensuring resolution uses the same locations that were validated.
+
+**C — Add non-actionable warning summary to repair hints.** Even when `llm_actionable_issue_count == 0`, include a `non_actionable_warning_summary` in `repair_hints.json` with total count, breakdown by code, and affected segment IDs.
+
+All three are independent, additive changes touching `extraction_pipeline.py`, `extraction_quality.py`, and `cli.py`. No schema migration needed.
+
 ### Long Unit Handling
 
 Some reader units are too long and semantically dense for one detailed extraction call.
