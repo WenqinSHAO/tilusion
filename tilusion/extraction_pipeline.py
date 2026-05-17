@@ -42,8 +42,8 @@ UNIT_FINALIZATION_PROMPT_VERSION = "unit-finalization-v0.1"
 UNIT_FINALIZATION_PROMPT_RESOURCE = "unit_finalization_v0.1.md"
 UNIT_REPAIR_PROMPT_VERSION = "unit-repair-v0.1"
 UNIT_REPAIR_PROMPT_RESOURCE = "unit_repair_v0.1.md"
-UNIT_TIMELINE_PROMPT_VERSION = "unit-timeline-v0.1"
-UNIT_TIMELINE_PROMPT_RESOURCE = "unit_timeline_v0.1.md"
+UNIT_TIMELINE_PROMPT_VERSION = "unit-timeline-v0.2"
+UNIT_TIMELINE_PROMPT_RESOURCE = "unit_timeline_v0.2.md"
 UNIT_TIMELINE_REPAIR_PROMPT_VERSION = "unit-timeline-repair-v0.1"
 UNIT_TIMELINE_REPAIR_PROMPT_RESOURCE = "unit_timeline_repair_v0.1.md"
 
@@ -1357,10 +1357,13 @@ def build_unit_timeline_payload(
     repaired_data: dict[str, Any],
 ) -> dict[str, Any]:
     payload = build_unit_finalization_payload(manifest)
+    event_records = repaired_data.get("event_records", [])
+    segment_results = payload.get("segment_results", [])
+    enriched_events = _enrich_event_time_refs(event_records, segment_results)
     payload["unit_records"] = {
         "entity_records": repaired_data.get("entity_records", []),
         "location_records": repaired_data.get("location_records", []),
-        "event_records": repaired_data.get("event_records", []),
+        "event_records": enriched_events,
         "thread_records": repaired_data.get("thread_records", []),
     }
     if repaired_data.get("unresolved_items"):
@@ -1370,6 +1373,43 @@ def build_unit_timeline_payload(
         }
     payload["task"] = "unit_timeline"
     return payload
+
+
+def _enrich_event_time_refs(
+    event_records: list[dict[str, Any]],
+    segment_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve time_refs into inline time expression data on each event record.
+
+    Builds a lookup of (segment_id, time_expression_id) → {surface, normalized_hint}
+    from segment_results, then enriches each event's time_refs inline so the
+    timeline LLM sees the actual temporal content without cross-referencing.
+    """
+    time_expr_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for seg in segment_results:
+        sid = seg.get("segment_id", "")
+        for te in seg.get("time_expressions", []) or []:
+            te_id = te.get("time_expression_id")
+            if te_id:
+                time_expr_lookup[(sid, te_id)] = {
+                    "surface": te.get("surface"),
+                    "normalized_hint": te.get("normalized_hint"),
+                }
+
+    enriched: list[dict[str, Any]] = []
+    for ev in event_records:
+        ev = dict(ev)
+        resolved = []
+        for tr in ev.get("time_refs", []) or []:
+            key = (tr.get("segment_id", ""), tr.get("time_expression_id", ""))
+            te_data = time_expr_lookup.get(key)
+            if te_data:
+                resolved.append({**tr, **te_data})
+            else:
+                resolved.append(dict(tr))
+        ev["time_refs"] = resolved
+        enriched.append(ev)
+    return enriched
 
 
 def build_unit_timeline_repair_payload(
