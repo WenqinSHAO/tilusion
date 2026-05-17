@@ -32,13 +32,25 @@ from tilusion.extraction_pipeline import (
     ExtractionPassRecord,
     _build_segment_quality_overview,
     _derive_unresolved_detail,
+    _detect_timeline_cycles,
     _dominant_issue_codes,
     build_overview_composition,
     build_segment_extraction_composition,
+    build_unit_finalization_composition,
+    build_unit_repair_composition,
+    build_unit_repair_payload,
+    build_unit_timeline_composition,
+    build_unit_timeline_payload,
+    build_unit_timeline_repair_composition,
     generated_prompt_part,
     refresh_chain_validation_cache,
     run_chained_extraction,
     run_segment_extraction_pass,
+    run_unit_finalization_pass,
+    run_unit_repair_pass,
+    run_unit_timeline_pass,
+    run_unit_timeline_repair_pass,
+    validate_unit_timeline_result,
 )
 
 
@@ -145,6 +157,333 @@ def test_overview_composition_tracks_static_prompt_contract() -> None:
     assert "end_quote" in prompt.content
 
 
+def test_unit_finalization_composition_tracks_static_prompt_contract() -> None:
+    prompt = build_unit_finalization_composition()
+
+    assert prompt.composition_id == "unit-finalization-v0.1"
+    assert prompt.parts[0].part_id == "unit-finalization-contract"
+    assert "You finalize source-grounded extraction" in prompt.content
+    assert "entity_records" in prompt.content
+    assert "Do not construct a final timeline" in prompt.content
+
+
+def test_unit_repair_composition_shares_finalization_prefix() -> None:
+    final = build_unit_finalization_composition()
+    repair = build_unit_repair_composition()
+
+    assert repair.composition_id == "unit-repair-v0.1"
+    assert len(repair.parts) == 2
+    assert repair.parts[0].part_id == "unit-finalization-contract"
+    assert repair.parts[0].content == final.parts[0].content
+    assert repair.parts[1].part_id == "unit-repair-instructions"
+    assert "repairing a completed unit finalization" in repair.parts[1].content
+
+
+def test_unit_repair_payload_includes_repair_targets() -> None:
+    manifest = {
+        "unit_id": "unit-0001",
+        "source_length": {"chars": 100},
+        "resolved_segments": [],
+        "validation_report": {"segment_pass_count": 1, "resolved_segment_count": 1},
+        "repair_hints": {},
+        "segment_passes": [],
+    }
+    finalization_data = {
+        "unresolved_items": [{"code": "test_issue", "path": "entity-0001"}],
+        "quality_notes": {
+            "summary": "Test finalization.",
+            "blocking_concerns": ["Missing evidence for entity-0001"],
+        },
+        "warnings": ["Some quotes are ambiguous"],
+    }
+    payload = build_unit_repair_payload(manifest, finalization_data)
+
+    assert payload["task"] == "unit_finalization"
+    assert payload["unit_id"] == "unit-0001"
+    assert "repair_targets" in payload
+    assert payload["repair_targets"]["unresolved_items"] == finalization_data["unresolved_items"]
+    assert payload["repair_targets"]["blocking_concerns"] == ["Missing evidence for entity-0001"]
+    assert payload["repair_targets"]["warnings"] == ["Some quotes are ambiguous"]
+
+
+def test_unit_repair_pass_completes_and_caches(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n" * 20, encoding="utf-8")
+    chain_dir = tmp_path / "chain"
+    record = run_chained_extraction(
+        book, "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=chain_dir,
+    )
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert not final.cache_hit
+
+    final_pass_dir = str(Path(final.artifact_paths["manifest"]).parent)
+    repair = run_unit_repair_pass(
+        final_pass_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert not repair.cache_hit
+    assert repair.validation_report["passed"]
+    assert repair.data["unit_id"] == "unit-0001"
+    for path in repair.artifact_paths.values():
+        assert Path(path).exists()
+
+    cached_repair = run_unit_repair_pass(
+        final_pass_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert cached_repair.cache_hit
+
+
+def test_unit_timeline_composition_extends_repair() -> None:
+    repair = build_unit_repair_composition()
+    timeline = build_unit_timeline_composition()
+
+    assert timeline.composition_id == "unit-timeline-v0.1"
+    assert len(timeline.parts) == 3
+    assert timeline.parts[0].part_id == "unit-finalization-contract"
+    assert timeline.parts[0].content == repair.parts[0].content
+    assert timeline.parts[1].part_id == "unit-repair-instructions"
+    assert timeline.parts[1].content == repair.parts[1].content
+    assert timeline.parts[2].part_id == "unit-timeline-instructions"
+    assert "partially-ordered timelines" in timeline.parts[2].content
+
+
+def test_unit_timeline_payload_includes_unit_records() -> None:
+    manifest = {
+        "unit_id": "unit-0001",
+        "source_length": {"chars": 100},
+        "resolved_segments": [],
+        "validation_report": {"segment_pass_count": 1, "resolved_segment_count": 1},
+        "repair_hints": {},
+        "segment_passes": [],
+    }
+    repaired = {
+        "entity_records": [{"entity_id": "unit-entity-0001"}],
+        "location_records": [{"location_id": "unit-location-0001"}],
+        "event_records": [{"event_id": "unit-event-0001"}, {"event_id": "unit-event-0002"}],
+        "thread_records": [{"thread_id": "unit-thread-0001"}],
+    }
+    payload = build_unit_timeline_payload(manifest, repaired)
+
+    assert payload["task"] == "unit_timeline"
+    assert payload["unit_id"] == "unit-0001"
+    assert "unit_records" in payload
+    assert len(payload["unit_records"]["event_records"]) == 2
+    assert len(payload["unit_records"]["entity_records"]) == 1
+
+
+def test_unit_timeline_pass_completes_and_caches(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n" * 20, encoding="utf-8")
+    record = run_chained_extraction(
+        book, "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=tmp_path / "chain",
+    )
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    repair = run_unit_repair_pass(
+        str(Path(final.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+
+    timeline = run_unit_timeline_pass(
+        str(Path(repair.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert not timeline.cache_hit
+    assert timeline.validation_report["passed"]
+    assert timeline.data["unit_id"] == "unit-0001"
+    assert len(timeline.data["timelines"]) >= 1
+    assert "unit-timeline-" in timeline.data["timelines"][0]["timeline_id"]
+    for path in timeline.artifact_paths.values():
+        assert Path(path).exists()
+
+    cached = run_unit_timeline_pass(
+        str(Path(repair.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert cached.cache_hit
+
+
+def test_validate_timeline_result_detects_missing_timelines() -> None:
+    report = validate_unit_timeline_result(
+        {"unit_id": "unit-0001"},
+        expected_unit_id="unit-0001",
+    )
+    assert not report["passed"]
+    assert any(i["code"] == "missing_required_field" for i in report["issues"])
+
+
+def test_validate_timeline_result_detects_event_mismatch() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Test",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": []}
+                ],
+            }
+        ],
+        "event_records": [
+            {"event_id": "unit-event-0001"},
+            {"event_id": "unit-event-0002"},
+        ],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    missing = [i for i in report["issues"] if i["code"] == "events_missing_from_timelines"]
+    assert len(missing) == 1
+    assert missing[0]["severity"] == "error"
+
+
+def test_validate_timeline_result_detects_self_loop() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Test",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": ["unit-event-0001"]}
+                ],
+            }
+        ],
+        "event_records": [{"event_id": "unit-event-0001"}],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    assert any(i["code"] == "timeline_self_loop" for i in report["issues"])
+
+
+def test_validate_timeline_result_detects_phantom_ref() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Test",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": ["unit-event-0999"]}
+                ],
+            }
+        ],
+        "event_records": [{"event_id": "unit-event-0001"}],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    assert any(i["code"] == "timeline_phantom_ref" for i in report["issues"])
+
+
+def test_validate_timeline_result_allows_shared_events_as_intersection() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Timeline 1",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": []}
+                ],
+            },
+            {
+                "timeline_id": "unit-timeline-0002",
+                "summary": "Timeline 2",
+                "confidence": "medium",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": []}
+                ],
+            },
+        ],
+        "event_records": [{"event_id": "unit-event-0001"}],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    shared = [i for i in report["issues"] if i["code"] == "timeline_shared_event"]
+    assert len(shared) == 1
+    assert shared[0]["severity"] == "warning"
+
+
+def test_detect_timeline_cycles_finds_cycle() -> None:
+    # A -> B -> C -> A (cycle)
+    events = [
+        {"event_id": "A", "before_events": ["B"]},
+        {"event_id": "B", "before_events": ["C"]},
+        {"event_id": "C", "before_events": ["A"]},
+    ]
+    cycles = _detect_timeline_cycles(events)
+    assert len(cycles) >= 1
+
+    # A -> B, B -> C, A -> C (no cycle)
+    events_dag = [
+        {"event_id": "A", "before_events": ["B", "C"]},
+        {"event_id": "B", "before_events": ["C"]},
+        {"event_id": "C"},
+    ]
+    cycles_dag = _detect_timeline_cycles(events_dag)
+    assert len(cycles_dag) == 0
+
+
+def test_unit_timeline_repair_composition_extends_timeline() -> None:
+    timeline = build_unit_timeline_composition()
+    repair = build_unit_timeline_repair_composition()
+
+    assert repair.composition_id == "unit-timeline-repair-v0.1"
+    assert len(repair.parts) == 4
+    assert repair.parts[0].content == timeline.parts[0].content
+    assert repair.parts[1].content == timeline.parts[1].content
+    assert repair.parts[2].content == timeline.parts[2].content
+    assert repair.parts[3].part_id == "unit-timeline-repair-instructions"
+    assert "repairing a completed timeline construction" in repair.parts[3].content
+
+
+def test_unit_timeline_repair_pass_completes_and_caches(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n" * 20, encoding="utf-8")
+    record = run_chained_extraction(
+        book, "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=tmp_path / "chain",
+    )
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    repair = run_unit_repair_pass(
+        str(Path(final.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    timeline = run_unit_timeline_pass(
+        str(Path(repair.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+
+    trepair = run_unit_timeline_repair_pass(
+        str(Path(timeline.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert not trepair.cache_hit
+    assert trepair.validation_report["passed"]
+    assert trepair.data["unit_id"] == "unit-0001"
+    for path in trepair.artifact_paths.values():
+        assert Path(path).exists()
+
+    cached = run_unit_timeline_repair_pass(
+        str(Path(timeline.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert cached.cache_hit
+
+
 def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -> None:
     book = tmp_path / "sample.txt"
     book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
@@ -220,6 +559,21 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
     refreshed_overview = refreshed["validation_report"]["segment_quality_overview"]
     assert refreshed_overview["total_overview_segments"] == 1
     assert refreshed_overview["resolved_segments"] == 1
+
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    cached_final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert not final.cache_hit
+    assert cached_final.cache_hit
+    assert final.validation_report["passed"]
+    assert final.data["unit_id"] == "unit-0001"
+    for path in final.artifact_paths.values():
+        assert Path(path).exists()
 
 
 def test_extraction_budget_rejects_oversized_input() -> None:

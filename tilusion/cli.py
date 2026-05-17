@@ -8,16 +8,33 @@ import sys
 from .book_reader import build_book_index, extract_unit_text
 from .extraction import (
     DEFAULT_MAX_TOKENS,
+    DEEPSEEK_DEFAULT_MAX_RETRIES,
+    DEEPSEEK_DEFAULT_TIMEOUT,
     DeepSeekBackend,
     ExtractionError,
     MockExtractionBackend,
 )
 from .extraction_pipeline import (
     refresh_chain_validation_cache,
+    run_all_passes,
     run_chained_extraction,
     run_segment_extraction_pass,
+    run_unit_finalization_pass,
+    run_unit_repair_pass,
+    run_unit_timeline_pass,
+    run_unit_timeline_repair_pass,
 )
 from .extraction_quality import validate_extraction_quality
+
+
+def _add_llm_backend_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
+    parser.add_argument("--model", default="deepseek-v4-flash")
+    parser.add_argument("--thinking", action="store_true")
+    parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--timeout", type=float, default=DEEPSEEK_DEFAULT_TIMEOUT)
+    parser.add_argument("--retries", type=int, default=DEEPSEEK_DEFAULT_MAX_RETRIES)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,11 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_pass_parser.add_argument("book")
     run_pass_parser.add_argument("unit_id")
     run_pass_parser.add_argument("--pass", dest="pass_name", choices=["local-bundle"], default="local-bundle")
-    run_pass_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    run_pass_parser.add_argument("--model", default="deepseek-v4-flash")
-    run_pass_parser.add_argument("--thinking", action="store_true")
-    run_pass_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    run_pass_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(run_pass_parser)
     run_pass_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_passes")
     run_pass_parser.add_argument("--no-cache", action="store_true")
 
@@ -49,11 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_chain_parser.add_argument("book")
     run_chain_parser.add_argument("unit_id")
-    run_chain_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    run_chain_parser.add_argument("--model", default="deepseek-v4-flash")
-    run_chain_parser.add_argument("--thinking", action="store_true")
-    run_chain_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    run_chain_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(run_chain_parser)
     run_chain_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_chains")
     run_chain_parser.add_argument("--no-cache", action="store_true")
 
@@ -63,6 +72,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refresh_chain_parser.add_argument("chain_cache_dir")
     refresh_chain_parser.add_argument("--format", choices=["json", "text"], default="text")
+
+    finalize_parser = subparsers.add_parser(
+        "finalize-unit",
+        help="Run unit-level finalization over an existing extraction chain cache",
+    )
+    finalize_parser.add_argument("chain_cache_dir")
+    _add_llm_backend_args(finalize_parser)
+    finalize_parser.add_argument("--no-cache", action="store_true")
+
+    repair_parser = subparsers.add_parser(
+        "repair-unit",
+        help="Run unit-level repair pass over an existing unit finalization cache",
+    )
+    repair_parser.add_argument("finalization_pass_dir")
+    _add_llm_backend_args(repair_parser)
+    repair_parser.add_argument("--no-cache", action="store_true")
+
+    timeline_parser = subparsers.add_parser(
+        "timeline-unit",
+        help="Construct partially-ordered timelines from repaired unit extraction",
+    )
+    timeline_parser.add_argument("repair_pass_dir")
+    _add_llm_backend_args(timeline_parser)
+    timeline_parser.add_argument("--no-cache", action="store_true")
+
+    timeline_repair_parser = subparsers.add_parser(
+        "repair-timeline",
+        help="Repair specific issues in a timeline construction output",
+    )
+    timeline_repair_parser.add_argument("timeline_pass_dir")
+    _add_llm_backend_args(timeline_repair_parser)
+    timeline_repair_parser.add_argument("--no-cache", action="store_true")
+
+    run_all_parser = subparsers.add_parser(
+        "run-all",
+        help="Run the full extraction pipeline (chain → finalize → repair → timeline → timeline-repair)",
+    )
+    run_all_parser.add_argument("book")
+    run_all_parser.add_argument("unit_id")
+    _add_llm_backend_args(run_all_parser)
+    run_all_parser.add_argument("--cache-dir", default=".tilusion_cache")
+    run_all_parser.add_argument("--no-cache", action="store_true")
+    run_all_parser.add_argument(
+        "--skip-repair",
+        action="store_true",
+        help="Skip repair passes even when issues are detected",
+    )
 
     validate_parser = subparsers.add_parser(
         "validate-result", help="Validate an extraction result against source text"
@@ -138,6 +194,77 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(manifest, ensure_ascii=False, indent=2))
         else:
             print(format_chain_refresh_text(manifest))
+        return 0
+
+    if args.command == "finalize-unit":
+        try:
+            record = run_unit_finalization_pass(
+                args.chain_cache_dir,
+                backend=build_backend(args),
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"unit finalization failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command == "repair-unit":
+        _warn_if_repair_unnecessary(args.finalization_pass_dir)
+        try:
+            record = run_unit_repair_pass(
+                args.finalization_pass_dir,
+                backend=build_backend(args),
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"unit repair failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command == "timeline-unit":
+        try:
+            record = run_unit_timeline_pass(
+                args.repair_pass_dir,
+                backend=build_backend(args),
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"unit timeline failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command == "repair-timeline":
+        _warn_if_timeline_repair_unnecessary(args.timeline_pass_dir)
+        try:
+            record = run_unit_timeline_repair_pass(
+                args.timeline_pass_dir,
+                backend=build_backend(args),
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"timeline repair failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command == "run-all":
+        try:
+            record = run_all_passes(
+                args.book,
+                args.unit_id,
+                backend=build_backend(args),
+                cache_dir=args.cache_dir,
+                use_cache=not args.no_cache,
+                skip_repair=args.skip_repair,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"run-all failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        print(f"package: {record.unit_package_path}", file=sys.stderr)
         return 0
 
     if args.command == "validate-result":
@@ -238,8 +365,45 @@ def build_backend(args):
             thinking=args.thinking,
             reasoning_effort=args.reasoning_effort,
             max_tokens=args.max_tokens,
+            timeout=getattr(args, "timeout", DEEPSEEK_DEFAULT_TIMEOUT),
+            max_retries=getattr(args, "retries", DEEPSEEK_DEFAULT_MAX_RETRIES),
         )
     )
+
+
+def _warn_if_repair_unnecessary(finalization_pass_dir: str) -> None:
+    """Warn if repair hints indicate no actionable issues, but don't block the run."""
+    chain_dir = Path(finalization_pass_dir).parent.parent
+    repair_hints_path = chain_dir / "repair_hints.json"
+    if not repair_hints_path.exists():
+        return
+    try:
+        hints = json.loads(repair_hints_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if hints.get("ready_for_llm_repair") is not True:
+        print(
+            "warning: repair_hints.ready_for_llm_repair is not true; "
+            "repair pass may have nothing to fix",
+            file=sys.stderr,
+        )
+
+
+def _warn_if_timeline_repair_unnecessary(timeline_pass_dir: str) -> None:
+    """Warn if timeline validation shows no errors, but don't block the run."""
+    validation_path = Path(timeline_pass_dir) / "validation_report.json"
+    if not validation_path.exists():
+        return
+    try:
+        report = json.loads(validation_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if report.get("error_count", 0) == 0:
+        print(
+            "warning: timeline validation report shows 0 errors; "
+            "repair pass may have nothing to fix",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

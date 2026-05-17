@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from importlib import resources
 import json
 from pathlib import Path
+import sys
+import time
 from typing import Any
 
 from .book_reader import build_book_index, extract_unit_text
@@ -36,6 +38,14 @@ from .extraction_quality import (
 
 OVERVIEW_PROMPT_VERSION = "overview-segmentation-v0.1"
 OVERVIEW_PROMPT_RESOURCE = "overview_segmentation_v0.1.md"
+UNIT_FINALIZATION_PROMPT_VERSION = "unit-finalization-v0.1"
+UNIT_FINALIZATION_PROMPT_RESOURCE = "unit_finalization_v0.1.md"
+UNIT_REPAIR_PROMPT_VERSION = "unit-repair-v0.1"
+UNIT_REPAIR_PROMPT_RESOURCE = "unit_repair_v0.1.md"
+UNIT_TIMELINE_PROMPT_VERSION = "unit-timeline-v0.1"
+UNIT_TIMELINE_PROMPT_RESOURCE = "unit_timeline_v0.1.md"
+UNIT_TIMELINE_REPAIR_PROMPT_VERSION = "unit-timeline-repair-v0.1"
+UNIT_TIMELINE_REPAIR_PROMPT_RESOURCE = "unit_timeline_repair_v0.1.md"
 
 
 @dataclass(slots=True)
@@ -172,6 +182,7 @@ class ChainedExtractionRecord:
     validation_report: dict[str, Any]
     repair_hints: dict[str, Any]
     artifact_paths: dict[str, str]
+    overview_result_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -180,10 +191,88 @@ class ChainedExtractionRecord:
             "source_length": self.source_length,
             "artifact_paths": self.artifact_paths,
             "overview": self.overview.to_dict(),
+            "overview_result_hash": self.overview_result_hash,
             "resolved_segments": [segment.to_dict() for segment in self.resolved_segments],
             "segment_passes": [record.to_dict() for record in self.segment_passes],
             "validation_report": self.validation_report,
             "repair_hints": self.repair_hints,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+
+@dataclass(slots=True)
+class UnitFinalizationRecord:
+    unit_id: str
+    cache_key: str
+    cache_dir: str
+    cache_hit: bool
+    raw_response: str
+    data: dict[str, Any]
+    validation_report: dict[str, Any]
+    artifact_paths: dict[str, str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "unit_id": self.unit_id,
+            "cache_key": self.cache_key,
+            "cache_dir": self.cache_dir,
+            "cache_hit": self.cache_hit,
+            "artifact_paths": self.artifact_paths,
+            "raw_response": self.raw_response,
+            "data": self.data,
+            "validation_report": self.validation_report,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+
+@dataclass(slots=True)
+class UnitTimelineRecord:
+    unit_id: str
+    cache_key: str
+    cache_dir: str
+    cache_hit: bool
+    raw_response: str
+    data: dict[str, Any]
+    validation_report: dict[str, Any]
+    artifact_paths: dict[str, str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "unit_id": self.unit_id,
+            "cache_key": self.cache_key,
+            "cache_dir": self.cache_dir,
+            "cache_hit": self.cache_hit,
+            "artifact_paths": self.artifact_paths,
+            "raw_response": self.raw_response,
+            "data": self.data,
+            "validation_report": self.validation_report,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+
+@dataclass(slots=True)
+class RunAllRecord:
+    unit_id: str
+    elapsed_ms: int
+    unit_package_path: str
+    passes: dict[str, dict[str, Any]]
+    data: dict[str, Any]
+    validation: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "unit_id": self.unit_id,
+            "elapsed_ms": self.elapsed_ms,
+            "unit_package_path": self.unit_package_path,
+            "passes": self.passes,
+            "data": self.data,
+            "validation": self.validation,
         }
 
     def to_json(self) -> str:
@@ -381,6 +470,7 @@ def run_chained_extraction(
         validation_report=validation_report,
         repair_hints=repair_hints,
         artifact_paths=paths,
+        overview_result_hash=sha256_json(overview.data),
     )
     if use_cache:
         write_chain_artifacts(root_dir, paths, record)
@@ -432,6 +522,285 @@ def refresh_chain_validation_cache(chain_dir: str | Path) -> dict[str, Any]:
         encoding="utf-8",
     )
     return refreshed_manifest
+
+
+def run_unit_finalization_pass(
+    chain_dir: str | Path,
+    *,
+    backend: LLMBackend | None = None,
+    use_cache: bool = True,
+) -> UnitFinalizationRecord:
+    root_dir = Path(chain_dir)
+    manifest_path = root_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    llm = backend or MockExtractionBackend()
+    prompt = build_unit_finalization_composition()
+    payload = build_unit_finalization_payload(manifest)
+    check_extraction_budget(
+        prompt.content,
+        payload,
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
+    cache_key = build_pass_cache_key(
+        pass_name="unit-finalization",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=llm.model_identity,
+    )
+    pass_dir = root_dir / "unit_finalization" / cache_key
+    paths = unit_finalization_artifact_paths(pass_dir)
+    result_path = Path(paths["result"])
+    cache_hit = use_cache and result_path.exists()
+    if cache_hit:
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    else:
+        raw_response = llm.complete_json(prompt.content, payload)
+        data = parse_json_response(raw_response)
+    validation_report = validate_unit_finalization_result(data, expected_unit_id=manifest["unit_id"])
+    record = UnitFinalizationRecord(
+        unit_id=manifest["unit_id"],
+        cache_key=cache_key,
+        cache_dir=str(pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    if use_cache:
+        write_unit_finalization_artifacts(
+            pass_dir=pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=data,
+            validation_report=validation_report,
+            record=record,
+        )
+    return record
+
+
+def run_unit_repair_pass(
+    finalization_pass_dir: str | Path,
+    *,
+    backend: LLMBackend | None = None,
+    use_cache: bool = True,
+) -> UnitFinalizationRecord:
+    pass_dir = Path(finalization_pass_dir)
+    result_path = pass_dir / "result.json"
+    if not result_path.exists():
+        raise ValueError(f"missing finalization result: {result_path}")
+    finalization_data = json.loads(result_path.read_text(encoding="utf-8"))
+    chain_dir = pass_dir.parent.parent
+    manifest_path = chain_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    llm = backend or MockExtractionBackend()
+    prompt = build_unit_repair_composition()
+    payload = build_unit_repair_payload(manifest, finalization_data)
+    check_extraction_budget(
+        prompt.content,
+        payload,
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
+    cache_key = build_pass_cache_key(
+        pass_name="unit-repair",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=llm.model_identity,
+    )
+    repair_pass_dir = chain_dir / "unit_repair" / cache_key
+    paths = unit_repair_artifact_paths(repair_pass_dir)
+    repair_result_path = Path(paths["result"])
+    cache_hit = use_cache and repair_result_path.exists()
+    if cache_hit:
+        data = json.loads(repair_result_path.read_text(encoding="utf-8"))
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    else:
+        raw_response = llm.complete_json(prompt.content, payload)
+        data = parse_json_response(raw_response)
+    validation_report = validate_unit_finalization_result(
+        data, expected_unit_id=manifest["unit_id"]
+    )
+    record = UnitFinalizationRecord(
+        unit_id=manifest["unit_id"],
+        cache_key=cache_key,
+        cache_dir=str(repair_pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    if use_cache:
+        write_unit_repair_artifacts(
+            pass_dir=repair_pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=data,
+            validation_report=validation_report,
+            record=record,
+        )
+    return record
+
+
+def run_unit_timeline_pass(
+    repair_pass_dir: str | Path,
+    *,
+    backend: LLMBackend | None = None,
+    use_cache: bool = True,
+) -> UnitTimelineRecord:
+    pass_dir = Path(repair_pass_dir)
+    result_path = pass_dir / "result.json"
+    if not result_path.exists():
+        raise ValueError(f"missing repair result: {result_path}")
+    repaired_data = json.loads(result_path.read_text(encoding="utf-8"))
+    chain_dir = pass_dir.parent.parent
+    manifest_path = chain_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    llm = backend or MockExtractionBackend()
+    prompt = build_unit_timeline_composition()
+    payload = build_unit_timeline_payload(manifest, repaired_data)
+    check_extraction_budget(
+        prompt.content,
+        payload,
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
+    cache_key = build_pass_cache_key(
+        pass_name="unit-timeline",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=llm.model_identity,
+    )
+    timeline_pass_dir = chain_dir / "unit_timeline" / cache_key
+    paths = unit_timeline_artifact_paths(timeline_pass_dir)
+    timeline_result_path = Path(paths["result"])
+    cache_hit = use_cache and timeline_result_path.exists()
+    if cache_hit:
+        data = json.loads(timeline_result_path.read_text(encoding="utf-8"))
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    else:
+        raw_response = llm.complete_json(prompt.content, payload)
+        timelines_output = parse_json_response(raw_response)
+        data = _merge_timelines_into_records(timelines_output, repaired_data)
+    validation_report = validate_unit_timeline_result(
+        data, expected_unit_id=manifest["unit_id"]
+    )
+    record = UnitTimelineRecord(
+        unit_id=manifest["unit_id"],
+        cache_key=cache_key,
+        cache_dir=str(timeline_pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    if use_cache:
+        write_unit_timeline_artifacts(
+            pass_dir=timeline_pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=data,
+            validation_report=validation_report,
+            record=record,
+        )
+    return record
+
+
+def run_unit_timeline_repair_pass(
+    timeline_pass_dir: str | Path,
+    *,
+    backend: LLMBackend | None = None,
+    use_cache: bool = True,
+) -> UnitTimelineRecord:
+    pass_dir = Path(timeline_pass_dir)
+    result_path = pass_dir / "result.json"
+    if not result_path.exists():
+        raise ValueError(f"missing timeline result: {result_path}")
+    timeline_data = json.loads(result_path.read_text(encoding="utf-8"))
+    chain_dir = pass_dir.parent.parent
+    manifest_path = chain_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # Run validation to collect repair targets
+    prerepair_validation = validate_unit_timeline_result(
+        timeline_data, expected_unit_id=manifest["unit_id"]
+    )
+    missing_events = []
+    for issue in prerepair_validation.get("issues", []):
+        if issue.get("code") == "events_missing_from_timelines":
+            msg = issue.get("message", "")
+            import re
+            found = re.findall(r"unit-event-\d+", msg)
+            missing_events.extend(found)
+    timeline_data["_validation_issues"] = prerepair_validation.get("issues", [])
+    timeline_data["_missing_events"] = list(dict.fromkeys(missing_events))
+
+    llm = backend or MockExtractionBackend()
+    prompt = build_unit_timeline_repair_composition()
+    payload = build_unit_timeline_repair_payload(manifest, timeline_data)
+    check_extraction_budget(
+        prompt.content,
+        payload,
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
+    cache_key = build_pass_cache_key(
+        pass_name="unit-timeline-repair",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=llm.model_identity,
+    )
+    repair_pass_dir = chain_dir / "unit_timeline_repair" / cache_key
+    paths = unit_timeline_repair_artifact_paths(repair_pass_dir)
+    repair_result_path = Path(paths["result"])
+    cache_hit = use_cache and repair_result_path.exists()
+    if cache_hit:
+        data = json.loads(repair_result_path.read_text(encoding="utf-8"))
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    else:
+        raw_response = llm.complete_json(prompt.content, payload)
+        repair_output = parse_json_response(raw_response)
+        repair_output.pop("_validation_issues", None)
+        repair_output.pop("_missing_events", None)
+        data = _merge_timelines_into_records(repair_output, timeline_data)
+    validation_report = validate_unit_timeline_result(
+        data, expected_unit_id=manifest["unit_id"]
+    )
+    record = UnitTimelineRecord(
+        unit_id=manifest["unit_id"],
+        cache_key=cache_key,
+        cache_dir=str(repair_pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    if use_cache:
+        write_unit_timeline_repair_artifacts(
+            pass_dir=repair_pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=data,
+            validation_report=validation_report,
+            record=record,
+        )
+    return record
 
 
 def run_overview_segmentation_pass(
@@ -704,6 +1073,93 @@ def build_overview_composition(
     return PromptComposition(composition_id=OVERVIEW_PROMPT_VERSION, parts=parts)
 
 
+def build_unit_finalization_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-finalization-contract",
+            role="static_task_contract",
+            resource_name=UNIT_FINALIZATION_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_FINALIZATION_PROMPT_VERSION},
+        )
+    ]
+    parts.extend(generated_prompt_parts or [])
+    return PromptComposition(composition_id=UNIT_FINALIZATION_PROMPT_VERSION, parts=parts)
+
+
+def build_unit_repair_composition() -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-finalization-contract",
+            role="static_task_contract",
+            resource_name=UNIT_FINALIZATION_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_FINALIZATION_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-repair-instructions",
+            role="generated_repair_instructions",
+            resource_name=UNIT_REPAIR_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_REPAIR_PROMPT_VERSION},
+        ),
+    ]
+    return PromptComposition(composition_id=UNIT_REPAIR_PROMPT_VERSION, parts=parts)
+
+
+def build_unit_timeline_composition() -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-finalization-contract",
+            role="static_task_contract",
+            resource_name=UNIT_FINALIZATION_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_FINALIZATION_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-repair-instructions",
+            role="generated_repair_instructions",
+            resource_name=UNIT_REPAIR_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_REPAIR_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-timeline-instructions",
+            role="generated_timeline_instructions",
+            resource_name=UNIT_TIMELINE_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_TIMELINE_PROMPT_VERSION},
+        ),
+    ]
+    return PromptComposition(composition_id=UNIT_TIMELINE_PROMPT_VERSION, parts=parts)
+
+
+def build_unit_timeline_repair_composition() -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-finalization-contract",
+            role="static_task_contract",
+            resource_name=UNIT_FINALIZATION_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_FINALIZATION_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-repair-instructions",
+            role="generated_repair_instructions",
+            resource_name=UNIT_REPAIR_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_REPAIR_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-timeline-instructions",
+            role="generated_timeline_instructions",
+            resource_name=UNIT_TIMELINE_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_TIMELINE_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-timeline-repair-instructions",
+            role="generated_timeline_repair_instructions",
+            resource_name=UNIT_TIMELINE_REPAIR_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_TIMELINE_REPAIR_PROMPT_VERSION},
+        ),
+    ]
+    return PromptComposition(composition_id=UNIT_TIMELINE_REPAIR_PROMPT_VERSION, parts=parts)
+
+
 def generated_prompt_part(
     part_id: str,
     *,
@@ -790,6 +1246,64 @@ def chain_artifact_paths(chain_dir: Path) -> dict[str, str]:
     }
 
 
+def unit_finalization_artifact_paths(pass_dir: Path) -> dict[str, str]:
+    return {
+        "manifest": str(pass_dir / "manifest.json"),
+        "prompt_composition": str(pass_dir / "prompt_composition.json"),
+        "system_prompt": str(pass_dir / "system_prompt.md"),
+        "request_payload": str(pass_dir / "request_payload.json"),
+        "raw_response": str(pass_dir / "raw_response.txt"),
+        "result": str(pass_dir / "result.json"),
+        "validation_report": str(pass_dir / "validation_report.json"),
+        "unit_extraction": str(pass_dir / "unit_extraction.json"),
+        "unit_qc_report": str(pass_dir / "unit_qc_report.json"),
+        "unit_reader_view": str(pass_dir / "unit_reader_view.md"),
+    }
+
+
+def unit_repair_artifact_paths(pass_dir: Path) -> dict[str, str]:
+    return {
+        "manifest": str(pass_dir / "manifest.json"),
+        "prompt_composition": str(pass_dir / "prompt_composition.json"),
+        "system_prompt": str(pass_dir / "system_prompt.md"),
+        "request_payload": str(pass_dir / "request_payload.json"),
+        "raw_response": str(pass_dir / "raw_response.txt"),
+        "result": str(pass_dir / "result.json"),
+        "validation_report": str(pass_dir / "validation_report.json"),
+        "unit_extraction": str(pass_dir / "unit_extraction.json"),
+        "unit_qc_report": str(pass_dir / "unit_qc_report.json"),
+        "unit_reader_view": str(pass_dir / "unit_reader_view.md"),
+    }
+
+
+def unit_timeline_artifact_paths(pass_dir: Path) -> dict[str, str]:
+    return {
+        "manifest": str(pass_dir / "manifest.json"),
+        "prompt_composition": str(pass_dir / "prompt_composition.json"),
+        "system_prompt": str(pass_dir / "system_prompt.md"),
+        "request_payload": str(pass_dir / "request_payload.json"),
+        "raw_response": str(pass_dir / "raw_response.txt"),
+        "result": str(pass_dir / "result.json"),
+        "validation_report": str(pass_dir / "validation_report.json"),
+        "unit_extraction": str(pass_dir / "unit_extraction.json"),
+        "timeline_view": str(pass_dir / "timeline_view.md"),
+    }
+
+
+def unit_timeline_repair_artifact_paths(pass_dir: Path) -> dict[str, str]:
+    return {
+        "manifest": str(pass_dir / "manifest.json"),
+        "prompt_composition": str(pass_dir / "prompt_composition.json"),
+        "system_prompt": str(pass_dir / "system_prompt.md"),
+        "request_payload": str(pass_dir / "request_payload.json"),
+        "raw_response": str(pass_dir / "raw_response.txt"),
+        "result": str(pass_dir / "result.json"),
+        "validation_report": str(pass_dir / "validation_report.json"),
+        "unit_extraction": str(pass_dir / "unit_extraction.json"),
+        "timeline_view": str(pass_dir / "timeline_view.md"),
+    }
+
+
 def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
     return sha256_json(
         {
@@ -801,6 +1315,357 @@ def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
             "segment_prompt_version": PROMPT_VERSION,
         }
     )
+
+
+def build_unit_finalization_payload(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task": "unit_finalization",
+        "unit_id": manifest["unit_id"],
+        "source_length": manifest.get("source_length", {}),
+        "resolved_segments": [
+            compact_resolved_segment(segment)
+            for segment in manifest.get("resolved_segments", [])
+        ],
+        "chain_validation": compact_chain_validation(manifest.get("validation_report", {})),
+        "repair_hints": manifest.get("repair_hints", {}),
+        "segment_results": [
+            compact_segment_result(record)
+            for record in manifest.get("segment_passes", [])
+        ],
+    }
+
+
+def build_unit_repair_payload(
+    manifest: dict[str, Any],
+    finalization_data: dict[str, Any],
+) -> dict[str, Any]:
+    payload = build_unit_finalization_payload(manifest)
+    payload["repair_targets"] = {
+        "unresolved_items": finalization_data.get("unresolved_items", []),
+        "blocking_concerns": (
+            finalization_data.get("quality_notes", {}).get("blocking_concerns", [])
+            if isinstance(finalization_data.get("quality_notes"), dict)
+            else []
+        ),
+        "warnings": finalization_data.get("warnings", []),
+    }
+    return payload
+
+
+def build_unit_timeline_payload(
+    manifest: dict[str, Any],
+    repaired_data: dict[str, Any],
+) -> dict[str, Any]:
+    payload = build_unit_finalization_payload(manifest)
+    payload["unit_records"] = {
+        "entity_records": repaired_data.get("entity_records", []),
+        "location_records": repaired_data.get("location_records", []),
+        "event_records": repaired_data.get("event_records", []),
+        "thread_records": repaired_data.get("thread_records", []),
+    }
+    if repaired_data.get("unresolved_items"):
+        payload["quality_context"] = {
+            "unresolved_items": repaired_data["unresolved_items"],
+            "warnings": repaired_data.get("warnings", []),
+        }
+    payload["task"] = "unit_timeline"
+    return payload
+
+
+def build_unit_timeline_repair_payload(
+    manifest: dict[str, Any],
+    timeline_data: dict[str, Any],
+) -> dict[str, Any]:
+    payload = build_unit_finalization_payload(manifest)
+    payload["unit_records"] = {
+        "entity_records": timeline_data.get("entity_records", []),
+        "location_records": timeline_data.get("location_records", []),
+        "event_records": timeline_data.get("event_records", []),
+        "thread_records": timeline_data.get("thread_records", []),
+    }
+    payload["timelines"] = timeline_data.get("timelines", [])
+    payload["repair_targets"] = {
+        "validation_issues": timeline_data.get("_validation_issues", []),
+        "missing_events": timeline_data.get("_missing_events", []),
+    }
+    payload["task"] = "unit_timeline_repair"
+    return payload
+
+
+def compact_resolved_segment(segment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "segment_id": segment.get("segment_id"),
+        "title": segment.get("title"),
+        "summary": segment.get("summary"),
+        "start": segment.get("start"),
+        "end": segment.get("end"),
+        "length": segment.get("length", {}),
+        "source": {
+            "start_quote": (segment.get("source") or {}).get("start_quote"),
+            "end_quote": (segment.get("source") or {}).get("end_quote"),
+        },
+    }
+
+
+def compact_chain_validation(validation_report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "segment_pass_count": validation_report.get("segment_pass_count", 0),
+        "resolved_segment_count": validation_report.get("resolved_segment_count", 0),
+        "segment_quality_overview": validation_report.get("segment_quality_overview", {}),
+    }
+
+
+def compact_segment_result(record: dict[str, Any]) -> dict[str, Any]:
+    result = record.get("result", {})
+    data = result.get("data", {})
+    validation = record.get("validation_report", {})
+    return {
+        "segment_id": result.get("unit_id"),
+        "validation": {
+            "passed": validation.get("passed"),
+            "error_count": validation.get("error_count", 0),
+            "warning_count": validation.get("warning_count", 0),
+            "issue_codes": [
+                issue.get("code")
+                for issue in validation.get("issues", [])
+                if isinstance(issue, dict)
+            ],
+        },
+        "evidence_spans": data.get("evidence_spans", []),
+        "entity_mentions": data.get("entity_mentions", []),
+        "location_mentions": data.get("location_mentions", []),
+        "event_mentions": data.get("event_mentions", []),
+        "time_expressions": data.get("time_expressions", []),
+        "thread_candidates": data.get("thread_candidates", []),
+        "warnings": data.get("warnings", []),
+    }
+
+
+def validate_unit_finalization_result(
+    data: dict[str, Any],
+    *,
+    expected_unit_id: str,
+) -> dict[str, Any]:
+    issues = []
+    required = {
+        "unit_id": str,
+        "entity_records": list,
+        "location_records": list,
+        "event_records": list,
+        "thread_records": list,
+        "unresolved_items": list,
+        "quality_notes": dict,
+        "warnings": list,
+    }
+    for key, expected_type in required.items():
+        if key not in data:
+            issues.append(unit_finalization_issue("error", "missing_required_field", key))
+        elif not isinstance(data[key], expected_type):
+            issues.append(unit_finalization_issue("error", "wrong_field_type", key))
+    if data.get("unit_id") != expected_unit_id:
+        issues.append(
+            {
+                "severity": "error",
+                "code": "unit_id_mismatch",
+                "path": "unit_id",
+                "message": f"Expected `{expected_unit_id}` but got `{data.get('unit_id')}`.",
+            }
+        )
+    quality_notes = data.get("quality_notes")
+    if isinstance(quality_notes, dict):
+        if not isinstance(quality_notes.get("summary"), str):
+            issues.append(unit_finalization_issue("error", "wrong_field_type", "quality_notes.summary"))
+        for key in ["blocking_concerns"]:
+            if not isinstance(quality_notes.get(key), list):
+                issues.append(unit_finalization_issue("error", "wrong_field_type", f"quality_notes.{key}"))
+    error_count = sum(1 for issue in issues if issue["severity"] == "error")
+    warning_count = sum(1 for issue in issues if issue["severity"] == "warning")
+    return {
+        "passed": error_count == 0,
+        "issue_count": len(issues),
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "issues": issues,
+    }
+
+
+def unit_finalization_issue(severity: str, code: str, path: str) -> dict[str, Any]:
+    return {
+        "severity": severity,
+        "code": code,
+        "path": path,
+        "message": f"{path} failed unit finalization validation.",
+    }
+
+
+def validate_unit_timeline_result(
+    data: dict[str, Any],
+    *,
+    expected_unit_id: str,
+) -> dict[str, Any]:
+    issues = []
+    if data.get("unit_id") != expected_unit_id:
+        issues.append(unit_finalization_issue("error", "unit_id_mismatch", "unit_id"))
+
+    timelines = data.get("timelines")
+    if not isinstance(timelines, list) or len(timelines) == 0:
+        issues.append(unit_finalization_issue("error", "missing_required_field", "timelines"))
+        error_count = sum(1 for i in issues if i["severity"] == "error")
+        return {
+            "passed": False,
+            "issue_count": len(issues),
+            "error_count": error_count,
+            "warning_count": 0,
+            "issues": issues,
+        }
+
+    input_event_ids = {e.get("event_id") for e in data.get("event_records", []) if isinstance(e, dict)}
+    all_event_ids: set[str] = set()
+    timeline_event_sets: list[set[str]] = []
+    for i, timeline in enumerate(timelines):
+        prefix = f"timelines[{i}]"
+        for field in ["timeline_id", "summary", "ordered_events", "confidence"]:
+            if field not in timeline:
+                issues.append(unit_finalization_issue("error", "missing_required_field", f"{prefix}.{field}"))
+        tid = timeline.get("timeline_id", "")
+        if not isinstance(tid, str) or not tid.startswith("unit-timeline-"):
+            issues.append(unit_finalization_issue("error", "wrong_field_type", f"{prefix}.timeline_id"))
+        conf = timeline.get("confidence")
+        if conf not in ("high", "medium", "low"):
+            issues.append(unit_finalization_issue("warning", "wrong_field_type", f"{prefix}.confidence"))
+
+        ordered = timeline.get("ordered_events")
+        tl_event_ids: set[str] = set()
+        if isinstance(ordered, list):
+            for j, entry in enumerate(ordered):
+                if not isinstance(entry, dict):
+                    issues.append(unit_finalization_issue("error", "wrong_field_type", f"{prefix}.ordered_events[{j}]"))
+                    continue
+                eid = entry.get("event_id")
+                if not isinstance(eid, str):
+                    issues.append(unit_finalization_issue("error", "missing_required_field", f"{prefix}.ordered_events[{j}].event_id"))
+                else:
+                    all_event_ids.add(eid)
+                    tl_event_ids.add(eid)
+                before = entry.get("before_events")
+                if before is not None and not isinstance(before, list):
+                    issues.append(unit_finalization_issue("error", "wrong_field_type", f"{prefix}.ordered_events[{j}].before_events"))
+                has_edges = bool(before)
+                if has_edges and not isinstance(entry.get("rationale"), str):
+                    issues.append(unit_finalization_issue("warning", "missing_required_field", f"{prefix}.ordered_events[{j}].rationale"))
+                # Self-loop check
+                if isinstance(eid, str) and isinstance(before, list) and eid in before:
+                    issues.append(
+                        {
+                            "severity": "error",
+                            "code": "timeline_self_loop",
+                            "path": f"{prefix}.ordered_events[{j}]",
+                            "message": f"Event {eid} lists itself in before_events.",
+                        }
+                    )
+                # Phantom ref check
+                if isinstance(before, list):
+                    for ref_id in before:
+                        if isinstance(ref_id, str) and ref_id not in input_event_ids:
+                            issues.append(
+                                {
+                                    "severity": "error",
+                                    "code": "timeline_phantom_ref",
+                                    "path": f"{prefix}.ordered_events[{j}].before_events",
+                                    "message": f"before_events references unknown event '{ref_id}'.",
+                                }
+                            )
+
+        timeline_event_sets.append(tl_event_ids)
+        cycles = _detect_timeline_cycles(ordered if isinstance(ordered, list) else [])
+        for cycle in cycles:
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": "timeline_cycle_detected",
+                    "path": f"{prefix}.ordered_events",
+                    "message": f"Cycle detected: {' -> '.join(cycle)}",
+                }
+            )
+
+    # Duplicate event across timelines check
+    for i in range(len(timeline_event_sets)):
+        for j in range(i + 1, len(timeline_event_sets)):
+            overlap = timeline_event_sets[i] & timeline_event_sets[j]
+            for eid in overlap:
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "code": "timeline_shared_event",
+                        "path": f"timelines[{i}],timelines[{j}]",
+                        "message": f"Event {eid} appears in multiple timelines. Allowed as intersection point but should be intentional.",
+                    }
+                )
+
+    missing = input_event_ids - all_event_ids
+    extra = all_event_ids - input_event_ids
+    if missing:
+        issues.append(
+            {
+                "severity": "error",
+                "code": "events_missing_from_timelines",
+                "path": "timelines",
+                "message": f"Events not covered by any timeline: {sorted(missing)}",
+            }
+        )
+    if extra:
+        issues.append(unit_finalization_issue("error", "unknown_events_in_timelines", f"extra: {sorted(extra)}"))
+
+    error_count = sum(1 for i in issues if i["severity"] == "error")
+    warning_count = sum(1 for i in issues if i["severity"] == "warning")
+    return {
+        "passed": error_count == 0,
+        "issue_count": len(issues),
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "issues": issues,
+    }
+
+
+def _detect_timeline_cycles(ordered_events: list[dict]) -> list[list[str]]:
+    adj: dict[str, list[str]] = {}
+    for entry in ordered_events:
+        eid = entry.get("event_id")
+        if not isinstance(eid, str):
+            continue
+        adj.setdefault(eid, [])
+        for before_id in (entry.get("before_events") or []):
+            if isinstance(before_id, str) and before_id in {e.get("event_id") for e in ordered_events if isinstance(e.get("event_id"), str)}:
+                adj.setdefault(eid, []).append(before_id)
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    all_nodes = {e.get("event_id") for e in ordered_events if isinstance(e.get("event_id"), str)}
+    color: dict[str, int] = {node: WHITE for node in all_nodes}
+    cycles: list[list[str]] = []
+    parent: dict[str, str | None] = {}
+
+    def dfs(node: str) -> None:
+        color[node] = GRAY
+        for neighbor in adj.get(node, []):
+            if neighbor not in color:
+                continue
+            if color[neighbor] == GRAY:
+                cycle = [neighbor, node]
+                cur = node
+                while parent.get(cur) and parent[cur] != neighbor:
+                    cur = parent[cur]
+                    cycle.append(cur)
+                cycles.append(cycle)
+            elif color[neighbor] == WHITE:
+                parent[neighbor] = node
+                dfs(neighbor)
+        color[node] = BLACK
+
+    for node in all_nodes:
+        if color[node] == WHITE:
+            parent[node] = None
+            dfs(node)
+    return cycles
 
 
 def validate_overview_result(data: dict[str, Any]) -> None:
@@ -1285,6 +2150,612 @@ def write_chain_artifacts(
         encoding="utf-8",
     )
     Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def write_unit_finalization_artifacts(
+    *,
+    pass_dir: Path,
+    paths: dict[str, str],
+    prompt: PromptComposition,
+    user_payload: dict[str, Any],
+    raw_response: str,
+    data: dict[str, Any],
+    validation_report: dict[str, Any],
+    record: UnitFinalizationRecord,
+) -> None:
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    Path(paths["prompt_composition"]).write_text(
+        json.dumps(prompt.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["system_prompt"]).write_text(prompt.content, encoding="utf-8")
+    Path(paths["request_payload"]).write_text(
+        json.dumps(user_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["raw_response"]).write_text(raw_response, encoding="utf-8")
+    Path(paths["result"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_extraction"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_qc_report"]).write_text(
+        json.dumps(build_unit_qc_report(data, validation_report), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_reader_view"]).write_text(
+        format_unit_reader_view(data, validation_report),
+        encoding="utf-8",
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def write_unit_repair_artifacts(
+    *,
+    pass_dir: Path,
+    paths: dict[str, str],
+    prompt: PromptComposition,
+    user_payload: dict[str, Any],
+    raw_response: str,
+    data: dict[str, Any],
+    validation_report: dict[str, Any],
+    record: UnitFinalizationRecord,
+) -> None:
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    Path(paths["prompt_composition"]).write_text(
+        json.dumps(prompt.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["system_prompt"]).write_text(prompt.content, encoding="utf-8")
+    Path(paths["request_payload"]).write_text(
+        json.dumps(user_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["raw_response"]).write_text(raw_response, encoding="utf-8")
+    Path(paths["result"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_extraction"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_qc_report"]).write_text(
+        json.dumps(build_unit_qc_report(data, validation_report), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_reader_view"]).write_text(
+        format_unit_reader_view(data, validation_report),
+        encoding="utf-8",
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def write_unit_timeline_artifacts(
+    *,
+    pass_dir: Path,
+    paths: dict[str, str],
+    prompt: PromptComposition,
+    user_payload: dict[str, Any],
+    raw_response: str,
+    data: dict[str, Any],
+    validation_report: dict[str, Any],
+    record: UnitTimelineRecord,
+) -> None:
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    Path(paths["prompt_composition"]).write_text(
+        json.dumps(prompt.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["system_prompt"]).write_text(prompt.content, encoding="utf-8")
+    Path(paths["request_payload"]).write_text(
+        json.dumps(user_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["raw_response"]).write_text(raw_response, encoding="utf-8")
+    Path(paths["result"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_extraction"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["timeline_view"]).write_text(
+        format_unit_timeline_view(data, validation_report),
+        encoding="utf-8",
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def write_unit_timeline_repair_artifacts(
+    *,
+    pass_dir: Path,
+    paths: dict[str, str],
+    prompt: PromptComposition,
+    user_payload: dict[str, Any],
+    raw_response: str,
+    data: dict[str, Any],
+    validation_report: dict[str, Any],
+    record: UnitTimelineRecord,
+) -> None:
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    Path(paths["prompt_composition"]).write_text(
+        json.dumps(prompt.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["system_prompt"]).write_text(prompt.content, encoding="utf-8")
+    Path(paths["request_payload"]).write_text(
+        json.dumps(user_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["raw_response"]).write_text(raw_response, encoding="utf-8")
+    Path(paths["result"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_extraction"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["timeline_view"]).write_text(
+        format_unit_timeline_view(data, validation_report),
+        encoding="utf-8",
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def build_unit_qc_report(data: dict[str, Any], validation_report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "unit_id": data.get("unit_id"),
+        "validation_report": validation_report,
+        "quality_notes": data.get("quality_notes", {}),
+        "unresolved_items": data.get("unresolved_items", []),
+        "warnings": data.get("warnings", []),
+    }
+
+
+def format_unit_reader_view(data: dict[str, Any], validation_report: dict[str, Any]) -> str:
+    quality_notes = data.get("quality_notes", {}) if isinstance(data.get("quality_notes"), dict) else {}
+    lines = [
+        f"# Unit Extraction: {data.get('unit_id', '')}",
+        "",
+        f"- validation_passed: {str(validation_report.get('passed')).lower()}",
+        f"- entities: {len(data.get('entity_records', []) or [])}",
+        f"- locations: {len(data.get('location_records', []) or [])}",
+        f"- events: {len(data.get('event_records', []) or [])}",
+        f"- threads: {len(data.get('thread_records', []) or [])}",
+        f"- unresolved_items: {len(data.get('unresolved_items', []) or [])}",
+        "",
+        "## Quality Notes",
+        "",
+        quality_notes.get("summary") or "No model quality summary provided.",
+        "",
+        "## Blocking Concerns",
+    ]
+    concerns = quality_notes.get("blocking_concerns") or []
+    if concerns:
+        lines.extend(f"- {concern}" for concern in concerns)
+    else:
+        lines.append("- none")
+    lines.extend([
+        "",
+        "## Warnings",
+    ])
+    warnings = data.get("warnings") or []
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
+    else:
+        lines.append("- none")
+    return "\n".join(lines) + "\n"
+
+
+def format_unit_timeline_view(data: dict[str, Any], validation_report: dict[str, Any]) -> str:
+    lines = [
+        f"# Timeline View: {data.get('unit_id', '')}",
+        "",
+        f"- validation_passed: {str(validation_report.get('passed')).lower()}",
+        f"- timelines: {len(data.get('timelines', []) or [])}",
+        f"- events: {len(data.get('event_records', []) or [])}",
+    ]
+    event_map = {
+        e.get("event_id"): e.get("summary", "")
+        for e in (data.get("event_records") or [])
+        if isinstance(e, dict)
+    }
+    for timeline in data.get("timelines", []) or []:
+        lines.extend([
+            "",
+            f"## {timeline.get('timeline_id')}: {timeline.get('summary', '')}",
+            f"  confidence: {timeline.get('confidence', 'unknown')}",
+            "",
+            "### Event Order",
+            "",
+        ])
+        for entry in timeline.get("ordered_events", []) or []:
+            eid = entry.get("event_id", "?")
+            before = entry.get("before_events") or []
+            summary = event_map.get(eid, "")
+            lines.append(f"- **{eid}**: {summary}")
+            if before:
+                lines.append(f"  before: {', '.join(before)}")
+            rationale = entry.get("rationale")
+            if rationale:
+                lines.append(f"  rationale: {rationale}")
+    return "\n".join(lines) + "\n"
+
+
+def _log_progress(
+    step: int,
+    total: int,
+    description: str,
+    status: str,
+    elapsed_ms: int,
+) -> None:
+    elapsed_s = elapsed_ms / 1000
+    print(
+        f"[{step}/{total}] {description}... {status} ({elapsed_s:.1f}s)",
+        file=sys.stderr,
+    )
+
+
+def run_all_passes(
+    book_path: str | Path,
+    unit_id: str,
+    *,
+    backend: LLMBackend | None = None,
+    cache_dir: str | Path = ".tilusion_cache",
+    use_cache: bool = True,
+    skip_repair: bool = False,
+) -> RunAllRecord:
+    llm = backend or MockExtractionBackend()
+    root = Path(cache_dir)
+    total_start = time.monotonic()
+    pass_summaries: dict[str, dict[str, Any]] = {}
+    final_data: dict[str, Any] = {}
+
+    chain_dir: str | None = None
+    finalization_dir: str | None = None
+    repair_dir: str | None = None
+    timeline_dir: str | None = None
+
+    # ---- Step 1: Chain (overview + segments) ----
+    t0 = time.monotonic()
+    try:
+        chain_record = run_chained_extraction(
+            book_path, unit_id, backend=llm,
+            cache_dir=root / "extraction_chains", use_cache=use_cache,
+        )
+    except Exception:
+        _log_progress(1, 5, "overview+segments", "FAILED", _elapsed_ms(t0))
+        raise
+    chain_dir = chain_record.cache_dir
+    pass_summaries["chain"] = {
+        "cache_key": chain_record.overview.cache_key,
+        "cache_dir": chain_record.cache_dir,
+        "cache_hit": chain_record.overview.cache_hit,
+        "artifact_paths": chain_record.artifact_paths,
+        "elapsed_ms": _elapsed_ms(t0),
+        "segments_resolved": len(chain_record.resolved_segments),
+        "segments_total": len(chain_record.overview.data.get("overview_segments", [])),
+    }
+    _log_progress(
+        1, 5, "overview+segments",
+        "cache hit" if chain_record.overview.cache_hit else "LLM call",
+        pass_summaries["chain"]["elapsed_ms"],
+    )
+
+    # ---- Step 2: Unit finalization ----
+    t0 = time.monotonic()
+    try:
+        finalization_record = run_unit_finalization_pass(
+            chain_dir, backend=llm, use_cache=use_cache,
+        )
+    except Exception:
+        _log_progress(2, 5, "unit finalization", "FAILED", _elapsed_ms(t0))
+        raise
+    finalization_dir = finalization_record.cache_dir
+    pass_summaries["finalization"] = {
+        "cache_key": finalization_record.cache_key,
+        "cache_dir": finalization_record.cache_dir,
+        "cache_hit": finalization_record.cache_hit,
+        "artifact_paths": finalization_record.artifact_paths,
+        "elapsed_ms": _elapsed_ms(t0),
+    }
+    _log_progress(
+        2, 5, "unit finalization",
+        "cache hit" if finalization_record.cache_hit else "LLM call",
+        pass_summaries["finalization"]["elapsed_ms"],
+    )
+
+    # ---- Step 3: Unit repair (conditional) ----
+    t0 = time.monotonic()
+    repair_record = None
+    repair_hints = chain_record.repair_hints
+    repair_needed = (
+        not skip_repair
+        and isinstance(repair_hints, dict)
+        and repair_hints.get("ready_for_llm_repair") is True
+    )
+    if repair_needed:
+        try:
+            repair_record = run_unit_repair_pass(
+                finalization_dir, backend=llm, use_cache=use_cache,
+            )
+        except Exception:
+            _log_progress(3, 5, "unit repair", "FAILED (continuing)", _elapsed_ms(t0))
+        else:
+            repair_dir = repair_record.cache_dir
+            pass_summaries["repair"] = {
+                "cache_key": repair_record.cache_key,
+                "cache_dir": repair_record.cache_dir,
+                "cache_hit": repair_record.cache_hit,
+                "artifact_paths": repair_record.artifact_paths,
+                "elapsed_ms": _elapsed_ms(t0),
+                "skipped": False,
+            }
+            _log_progress(
+                3, 5, "unit repair",
+                "cache hit" if repair_record.cache_hit else "LLM call",
+                pass_summaries["repair"]["elapsed_ms"],
+            )
+    if "repair" not in pass_summaries:
+        reason = "nothing actionable" if not skip_repair else "repair skipped by flag"
+        pass_summaries["repair"] = {"skipped": True, "reason": reason}
+        _log_progress(3, 5, "unit repair", f"skipped ({reason})", _elapsed_ms(t0))
+
+    # The input to timeline is the repaired data if repair ran, else finalization
+    timeline_input_dir = repair_dir or finalization_dir  # type: ignore[assignment]
+
+    # ---- Step 4: Timeline construction ----
+    t0 = time.monotonic()
+    try:
+        timeline_record = run_unit_timeline_pass(
+            timeline_input_dir, backend=llm, use_cache=use_cache,
+        )
+    except Exception:
+        _log_progress(4, 5, "timeline construction", "FAILED", _elapsed_ms(t0))
+        raise
+    timeline_dir = timeline_record.cache_dir
+    pass_summaries["timeline"] = {
+        "cache_key": timeline_record.cache_key,
+        "cache_dir": timeline_record.cache_dir,
+        "cache_hit": timeline_record.cache_hit,
+        "artifact_paths": timeline_record.artifact_paths,
+        "elapsed_ms": _elapsed_ms(t0),
+    }
+    _log_progress(
+        4, 5, "timeline construction",
+        "cache hit" if timeline_record.cache_hit else "LLM call",
+        pass_summaries["timeline"]["elapsed_ms"],
+    )
+    final_data = timeline_record.data
+
+    # ---- Step 5: Timeline repair (conditional) ----
+    t0 = time.monotonic()
+    tl_validation = timeline_record.validation_report
+    tl_errors = tl_validation.get("error_count", 0) if isinstance(tl_validation, dict) else 0
+    if not skip_repair and isinstance(tl_errors, int) and tl_errors > 0:
+        try:
+            tl_repair_record = run_unit_timeline_repair_pass(
+                timeline_dir, backend=llm, use_cache=use_cache,
+            )
+        except Exception:
+            _log_progress(5, 5, "timeline repair", "FAILED (continuing)", _elapsed_ms(t0))
+        else:
+            pass_summaries["timeline_repair"] = {
+                "cache_key": tl_repair_record.cache_key,
+                "cache_dir": tl_repair_record.cache_dir,
+                "cache_hit": tl_repair_record.cache_hit,
+                "artifact_paths": tl_repair_record.artifact_paths,
+                "elapsed_ms": _elapsed_ms(t0),
+                "skipped": False,
+            }
+            final_data = tl_repair_record.data
+            _log_progress(
+                5, 5, "timeline repair",
+                "cache hit" if tl_repair_record.cache_hit else "LLM call",
+                pass_summaries["timeline_repair"]["elapsed_ms"],
+            )
+    if "timeline_repair" not in pass_summaries:
+        reason = "no timeline errors" if tl_errors == 0 else "repair skipped by flag"
+        pass_summaries["timeline_repair"] = {"skipped": True, "reason": reason}
+        _log_progress(5, 5, "timeline repair", f"skipped ({reason})", _elapsed_ms(t0))
+
+    total_elapsed = _elapsed_ms(total_start)
+
+    # ---- Deterministic quality summary (overwrites LLM-produced text) ----
+    llm_summary = ""
+    qn = final_data.get("quality_notes")
+    if isinstance(qn, dict):
+        llm_summary = qn.get("summary", "")
+    n_events = len(final_data.get("event_records", []) or [])
+    n_timelines = len(final_data.get("timelines", []) or [])
+    n_unresolved = len(final_data.get("unresolved_items", []) or [])
+    final_data["quality_notes"] = {
+        **({} if not isinstance(qn, dict) else {k: v for k, v in qn.items() if k != "summary"}),
+        "summary": f"Final merged result: {n_events} events across {n_timelines} timelines, {n_unresolved} unresolved items.",
+    }
+    if llm_summary:
+        final_data["quality_notes"]["_llm_summary"] = llm_summary
+
+    # Build pass-level validation summary
+    pass_validation = _build_pass_validation(
+        chain_record=chain_record,
+        finalization_record=finalization_record,
+        repair_record=repair_record,
+        timeline_record=timeline_record,
+        tl_repair_record=tl_repair_record if "timeline_repair" in pass_summaries and not pass_summaries["timeline_repair"].get("skipped") else None,
+        skip_repair=skip_repair,
+    )
+    validation_summary = _validation_summary(final_data, pass_validation)
+
+    # Write unit package
+    package_path = write_unit_package(
+        unit_id=unit_id,
+        book_path=str(book_path),
+        passes=pass_summaries,
+        data=final_data,
+        validation=validation_summary,
+        cache_root=root,
+        source_length=chain_record.source_length,
+    )
+
+    return RunAllRecord(
+        unit_id=unit_id,
+        elapsed_ms=total_elapsed,
+        unit_package_path=package_path,
+        passes=pass_summaries,
+        data=final_data,
+        validation=validation_summary,
+    )
+
+
+def write_unit_package(
+    *,
+    unit_id: str,
+    book_path: str,
+    passes: dict[str, dict[str, Any]],
+    data: dict[str, Any],
+    validation: dict[str, Any],
+    cache_root: Path,
+    source_length: dict[str, int] | None = None,
+) -> str:
+    package_dir = cache_root / "units" / unit_id
+    package_dir.mkdir(parents=True, exist_ok=True)
+    package_path = package_dir / "unit_package.json"
+    sl = source_length or {}
+    package = {
+        "unit_id": unit_id,
+        "source": {
+            "book_path": book_path,
+            "chars": sl.get("chars"),
+            "lines": sl.get("lines"),
+        },
+        "passes": passes,
+        "data": data,
+        "validation": validation,
+    }
+    package_path.write_text(
+        json.dumps(package, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return str(package_path)
+
+
+def _elapsed_ms(since: float) -> int:
+    return int((time.monotonic() - since) * 1000)
+
+
+def _build_pass_validation(
+    *,
+    chain_record: Any,
+    finalization_record: Any,
+    repair_record: Any,
+    timeline_record: Any,
+    tl_repair_record: Any,
+    skip_repair: bool,
+) -> dict[str, Any]:
+    pv: dict[str, Any] = {}
+    # Chain
+    vr = getattr(chain_record, "validation_report", None)
+    pv["chain"] = _validation_status(vr)
+    # Finalization
+    vr = getattr(finalization_record, "validation_report", None)
+    pv["finalization"] = _validation_status(vr)
+    # Repair (may be None if skipped)
+    if repair_record is not None:
+        vr = getattr(repair_record, "validation_report", None)
+        pv["repair"] = _validation_status(vr)
+    else:
+        pv["repair"] = {"passed": None, "error_count": 0, "warning_count": 0, "skipped": not skip_repair}
+    # Timeline
+    vr = getattr(timeline_record, "validation_report", None)
+    pv["timeline"] = _validation_status(vr)
+    # Timeline repair (may be None if skipped)
+    if tl_repair_record is not None:
+        vr = getattr(tl_repair_record, "validation_report", None)
+        pv["timeline_repair"] = _validation_status(vr)
+    else:
+        pv["timeline_repair"] = {"passed": None, "error_count": 0, "warning_count": 0, "skipped": True}
+    return pv
+
+
+def _validation_status(vr: Any) -> dict[str, Any]:
+    """Extract status fields from a validation report dict."""
+    if not isinstance(vr, dict):
+        return {"passed": None, "error_count": 0, "warning_count": 0}
+    return {
+        "passed": vr.get("passed", False),
+        "error_count": vr.get("error_count", 0),
+        "warning_count": vr.get("warning_count", 0),
+    }
+
+
+def _validation_summary(data: dict[str, Any], pass_validation: dict[str, Any]) -> dict[str, Any]:
+    event_count = len(data.get("event_records", []) or [])
+    entity_count = len(data.get("entity_records", []) or [])
+    location_count = len(data.get("location_records", []) or [])
+    thread_count = len(data.get("thread_records", []) or [])
+    timeline_count = len(data.get("timelines", []) or [])
+    return {
+        "event_count": event_count,
+        "entity_count": entity_count,
+        "location_count": location_count,
+        "thread_count": thread_count,
+        "timeline_count": timeline_count,
+        "passes": pass_validation,
+    }
+
+
+_RECORD_KEYS = (
+    "entity_records",
+    "location_records",
+    "event_records",
+    "thread_records",
+)
+
+
+def _merge_timelines_into_records(
+    llm_output: dict[str, Any],
+    base_records: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge LLM-produced timelines (and optional repair metadata) onto base records.
+
+    The LLM only produces the `timelines` array (and for repair passes,
+    `quality_notes`, `unresolved_items`, `warnings`). All entity, location,
+    event, and thread records come from the deterministic base.
+    """
+    merged: dict[str, Any] = {}
+    for key in _RECORD_KEYS:
+        merged[key] = base_records.get(key, [])
+    merged["timelines"] = llm_output.get("timelines", [])
+    for key in ("quality_notes", "unresolved_items", "warnings"):
+        if key in llm_output:
+            merged[key] = llm_output[key]
+        elif key in base_records:
+            merged[key] = base_records[key]
+    merged["unit_id"] = base_records.get("unit_id", llm_output.get("unit_id", ""))
+    return merged
 
 
 def text_length_stats(text: str) -> dict[str, int]:

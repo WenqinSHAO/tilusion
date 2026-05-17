@@ -392,6 +392,72 @@ These are ordered by impact and will be implemented over subsequent commits.
 
 **5. Revisit evidence context reconstruction for CJK.** `containing_paragraph()` splits on `\n\n`. Classical Chinese paragraphs can be hundreds of characters long with no blank-line breaks between semantic units. Consider sentence-boundary-based context windows (`。`, `！`, `？`) as an alternative or supplement to paragraph-based windows for CJK text.
 
+### Second LLM-Backed Chain Trial: Follow-Up Issues (2026-05-17)
+
+A later `run-chain --backend deepseek` trial over the same `unit-0002` cache (`b1c97fb4...`) used the v0.5 segment extraction prompt and restored all overview segments.
+
+This run is a better stress test for finishing a full unit because it produced 14 finer segments instead of the earlier 6.
+
+#### Current Status
+
+- Overview proposed 14 segments; all 14 resolved to source offsets.
+- Segment extraction completed for all 14 segments.
+- Chain validation failed with 7 errors and 4 warnings.
+- Evidence relocation summary across segment results: 96 exact, 44 relocated, 4 missing, 1 ambiguous.
+- `repair_hints.ready_for_llm_repair` is true.
+- Non-actionable warnings are separated: 3 `surface_not_in_evidence_context` warnings affecting segments `overview-segment-0005` and `overview-segment-0011`.
+
+The failures are concentrated rather than systemic.
+
+They do not block cross-segment planning work, but they are worth tracking because they define the kinds of defects a final repair/QC pair should be able to catch.
+
+#### Segment Restoration Observations
+
+Segment restoration is much improved: every overview anchor is locatable.
+
+However, restored segments are not yet guaranteed to form a clean non-overlapping partition of the unit.
+
+Observed issue:
+
+- `overview-segment-0008` overlaps `overview-segment-0007` by 763 characters.
+
+Most other gaps appear to be note/commentary gaps or boundaries between extracted narrative ranges.
+
+The overlap is not fatal for local segment extraction, but it can create duplicate events, duplicated entities, or inconsistent summaries during merge.
+
+This is a whole-unit QC concern.
+
+#### Validation Issues Worth Patching Or Repairing
+
+The current validator surfaced these actionable issue types:
+
+- `evidence_quote_missing`: 4 cases. These are mostly LLM quote drift rather than hallucination. Examples include expanding source text from `亭在土山之巅` to `沧浪亭在土山之巅`, and using ellipsis-compressed quotes such as `明午，憨果至。……芸曰...`.
+- `missing_evidence_refs`: 2 cases. Segment `overview-segment-0007` emitted entity mentions with empty `evidence_span_ids`.
+- `evidence_quote_ambiguous`: 1 case. Segment `overview-segment-0010` used the quote `老妪`, which appears four times.
+- `unresolved_evidence_ref`: 1 case. Segment `overview-segment-0013` included prose inside an evidence reference: `evidence-0004尾段? 实际在段落4...`.
+- `surface_not_in_evidence_context`: 3 non-actionable cases. These remain useful human/QC signals but should not by themselves trigger local repair.
+
+These issues are not structural blockers for the next cross-segment pass design.
+
+They are exactly the kind of defects expected after first-pass segment extraction and should be handled by the repair/QC loop before accepting a unit as finished.
+
+#### Quality Interpretation
+
+The v0.5 prompt improved `surface` vs `canonical_name` behavior.
+
+Most canonical names are now editorial normalizations while surfaces remain closer to the attested text form, for example `余` with `canonical_name: 沈复` and `芸` with `canonical_name: 陈芸` or `芸娘`.
+
+The remaining failures are mostly mechanical:
+
+- quotes are semantically correct but not directly relocatable
+- some evidence references are missing or malformed
+- very short evidence quotes are ambiguous
+- segment overlap can duplicate downstream records
+
+This suggests final unit completion should not rely only on local segment validation.
+
+It needs at least one cross-segment merge/QC phase that checks overlap, duplicates, alias continuity, event continuity, unresolved local repair hints, and whether accepted outputs are still source-navigable.
+
 ### Long Unit Handling
 
 Some reader units are too long and semantically dense for one detailed extraction call.
@@ -447,6 +513,110 @@ The whole-unit quality-control pass should review merged chunk outputs for:
 - thread continuity errors
 - temporal contradictions
 - unbalanced extraction density
+
+### Unit Completion Pass
+
+The next extraction milestone is to finish extraction for one reader unit after local segment extraction has completed.
+
+This should be treated as unit-level stabilization, not as timeline visualization or future-context retrieval.
+
+End goal for a finished unit:
+
+- local segment outputs are merged into a source-grounded unit extraction package
+- obvious local validation errors are carried forward as repair targets or unresolved items
+- duplicate entities, locations, events, and threads across segments are detected or merged
+- aliases are explicit rather than silently collapsed
+- event records are stable enough for a later timeline-construction task
+- every accepted record remains navigable back to source evidence
+- unresolved ambiguity is visible to a human reader and to later LLM passes
+
+Expected artifacts:
+
+- `unit_extraction.json`: unit-level structured extraction assembled from segment outputs.
+- `unit_qc_report.json`: deterministic and LLM-facing QC findings, including unresolved repair hints, duplicate candidates, segment overlaps, alias conflicts, and source-navigation status.
+- `unit_reader_view.md`: human-readable overview for inspecting major entities, events, unresolved threads, and source-linked quality concerns.
+
+Out of scope for this branch:
+
+- final timeline construction from events
+- visualization-specific layout
+- reusable context selection for future units or future incremental extractions
+
+Those are downstream consumers of a clean unit extraction package.
+
+#### Cross-Segment Finalization Inputs
+
+Current implementation entry points:
+
+- CLI: `python -m tilusion.cli finalize-unit <chain_cache_dir>`.
+- Pass runner: `run_unit_finalization_pass()` in `tilusion/extraction_pipeline.py`.
+- Context assembly: `build_unit_finalization_payload()` in `tilusion/extraction_pipeline.py`.
+- Segment compaction: `compact_segment_result()` in `tilusion/extraction_pipeline.py`.
+- Static prompt: `tilusion/prompts/unit_finalization_v0.1.md`.
+
+The unit finalization payload currently contains:
+
+- unit metadata and source length stats
+- overview segments and resolved source ranges
+- compact segment quality overview
+- repair hints
+- compacted segment extraction results
+
+Context economy becomes important here.
+
+The first implementation passes compact segment objects, not the full source text.
+
+The compacted objects still include local evidence, entity, location, event, time, thread, and warning arrays.
+
+Later compaction can reduce this further by selecting only relevant fields, issue-linked windows, or high-value records.
+
+`chain_validation` and `repair_hints` are related but should not carry the same details.
+
+`chain_validation` should provide shape and distribution: how many segments were resolved, which segments have issues, and dominant issue types.
+
+`repair_hints` should provide concrete actionable payloads: exact segment repair issues, unresolved evidence locations, and non-actionable warning summaries.
+
+This keeps the finalization prompt cheaper than passing full validation reports twice.
+
+#### Reference Scope
+
+Merged unit records should use unit-scope IDs, for example `unit-entity-0001` and `unit-event-0001`.
+
+Provenance references should stay segment-local:
+
+- `mention_refs`: `{segment_id, mention_id}`
+- `time_refs`: `{segment_id, time_expression_id}`
+- `evidence_refs`: `{segment_id, evidence_id}`
+
+This is cheaper and simpler for the LLM backend because it can reuse IDs already present in the input segment results.
+
+It is also sufficient for deterministic navigation because source relocation is already computed and cached at segment scope in each segment `validated_result.json`.
+
+Creating unit-scope IDs for every mention, time expression, and evidence span would require an additional mapping table without improving current source restoration.
+
+#### Quality Notes Ownership
+
+The LLM finalization output should use `quality_notes` for concise human-facing commentary.
+
+It should not be the authority for deterministic readiness flags such as `ready_for_timeline`.
+
+The deterministic pipeline should compute readiness later from concrete checks such as unresolved repair hints, duplicate events, broken refs, and segment overlaps.
+
+This keeps model output useful for humans without asking the LLM to certify pipeline state.
+
+#### Unit Finalization Responsibilities
+
+The finalization pass should focus on:
+
+- entity and location alias resolution across segments
+- event deduplication and correction across overlapping or adjacent segments
+- preserving or reporting local repair issues from segment validation
+- marking ambiguous evidence or malformed references as unresolved rather than accepting them silently
+- creating a compact reader-facing QC summary
+
+It should not infer a fully ordered timeline.
+
+It may preserve event order hints by segment order and local source order, but the timeline view should be a separate task consuming the stable event set.
 
 It should not rewrite the entire extraction from scratch.
 
@@ -723,6 +893,59 @@ The likely prompt families are:
 - cross-unit alias and timeline review prompts
 
 This also leaves room for later GEPA-like prompt evolution, because evolved parts can be evaluated and versioned independently.
+
+### Leveraging LLM KV Cache Reuse
+
+The prompt composition strategy above is not only about maintainability — it directly enables LLM backend KV cache reuse across passes.
+
+Most LLM backends (DeepSeek, Claude, OpenAI) cache the key-value tensors for prompt prefixes. When a second request shares the same prefix bytes, the backend skips recomputing attention for that prefix. This is request-level acceleration, not file-based caching.
+
+#### Prefix Sharing Opportunities
+
+The extraction loop naturally produces shared prefixes:
+
+**Static system prompts are the cheapest prefix.** The task contract and output schema are identical across many calls. The system prompt for segment extraction (`segment-extraction-contract`) is the same for every segment; only the generated overview-hints part differs. If the backend receives the same system prompt bytes for multiple segments in sequence, the KV cache for that prefix is reused.
+
+**Full source text can be a shared user-payload prefix.** The overview pass already sends the complete unit text. If the repair pass or finalization pass also sends the full unit text as a prefix (followed by generated feedback or compacted results as a suffix), these passes benefit from the overview pass's KV cache. The tradeoff is token volume: the source text is the largest single payload component, but with KV cache hit the marginal compute cost is negligible.
+
+**Segment text is not currently shareable across passes.** Each segment extraction pass sends a different source slice, so there is no natural prefix overlap between segment passes. Within a single segment, multi-round refinement (extract → validate → repair) reuses the same segment text prefix, making repair rounds cheaper than the initial extraction.
+
+#### Multi-Round / Test-Time Scaling Patterns
+
+Several patterns become practical once prompt parts are composable and prefixes are shareable:
+
+**Repair loop (2 rounds).** Round 1 extracts segment data. Deterministic validation identifies actionable issues. Round 2 sends the same source text + system prompt (KV cache hit on both) with a repair task suffix and compact `repair_hints` feedback. The second round costs only the new suffix tokens plus the model's output tokens.
+
+**Majority-vote or best-of-N (N parallel rounds).** Run the same extraction prompt N times with high temperature. Each response is parsed and validated independently. A lightweight merge step picks the most consistent output or flags disagreements. All N calls share the same prompt prefix, so KV cache reuse amortizes the prefix cost. This is useful when extraction ambiguity is high and the cost of a wrong merge exceeds the cost of extra inference.
+
+**Branching at unit scope (1 + M rounds).** After segment extraction completes and the unit text prefix is cached:
+- Round A: finalize unit (merge, alias, dedup, QC) — implemented
+- Round B: construct timeline from stabilized event records
+- Round C: generate cross-unit context summary for the next unit's `prior_context`
+
+Rounds A/B/C share the same unit-text prefix and receive different task suffixes. If run in quick succession, each round hits KV cache on the prefix and only pays for the suffix + output.
+
+**Incremental correction without rerunning.** When a human corrects one entity record in the unit extraction, only the affected segment's extraction cache is invalidated (via text hash change). The overview pass and other segments retain their cache hits. A re-run of `run-chain` only re-extracts the changed segment, and the finalization pass receives the updated segment result while reusing the cached overview and unchanged segments.
+
+#### Current Gaps
+
+| Capability | Status |
+|-----------|--------|
+| File-based SHA256 cache | Done |
+| Cross-segment text-hash cache reuse | Done (`_build_segment_cache_map`) |
+| Composible prompt parts with versioned cache keys | Done |
+| Shared source text prefix across overview, repair, and finalization | Not wired — finalization sends compacted JSON, repair pass not yet implemented |
+| Multi-round repair loop consuming `repair_hints` | `repair_hints` designed for this, loop runner not implemented |
+| KV-cache-aware pass ordering in the pipeline | Not implemented — passes run independently, no prefix-sharing scheduler |
+| Test-time majority voting or best-of-N | Not designed |
+
+#### Near-Term Priorities
+
+1. **Wire source text into the finalization payload as an optional prefix.** The finalization pass should receive the full unit text (or relevant source windows for unresolved evidence) so it can verify claims against evidence. If the overview pass just ran, the KV cache makes this nearly free.
+
+2. **Implement the repair loop runner.** A `repair-segment` command or pipeline function that sends the source text + `repair_hints` payload to the LLM. The second round reuses the first round's prompt prefix.
+
+3. **Pass ordering in `run-chain`.** After the overview pass caches the full unit text prefix, run segment extraction passes immediately (while the prefix is warm), then run the finalization pass (also reusing the prefix). Currently passes are independent and could be scheduled by a runner that groups same-prefix calls together.
 
 ## Segmentation Strategy
 

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any, Protocol
 
 from .book_reader import StructureUnit, build_book_index, extract_unit_text
@@ -101,6 +102,14 @@ class MockExtractionBackend:
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
         if user_payload.get("task") == "overview_segmentation":
             return json.dumps(mock_overview_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_finalization":
+            return json.dumps(mock_unit_finalization_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_repair":
+            return json.dumps(mock_unit_repair_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_timeline":
+            return json.dumps(mock_unit_timeline_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_timeline_repair":
+            return json.dumps(mock_unit_timeline_repair_response(user_payload), ensure_ascii=False)
         text = user_payload["text"]
         unit_id = user_payload["unit"]["id"]
         evidence = first_nonempty_line(text)
@@ -154,6 +163,10 @@ class MockExtractionBackend:
         )
 
 
+DEEPSEEK_DEFAULT_TIMEOUT = 300
+DEEPSEEK_DEFAULT_MAX_RETRIES = 3
+
+
 class DeepSeekBackend:
     def __init__(
         self,
@@ -162,6 +175,8 @@ class DeepSeekBackend:
         thinking: bool = False,
         reasoning_effort: str = "high",
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        timeout: float = DEEPSEEK_DEFAULT_TIMEOUT,
+        max_retries: int = DEEPSEEK_DEFAULT_MAX_RETRIES,
     ) -> None:
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -174,12 +189,19 @@ class DeepSeekBackend:
         self.thinking = thinking
         self.reasoning_effort = reasoning_effort
         self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.max_retries = max_retries
         self.api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DS_API_KEY")
         if not self.api_key:
             raise RuntimeError("DEEPSEEK_API_KEY or DS_API_KEY is required for DeepSeek extraction")
         from openai import OpenAI
 
-        self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com")
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url="https://api.deepseek.com",
+            timeout=timeout,
+            max_retries=0,
+        )
 
     @property
     def model_identity(self) -> str:
@@ -200,18 +222,32 @@ class DeepSeekBackend:
         }
         if self.thinking:
             kwargs["reasoning_effort"] = self.reasoning_effort
-        response = self.client.chat.completions.create(**kwargs)
-        choice = response.choices[0]
-        finish_reason = getattr(choice, "finish_reason", None)
-        content = choice.message.content
-        if not content:
-            raise RuntimeError("DeepSeek returned empty content for JSON extraction")
-        if finish_reason == "length":
-            raise ExtractionError(
-                "DeepSeek stopped because generation hit max_tokens or context length; "
-                "retry with a higher --max-tokens value or a smaller input segment."
-            )
-        return content
+
+        last_exception: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                last_exception = exc
+                if attempt < self.max_retries and _is_retryable(exc):
+                    delay = 2 ** attempt
+                    time.sleep(delay)
+                    continue
+                raise
+
+            choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
+            content = choice.message.content
+            if not content:
+                raise RuntimeError("DeepSeek returned empty content for JSON extraction")
+            if finish_reason == "length":
+                raise ExtractionError(
+                    "DeepSeek stopped because generation hit max_tokens or context length; "
+                    "retry with a higher --max-tokens value or a smaller input segment."
+                )
+            return content
+
+        raise last_exception  # type: ignore[misc]
 
 
 def run_local_bundle_extraction(
@@ -441,9 +477,163 @@ def mock_overview_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_id = user_payload["unit_id"]
+    segment_results = user_payload.get("segment_results", [])
+    entity_records = []
+    event_records = []
+    for index, segment in enumerate(segment_results, start=1):
+        segment_id = segment["segment_id"]
+        for mention in segment.get("entity_mentions", [])[:1]:
+            entity_records.append(
+                {
+                    "entity_id": f"unit-entity-{len(entity_records) + 1:04d}",
+                    "canonical_name": mention.get("canonical_name") or mention.get("surface"),
+                    "surfaces": [mention.get("surface")],
+                    "kind": mention.get("kind", "other"),
+                    "summary": mention.get("summary", "Mock merged entity."),
+                    "mention_refs": [
+                        {"segment_id": segment_id, "mention_id": mention.get("mention_id")}
+                    ],
+                    "alias_confidence": "low",
+                }
+            )
+        for event in segment.get("event_mentions", [])[:1]:
+            event_records.append(
+                {
+                    "event_id": f"unit-event-{len(event_records) + 1:04d}",
+                    "summary": event.get("summary", "Mock merged event."),
+                    "segment_ids": [segment_id],
+                    "source_order_hint": index,
+                    "participant_entity_ids": [],
+                    "location_ids": [],
+                    "time_refs": [
+                        {"segment_id": segment_id, "time_expression_id": time_id}
+                        for time_id in event.get("time_expression_ids", [])
+                    ],
+                    "evidence_refs": [
+                        {"segment_id": segment_id, "evidence_id": evidence_id}
+                        for evidence_id in event.get("evidence_span_ids", [])
+                    ],
+                    "duplicate_of": None,
+                    "qc_notes": ["mock finalization"],
+                }
+            )
+    return {
+        "unit_id": unit_id,
+        "entity_records": entity_records,
+        "location_records": [],
+        "event_records": event_records,
+        "thread_records": [],
+        "unresolved_items": [],
+        "quality_notes": {
+            "summary": "Mock unit finalization completed with placeholder merged records.",
+            "blocking_concerns": [],
+        },
+        "warnings": ["mock backend used; finalization output is structural placeholder only"],
+    }
+
+
+def mock_unit_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_records = user_payload.get("unit_records", {})
+    repair_targets = user_payload.get("repair_targets", {})
+    unresolved = list(unit_records.get("unresolved_items", []))
+    # Simulate repair: move blocking concerns to resolved quality notes
+    resolved_count = 0
+    remaining = []
+    for item in unresolved:
+        if isinstance(item, dict) and item.get("severity") == "error":
+            resolved_count += 1
+        else:
+            remaining.append(item)
+    quality_notes = dict(unit_records.get("quality_notes", {}))
+    if resolved_count:
+        quality_notes["repair_summary"] = (
+            f"Mock repair resolved {resolved_count} blocking concern(s); "
+            f"{len(remaining)} unresolved items remain."
+        )
+    return {
+        "unit_id": user_payload["unit_id"],
+        "entity_records": unit_records.get("entity_records", []),
+        "location_records": unit_records.get("location_records", []),
+        "event_records": unit_records.get("event_records", []),
+        "thread_records": unit_records.get("thread_records", []),
+        "unresolved_items": remaining,
+        "quality_notes": quality_notes,
+        "warnings": unit_records.get("warnings", [])
+        + ["mock backend used; repair output is structural placeholder only"],
+    }
+
+
+def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_records = user_payload.get("unit_records", {})
+    events = unit_records.get("event_records", [])
+
+    ordered = []
+    for i, event in enumerate(events):
+        entry: dict[str, Any] = {
+            "event_id": event["event_id"],
+        }
+        if i + 1 < len(events):
+            entry["before_events"] = [events[i + 1]["event_id"]]
+            entry["rationale"] = f"source_order_hint {event.get('source_order_hint', i+1)} < {events[i+1].get('source_order_hint', i+2)}"
+        ordered.append(entry)
+
+    timeline = {
+        "timeline_id": "unit-timeline-0001",
+        "summary": "Mock timeline: all events in source order",
+        "confidence": "medium",
+        "ordered_events": ordered,
+    }
+
+    return {
+        "timelines": [timeline],
+    }
+
+
+def mock_unit_timeline_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_records = user_payload.get("unit_records", {})
+    timelines = user_payload.get("timelines", [])
+    missing_events = user_payload.get("repair_targets", {}).get("missing_events", [])
+
+    events = unit_records.get("event_records", [])
+    if missing_events and timelines:
+        # Attach missing events to the first timeline with no ordering edges
+        timeline = timelines[0]
+        ordered = timeline.get("ordered_events", [])
+        for eid in missing_events:
+            ordered.append({"event_id": eid})
+        timeline["ordered_events"] = ordered
+
+    return {
+        "timelines": timelines,
+        "quality_notes": {
+            "summary": "Mock timeline repair completed.",
+            "blocking_concerns": [],
+        },
+        "unresolved_items": [],
+        "warnings": ["mock backend used; timeline repair is structural placeholder only"],
+    }
+
+
 def last_nonempty_line(text: str) -> str:
     for line in reversed(text.splitlines()):
         stripped = line.strip()
         if stripped:
             return stripped
     return ""
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True for transient errors worth retrying (network, rate-limit, server)."""
+    try:
+        from openai import (  # type: ignore[import-untyped]
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+        )
+    except ImportError:
+        return False
+
+    return isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError))
