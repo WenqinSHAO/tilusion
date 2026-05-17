@@ -514,6 +514,110 @@ The whole-unit quality-control pass should review merged chunk outputs for:
 - temporal contradictions
 - unbalanced extraction density
 
+### Unit Completion Pass
+
+The next extraction milestone is to finish extraction for one reader unit after local segment extraction has completed.
+
+This should be treated as unit-level stabilization, not as timeline visualization or future-context retrieval.
+
+End goal for a finished unit:
+
+- local segment outputs are merged into a source-grounded unit extraction package
+- obvious local validation errors are carried forward as repair targets or unresolved items
+- duplicate entities, locations, events, and threads across segments are detected or merged
+- aliases are explicit rather than silently collapsed
+- event records are stable enough for a later timeline-construction task
+- every accepted record remains navigable back to source evidence
+- unresolved ambiguity is visible to a human reader and to later LLM passes
+
+Expected artifacts:
+
+- `unit_extraction.json`: unit-level structured extraction assembled from segment outputs.
+- `unit_qc_report.json`: deterministic and LLM-facing QC findings, including unresolved repair hints, duplicate candidates, segment overlaps, alias conflicts, and source-navigation status.
+- `unit_reader_view.md`: human-readable overview for inspecting major entities, events, unresolved threads, and source-linked quality concerns.
+
+Out of scope for this branch:
+
+- final timeline construction from events
+- visualization-specific layout
+- reusable context selection for future units or future incremental extractions
+
+Those are downstream consumers of a clean unit extraction package.
+
+#### Cross-Segment Finalization Inputs
+
+Current implementation entry points:
+
+- CLI: `python -m tilusion.cli finalize-unit <chain_cache_dir>`.
+- Pass runner: `run_unit_finalization_pass()` in `tilusion/extraction_pipeline.py`.
+- Context assembly: `build_unit_finalization_payload()` in `tilusion/extraction_pipeline.py`.
+- Segment compaction: `compact_segment_result()` in `tilusion/extraction_pipeline.py`.
+- Static prompt: `tilusion/prompts/unit_finalization_v0.1.md`.
+
+The unit finalization payload currently contains:
+
+- unit metadata and source length stats
+- overview segments and resolved source ranges
+- compact segment quality overview
+- repair hints
+- compacted segment extraction results
+
+Context economy becomes important here.
+
+The first implementation passes compact segment objects, not the full source text.
+
+The compacted objects still include local evidence, entity, location, event, time, thread, and warning arrays.
+
+Later compaction can reduce this further by selecting only relevant fields, issue-linked windows, or high-value records.
+
+`chain_validation` and `repair_hints` are related but should not carry the same details.
+
+`chain_validation` should provide shape and distribution: how many segments were resolved, which segments have issues, and dominant issue types.
+
+`repair_hints` should provide concrete actionable payloads: exact segment repair issues, unresolved evidence locations, and non-actionable warning summaries.
+
+This keeps the finalization prompt cheaper than passing full validation reports twice.
+
+#### Reference Scope
+
+Merged unit records should use unit-scope IDs, for example `unit-entity-0001` and `unit-event-0001`.
+
+Provenance references should stay segment-local:
+
+- `mention_refs`: `{segment_id, mention_id}`
+- `time_refs`: `{segment_id, time_expression_id}`
+- `evidence_refs`: `{segment_id, evidence_id}`
+
+This is cheaper and simpler for the LLM backend because it can reuse IDs already present in the input segment results.
+
+It is also sufficient for deterministic navigation because source relocation is already computed and cached at segment scope in each segment `validated_result.json`.
+
+Creating unit-scope IDs for every mention, time expression, and evidence span would require an additional mapping table without improving current source restoration.
+
+#### Quality Notes Ownership
+
+The LLM finalization output should use `quality_notes` for concise human-facing commentary.
+
+It should not be the authority for deterministic readiness flags such as `ready_for_timeline`.
+
+The deterministic pipeline should compute readiness later from concrete checks such as unresolved repair hints, duplicate events, broken refs, and segment overlaps.
+
+This keeps model output useful for humans without asking the LLM to certify pipeline state.
+
+#### Unit Finalization Responsibilities
+
+The finalization pass should focus on:
+
+- entity and location alias resolution across segments
+- event deduplication and correction across overlapping or adjacent segments
+- preserving or reporting local repair issues from segment validation
+- marking ambiguous evidence or malformed references as unresolved rather than accepting them silently
+- creating a compact reader-facing QC summary
+
+It should not infer a fully ordered timeline.
+
+It may preserve event order hints by segment order and local source order, but the timeline view should be a separate task consuming the stable event set.
+
 It should not rewrite the entire extraction from scratch.
 
 ## Phase 2: Intra-Unit Grouping
