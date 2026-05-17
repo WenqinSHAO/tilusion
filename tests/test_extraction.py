@@ -32,18 +32,23 @@ from tilusion.extraction_pipeline import (
     ExtractionPassRecord,
     _build_segment_quality_overview,
     _derive_unresolved_detail,
+    _detect_timeline_cycles,
     _dominant_issue_codes,
     build_overview_composition,
     build_segment_extraction_composition,
     build_unit_finalization_composition,
     build_unit_repair_composition,
     build_unit_repair_payload,
+    build_unit_timeline_composition,
+    build_unit_timeline_payload,
     generated_prompt_part,
     refresh_chain_validation_cache,
     run_chained_extraction,
     run_segment_extraction_pass,
     run_unit_finalization_pass,
     run_unit_repair_pass,
+    run_unit_timeline_pass,
+    validate_unit_timeline_result,
 )
 
 
@@ -230,6 +235,131 @@ def test_unit_repair_pass_completes_and_caches(tmp_path: Path) -> None:
         backend=MockExtractionBackend(),
     )
     assert cached_repair.cache_hit
+
+
+def test_unit_timeline_composition_extends_repair() -> None:
+    repair = build_unit_repair_composition()
+    timeline = build_unit_timeline_composition()
+
+    assert timeline.composition_id == "unit-timeline-v0.1"
+    assert len(timeline.parts) == 3
+    assert timeline.parts[0].part_id == "unit-finalization-contract"
+    assert timeline.parts[0].content == repair.parts[0].content
+    assert timeline.parts[1].part_id == "unit-repair-instructions"
+    assert timeline.parts[1].content == repair.parts[1].content
+    assert timeline.parts[2].part_id == "unit-timeline-instructions"
+    assert "partially-ordered timelines" in timeline.parts[2].content
+
+
+def test_unit_timeline_payload_includes_unit_records() -> None:
+    manifest = {
+        "unit_id": "unit-0001",
+        "source_length": {"chars": 100},
+        "resolved_segments": [],
+        "validation_report": {"segment_pass_count": 1, "resolved_segment_count": 1},
+        "repair_hints": {},
+        "segment_passes": [],
+    }
+    repaired = {
+        "entity_records": [{"entity_id": "unit-entity-0001"}],
+        "location_records": [{"location_id": "unit-location-0001"}],
+        "event_records": [{"event_id": "unit-event-0001"}, {"event_id": "unit-event-0002"}],
+        "thread_records": [{"thread_id": "unit-thread-0001"}],
+    }
+    payload = build_unit_timeline_payload(manifest, repaired)
+
+    assert payload["task"] == "unit_timeline"
+    assert payload["unit_id"] == "unit-0001"
+    assert "unit_records" in payload
+    assert len(payload["unit_records"]["event_records"]) == 2
+    assert len(payload["unit_records"]["entity_records"]) == 1
+
+
+def test_unit_timeline_pass_completes_and_caches(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n" * 20, encoding="utf-8")
+    record = run_chained_extraction(
+        book, "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=tmp_path / "chain",
+    )
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    repair = run_unit_repair_pass(
+        str(Path(final.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+
+    timeline = run_unit_timeline_pass(
+        str(Path(repair.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert not timeline.cache_hit
+    assert timeline.validation_report["passed"]
+    assert timeline.data["unit_id"] == "unit-0001"
+    assert len(timeline.data["timelines"]) >= 1
+    assert "unit-timeline-" in timeline.data["timelines"][0]["timeline_id"]
+    for path in timeline.artifact_paths.values():
+        assert Path(path).exists()
+
+    cached = run_unit_timeline_pass(
+        str(Path(repair.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert cached.cache_hit
+
+
+def test_validate_timeline_result_detects_missing_timelines() -> None:
+    report = validate_unit_timeline_result(
+        {"unit_id": "unit-0001"},
+        expected_unit_id="unit-0001",
+    )
+    assert not report["passed"]
+    assert any(i["code"] == "missing_required_field" for i in report["issues"])
+
+
+def test_validate_timeline_result_detects_event_mismatch() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Test",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": []}
+                ],
+            }
+        ],
+        "event_records": [
+            {"event_id": "unit-event-0001"},
+            {"event_id": "unit-event-0002"},
+        ],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    assert any(i["code"] == "events_missing_from_timelines" for i in report["issues"])
+
+
+def test_detect_timeline_cycles_finds_cycle() -> None:
+    # A -> B -> C -> A (cycle)
+    events = [
+        {"event_id": "A", "before_events": ["B"]},
+        {"event_id": "B", "before_events": ["C"]},
+        {"event_id": "C", "before_events": ["A"]},
+    ]
+    cycles = _detect_timeline_cycles(events)
+    assert len(cycles) >= 1
+
+    # A -> B, B -> C, A -> C (no cycle)
+    events_dag = [
+        {"event_id": "A", "before_events": ["B", "C"]},
+        {"event_id": "B", "before_events": ["C"]},
+        {"event_id": "C"},
+    ]
+    cycles_dag = _detect_timeline_cycles(events_dag)
+    assert len(cycles_dag) == 0
 
 
 def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -> None:

@@ -103,6 +103,8 @@ class MockExtractionBackend:
             return json.dumps(mock_overview_response(user_payload), ensure_ascii=False)
         if user_payload.get("task") == "unit_finalization":
             return json.dumps(mock_unit_finalization_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_timeline":
+            return json.dumps(mock_unit_timeline_response(user_payload), ensure_ascii=False)
         text = user_payload["text"]
         unit_id = user_payload["unit"]["id"]
         evidence = first_nonempty_line(text)
@@ -498,6 +500,47 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
         },
         "warnings": ["mock backend used; finalization output is structural placeholder only"],
     }
+
+def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_id = user_payload["unit_id"]
+    unit_records = user_payload.get("unit_records", {})
+    events = unit_records.get("event_records", [])
+    threads = unit_records.get("thread_records", [])
+    entities = unit_records.get("entity_records", [])
+    locations = unit_records.get("location_records", [])
+
+    ordered = []
+    for i, event in enumerate(events):
+        entry: dict[str, Any] = {
+            "event_id": event["event_id"],
+        }
+        if i + 1 < len(events):
+            entry["before_events"] = [events[i + 1]["event_id"]]
+            entry["rationale"] = f"source_order_hint {event.get('source_order_hint', i+1)} < {events[i+1].get('source_order_hint', i+2)}"
+        ordered.append(entry)
+
+    timeline = {
+        "timeline_id": "unit-timeline-0001",
+        "summary": "Mock timeline: all events in source order",
+        "confidence": "medium",
+        "ordered_events": ordered,
+    }
+
+    return {
+        "unit_id": unit_id,
+        "timelines": [timeline],
+        "entity_records": entities,
+        "location_records": locations,
+        "event_records": events,
+        "thread_records": threads,
+        "unresolved_items": [],
+        "quality_notes": {
+            "summary": "Mock timeline construction completed.",
+            "blocking_concerns": [],
+        },
+        "warnings": ["mock backend used; timeline is structural placeholder only"],
+    }
+
 
 def last_nonempty_line(text: str) -> str:
     for line in reversed(text.splitlines()):

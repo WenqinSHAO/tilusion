@@ -18,6 +18,7 @@ from .extraction_pipeline import (
     run_segment_extraction_pass,
     run_unit_finalization_pass,
     run_unit_repair_pass,
+    run_unit_timeline_pass,
 )
 from .extraction_quality import validate_extraction_quality
 
@@ -89,6 +90,18 @@ def build_parser() -> argparse.ArgumentParser:
     repair_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
     repair_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     repair_parser.add_argument("--no-cache", action="store_true")
+
+    timeline_parser = subparsers.add_parser(
+        "timeline-unit",
+        help="Construct partially-ordered timelines from repaired unit extraction",
+    )
+    timeline_parser.add_argument("repair_pass_dir")
+    timeline_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
+    timeline_parser.add_argument("--model", default="deepseek-v4-flash")
+    timeline_parser.add_argument("--thinking", action="store_true")
+    timeline_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
+    timeline_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    timeline_parser.add_argument("--no-cache", action="store_true")
 
     validate_parser = subparsers.add_parser(
         "validate-result", help="Validate an extraction result against source text"
@@ -188,6 +201,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (ExtractionError, OSError, ValueError, KeyError) as error:
             print(f"unit repair failed: {error}", file=sys.stderr)
+            return 1
+        print(record.to_json())
+        return 0
+
+    if args.command == "timeline-unit":
+        try:
+            record = run_unit_timeline_pass(
+                args.repair_pass_dir,
+                backend=build_backend(args),
+                use_cache=not args.no_cache,
+            )
+        except (ExtractionError, OSError, ValueError, KeyError) as error:
+            print(f"unit timeline failed: {error}", file=sys.stderr)
             return 1
         print(record.to_json())
         return 0
