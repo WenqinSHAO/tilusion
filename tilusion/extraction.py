@@ -105,6 +105,8 @@ class MockExtractionBackend:
             return json.dumps(mock_unit_finalization_response(user_payload), ensure_ascii=False)
         if user_payload.get("task") == "unit_timeline":
             return json.dumps(mock_unit_timeline_response(user_payload), ensure_ascii=False)
+        if user_payload.get("task") == "unit_timeline_repair":
+            return json.dumps(mock_unit_timeline_repair_response(user_payload), ensure_ascii=False)
         text = user_payload["text"]
         unit_id = user_payload["unit"]["id"]
         evidence = first_nonempty_line(text)
@@ -539,6 +541,36 @@ def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
             "blocking_concerns": [],
         },
         "warnings": ["mock backend used; timeline is structural placeholder only"],
+    }
+
+
+def mock_unit_timeline_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_records = user_payload.get("unit_records", {})
+    timelines = user_payload.get("timelines", [])
+    missing_events = user_payload.get("repair_targets", {}).get("missing_events", [])
+
+    events = unit_records.get("event_records", [])
+    if missing_events and timelines:
+        # Attach missing events to the first timeline with no ordering edges
+        timeline = timelines[0]
+        ordered = timeline.get("ordered_events", [])
+        for eid in missing_events:
+            ordered.append({"event_id": eid})
+        timeline["ordered_events"] = ordered
+
+    return {
+        "unit_id": user_payload["unit_id"],
+        "timelines": timelines,
+        "entity_records": unit_records.get("entity_records", []),
+        "location_records": unit_records.get("location_records", []),
+        "event_records": events,
+        "thread_records": unit_records.get("thread_records", []),
+        "unresolved_items": [],
+        "quality_notes": {
+            "summary": "Mock timeline repair completed.",
+            "blocking_concerns": [],
+        },
+        "warnings": ["mock backend used; timeline repair is structural placeholder only"],
     }
 
 

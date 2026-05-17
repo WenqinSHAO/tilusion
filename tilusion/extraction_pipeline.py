@@ -42,6 +42,8 @@ UNIT_REPAIR_PROMPT_VERSION = "unit-repair-v0.1"
 UNIT_REPAIR_PROMPT_RESOURCE = "unit_repair_v0.1.md"
 UNIT_TIMELINE_PROMPT_VERSION = "unit-timeline-v0.1"
 UNIT_TIMELINE_PROMPT_RESOURCE = "unit_timeline_v0.1.md"
+UNIT_TIMELINE_REPAIR_PROMPT_VERSION = "unit-timeline-repair-v0.1"
+UNIT_TIMELINE_REPAIR_PROMPT_RESOURCE = "unit_timeline_repair_v0.1.md"
 
 
 @dataclass(slots=True)
@@ -688,6 +690,90 @@ def run_unit_timeline_pass(
     return record
 
 
+def run_unit_timeline_repair_pass(
+    timeline_pass_dir: str | Path,
+    *,
+    backend: LLMBackend | None = None,
+    use_cache: bool = True,
+) -> UnitTimelineRecord:
+    pass_dir = Path(timeline_pass_dir)
+    result_path = pass_dir / "result.json"
+    if not result_path.exists():
+        raise ValueError(f"missing timeline result: {result_path}")
+    timeline_data = json.loads(result_path.read_text(encoding="utf-8"))
+    chain_dir = pass_dir.parent.parent
+    manifest_path = chain_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # Run validation to collect repair targets
+    prerepair_validation = validate_unit_timeline_result(
+        timeline_data, expected_unit_id=manifest["unit_id"]
+    )
+    missing_events = []
+    for issue in prerepair_validation.get("issues", []):
+        if issue.get("code") == "events_missing_from_timelines":
+            msg = issue.get("message", "")
+            import re
+            found = re.findall(r"unit-event-\d+", msg)
+            missing_events.extend(found)
+    timeline_data["_validation_issues"] = prerepair_validation.get("issues", [])
+    timeline_data["_missing_events"] = list(dict.fromkeys(missing_events))
+
+    llm = backend or MockExtractionBackend()
+    prompt = build_unit_timeline_repair_composition()
+    payload = build_unit_timeline_repair_payload(manifest, timeline_data)
+    check_extraction_budget(
+        prompt.content,
+        payload,
+        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
+    )
+    cache_key = build_pass_cache_key(
+        pass_name="unit-timeline-repair",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=llm.model_identity,
+    )
+    repair_pass_dir = chain_dir / "unit_timeline_repair" / cache_key
+    paths = unit_timeline_repair_artifact_paths(repair_pass_dir)
+    repair_result_path = Path(paths["result"])
+    cache_hit = use_cache and repair_result_path.exists()
+    if cache_hit:
+        data = json.loads(repair_result_path.read_text(encoding="utf-8"))
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    else:
+        raw_response = llm.complete_json(prompt.content, payload)
+        data = parse_json_response(raw_response)
+        # Strip internal helper fields from LLM output
+        data.pop("_validation_issues", None)
+        data.pop("_missing_events", None)
+    validation_report = validate_unit_timeline_result(
+        data, expected_unit_id=manifest["unit_id"]
+    )
+    record = UnitTimelineRecord(
+        unit_id=manifest["unit_id"],
+        cache_key=cache_key,
+        cache_dir=str(repair_pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    if use_cache:
+        write_unit_timeline_repair_artifacts(
+            pass_dir=repair_pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=data,
+            validation_report=validation_report,
+            record=record,
+        )
+    return record
+
+
 def run_overview_segmentation_pass(
     *,
     unit,
@@ -1015,6 +1101,36 @@ def build_unit_timeline_composition() -> PromptComposition:
     return PromptComposition(composition_id=UNIT_TIMELINE_PROMPT_VERSION, parts=parts)
 
 
+def build_unit_timeline_repair_composition() -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-finalization-contract",
+            role="static_task_contract",
+            resource_name=UNIT_FINALIZATION_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_FINALIZATION_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-repair-instructions",
+            role="generated_repair_instructions",
+            resource_name=UNIT_REPAIR_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_REPAIR_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-timeline-instructions",
+            role="generated_timeline_instructions",
+            resource_name=UNIT_TIMELINE_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_TIMELINE_PROMPT_VERSION},
+        ),
+        load_static_prompt_part(
+            "unit-timeline-repair-instructions",
+            role="generated_timeline_repair_instructions",
+            resource_name=UNIT_TIMELINE_REPAIR_PROMPT_RESOURCE,
+            metadata={"prompt_version": UNIT_TIMELINE_REPAIR_PROMPT_VERSION},
+        ),
+    ]
+    return PromptComposition(composition_id=UNIT_TIMELINE_REPAIR_PROMPT_VERSION, parts=parts)
+
+
 def generated_prompt_part(
     part_id: str,
     *,
@@ -1145,6 +1261,20 @@ def unit_timeline_artifact_paths(pass_dir: Path) -> dict[str, str]:
     }
 
 
+def unit_timeline_repair_artifact_paths(pass_dir: Path) -> dict[str, str]:
+    return {
+        "manifest": str(pass_dir / "manifest.json"),
+        "prompt_composition": str(pass_dir / "prompt_composition.json"),
+        "system_prompt": str(pass_dir / "system_prompt.md"),
+        "request_payload": str(pass_dir / "request_payload.json"),
+        "raw_response": str(pass_dir / "raw_response.txt"),
+        "result": str(pass_dir / "result.json"),
+        "validation_report": str(pass_dir / "validation_report.json"),
+        "unit_extraction": str(pass_dir / "unit_extraction.json"),
+        "timeline_view": str(pass_dir / "timeline_view.md"),
+    }
+
+
 def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
     return sha256_json(
         {
@@ -1210,6 +1340,26 @@ def build_unit_timeline_payload(
             "warnings": repaired_data.get("warnings", []),
         }
     payload["task"] = "unit_timeline"
+    return payload
+
+
+def build_unit_timeline_repair_payload(
+    manifest: dict[str, Any],
+    timeline_data: dict[str, Any],
+) -> dict[str, Any]:
+    payload = build_unit_finalization_payload(manifest)
+    payload["unit_records"] = {
+        "entity_records": timeline_data.get("entity_records", []),
+        "location_records": timeline_data.get("location_records", []),
+        "event_records": timeline_data.get("event_records", []),
+        "thread_records": timeline_data.get("thread_records", []),
+    }
+    payload["timelines"] = timeline_data.get("timelines", [])
+    payload["repair_targets"] = {
+        "validation_issues": timeline_data.get("_validation_issues", []),
+        "missing_events": timeline_data.get("_missing_events", []),
+    }
+    payload["task"] = "unit_timeline_repair"
     return payload
 
 
@@ -2064,6 +2214,47 @@ def write_unit_repair_artifacts(
 
 
 def write_unit_timeline_artifacts(
+    *,
+    pass_dir: Path,
+    paths: dict[str, str],
+    prompt: PromptComposition,
+    user_payload: dict[str, Any],
+    raw_response: str,
+    data: dict[str, Any],
+    validation_report: dict[str, Any],
+    record: UnitTimelineRecord,
+) -> None:
+    pass_dir.mkdir(parents=True, exist_ok=True)
+    Path(paths["prompt_composition"]).write_text(
+        json.dumps(prompt.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["system_prompt"]).write_text(prompt.content, encoding="utf-8")
+    Path(paths["request_payload"]).write_text(
+        json.dumps(user_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["raw_response"]).write_text(raw_response, encoding="utf-8")
+    Path(paths["result"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["unit_extraction"]).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["timeline_view"]).write_text(
+        format_unit_timeline_view(data, validation_report),
+        encoding="utf-8",
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+
+
+def write_unit_timeline_repair_artifacts(
     *,
     pass_dir: Path,
     paths: dict[str, str],

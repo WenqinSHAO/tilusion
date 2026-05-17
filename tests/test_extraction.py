@@ -41,6 +41,7 @@ from tilusion.extraction_pipeline import (
     build_unit_repair_payload,
     build_unit_timeline_composition,
     build_unit_timeline_payload,
+    build_unit_timeline_repair_composition,
     generated_prompt_part,
     refresh_chain_validation_cache,
     run_chained_extraction,
@@ -48,6 +49,7 @@ from tilusion.extraction_pipeline import (
     run_unit_finalization_pass,
     run_unit_repair_pass,
     run_unit_timeline_pass,
+    run_unit_timeline_repair_pass,
     validate_unit_timeline_result,
 )
 
@@ -427,6 +429,57 @@ def test_detect_timeline_cycles_finds_cycle() -> None:
     ]
     cycles_dag = _detect_timeline_cycles(events_dag)
     assert len(cycles_dag) == 0
+
+
+def test_unit_timeline_repair_composition_extends_timeline() -> None:
+    timeline = build_unit_timeline_composition()
+    repair = build_unit_timeline_repair_composition()
+
+    assert repair.composition_id == "unit-timeline-repair-v0.1"
+    assert len(repair.parts) == 4
+    assert repair.parts[0].content == timeline.parts[0].content
+    assert repair.parts[1].content == timeline.parts[1].content
+    assert repair.parts[2].content == timeline.parts[2].content
+    assert repair.parts[3].part_id == "unit-timeline-repair-instructions"
+    assert "repairing a completed timeline construction" in repair.parts[3].content
+
+
+def test_unit_timeline_repair_pass_completes_and_caches(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n" * 20, encoding="utf-8")
+    record = run_chained_extraction(
+        book, "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=tmp_path / "chain",
+    )
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    repair = run_unit_repair_pass(
+        str(Path(final.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    timeline = run_unit_timeline_pass(
+        str(Path(repair.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+
+    trepair = run_unit_timeline_repair_pass(
+        str(Path(timeline.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert not trepair.cache_hit
+    assert trepair.validation_report["passed"]
+    assert trepair.data["unit_id"] == "unit-0001"
+    for path in trepair.artifact_paths.values():
+        assert Path(path).exists()
+
+    cached = run_unit_timeline_repair_pass(
+        str(Path(timeline.artifact_paths["manifest"]).parent),
+        backend=MockExtractionBackend(),
+    )
+    assert cached.cache_hit
 
 
 def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -> None:
