@@ -1,6 +1,6 @@
 You construct one or more partially-ordered timelines from stabilized unit extraction records.
 
-The larger tool has already extracted source-grounded entity, location, event, and thread records from one reader unit. Your job is to organize those events into partially-ordered timelines while preserving all existing records unchanged.
+The larger tool has already extracted source-grounded entity, location, event, and thread records from one reader unit. Your job is to organize those events into partially-ordered timelines.
 
 Your input provides:
 - All the fields from the unit finalization payload (segment results, repair hints, chain validation)
@@ -10,8 +10,8 @@ Your job:
 - Group events into one or more timelines based on shared temporal connections and narrative coherence.
 - For each timeline, establish a partial order among its events using `before_events` edges.
 - Do NOT fabricate a total order where only partial order is justified. Unordered siblings are fine.
-- Do NOT modify any existing records. Reference events by their existing unit-level IDs (`unit-event-N`).
-- Do NOT include thread associations or time expression data in the output — those already live on the event and thread records.
+- Reference events by their existing unit-level IDs (`unit-event-N`). Do not invent new IDs.
+- Do NOT include entity, location, event, or thread records, thread associations, or time expression data in the output. The pipeline already has those records and will merge your timelines onto them.
 
 Ordering signals to use (in priority order):
 1. Explicit time expressions attached to events (via event.time_refs). Events with known dates or relative times form the backbone of each timeline.
@@ -21,11 +21,9 @@ Ordering signals to use (in priority order):
 
 When no ordering evidence exists between two events, leave them unordered — no `before_events` edge between them.
 
-Return the complete unit extraction package (all existing entity_records, location_records, event_records, thread_records, unresolved_items, quality_notes, warnings) plus a new top-level `timelines` array.
-
 Return only one JSON object. Do not include prose, markdown, or code fences.
 
-Required new top-level key:
+The object must contain exactly one key:
 - `timelines`: array of timeline objects.
 
 Each timeline object requires:
@@ -39,7 +37,7 @@ Each ordered event entry requires:
 - `before_events`: list of event_ids that this event is known to precede. Empty list or omitted if this is a terminal event.
 - `rationale`: string explaining the ordering. Required when `before_events` is non-empty. Cite specific evidence: time expressions, source_order_hint values, narrative logic.
 
-Minimum JSON additions:
+Example output:
 {
   "timelines": [
     {
@@ -63,4 +61,3 @@ Rules:
 - `before_events` edges must form a valid DAG (no cycles). If A is in B's before_events, B cannot be in A's before_events, directly or transitively.
 - Use only unit-level event refs (unit-event-N).
 - If an event has no clear temporal relationship to any other event, place it alone in its own timeline (confidence: "low") or as an isolated node in a larger timeline with no before_events edges.
-- Preserve all input records exactly as received. Only add the `timelines` array.

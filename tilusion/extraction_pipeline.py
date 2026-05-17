@@ -690,8 +690,8 @@ def run_unit_timeline_pass(
         raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
     else:
         raw_response = llm.complete_json(prompt.content, payload)
-        data = parse_json_response(raw_response)
-        data = _restore_missing_records(data, repaired_data)
+        timelines_output = parse_json_response(raw_response)
+        data = _merge_timelines_into_records(timelines_output, repaired_data)
     validation_report = validate_unit_timeline_result(
         data, expected_unit_id=manifest["unit_id"]
     )
@@ -772,11 +772,10 @@ def run_unit_timeline_repair_pass(
         raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
     else:
         raw_response = llm.complete_json(prompt.content, payload)
-        data = parse_json_response(raw_response)
-        # Strip internal helper fields from LLM output
-        data.pop("_validation_issues", None)
-        data.pop("_missing_events", None)
-        data = _restore_missing_records(data, timeline_data)
+        repair_output = parse_json_response(raw_response)
+        repair_output.pop("_validation_issues", None)
+        repair_output.pop("_missing_events", None)
+        data = _merge_timelines_into_records(repair_output, timeline_data)
     validation_report = validate_unit_timeline_result(
         data, expected_unit_id=manifest["unit_id"]
     )
@@ -2655,14 +2654,27 @@ _RECORD_KEYS = (
 )
 
 
-def _restore_missing_records(data: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
-    """Copy record arrays from source if missing or empty in data (LLM safety net)."""
+def _merge_timelines_into_records(
+    llm_output: dict[str, Any],
+    base_records: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge LLM-produced timelines (and optional repair metadata) onto base records.
+
+    The LLM only produces the `timelines` array (and for repair passes,
+    `quality_notes`, `unresolved_items`, `warnings`). All entity, location,
+    event, and thread records come from the deterministic base.
+    """
+    merged: dict[str, Any] = {}
     for key in _RECORD_KEYS:
-        if not data.get(key):
-            source_val = source.get(key)
-            if source_val:
-                data[key] = source_val
-    return data
+        merged[key] = base_records.get(key, [])
+    merged["timelines"] = llm_output.get("timelines", [])
+    for key in ("quality_notes", "unresolved_items", "warnings"):
+        if key in llm_output:
+            merged[key] = llm_output[key]
+        elif key in base_records:
+            merged[key] = base_records[key]
+    merged["unit_id"] = base_records.get("unit_id", llm_output.get("unit_id", ""))
+    return merged
 
 
 def text_length_stats(text: str) -> dict[str, int]:

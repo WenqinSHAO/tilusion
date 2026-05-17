@@ -566,12 +566,8 @@ def mock_unit_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
-    unit_id = user_payload["unit_id"]
     unit_records = user_payload.get("unit_records", {})
     events = unit_records.get("event_records", [])
-    threads = unit_records.get("thread_records", [])
-    entities = unit_records.get("entity_records", [])
-    locations = unit_records.get("location_records", [])
 
     ordered = []
     for i, event in enumerate(events):
@@ -591,18 +587,7 @@ def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
     return {
-        "unit_id": unit_id,
         "timelines": [timeline],
-        "entity_records": entities,
-        "location_records": locations,
-        "event_records": events,
-        "thread_records": threads,
-        "unresolved_items": [],
-        "quality_notes": {
-            "summary": "Mock timeline construction completed.",
-            "blocking_concerns": [],
-        },
-        "warnings": ["mock backend used; timeline is structural placeholder only"],
     }
 
 
@@ -621,17 +606,12 @@ def mock_unit_timeline_repair_response(user_payload: dict[str, Any]) -> dict[str
         timeline["ordered_events"] = ordered
 
     return {
-        "unit_id": user_payload["unit_id"],
         "timelines": timelines,
-        "entity_records": unit_records.get("entity_records", []),
-        "location_records": unit_records.get("location_records", []),
-        "event_records": events,
-        "thread_records": unit_records.get("thread_records", []),
-        "unresolved_items": [],
         "quality_notes": {
             "summary": "Mock timeline repair completed.",
             "blocking_concerns": [],
         },
+        "unresolved_items": [],
         "warnings": ["mock backend used; timeline repair is structural placeholder only"],
     }
 
