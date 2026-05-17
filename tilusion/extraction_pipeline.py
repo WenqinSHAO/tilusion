@@ -350,6 +350,48 @@ def run_chained_extraction(
     return record
 
 
+def refresh_chain_validation_cache(chain_dir: str | Path) -> dict[str, Any]:
+    root_dir = Path(chain_dir)
+    manifest_path = root_dir / "chain_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"missing chain manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    overview = refresh_cached_overview_record(manifest["overview"])
+    segment_passes = [
+        refresh_cached_segment_record(record)
+        for record in manifest.get("segment_passes", [])
+    ]
+    resolved_segments = manifest.get("resolved_segments", [])
+    validation_report = build_cached_chain_validation_report(
+        overview.validation_report,
+        resolved_segments,
+        [record.validation_report.to_dict() for record in segment_passes],
+    )
+    repair_hints = build_chain_repair_hints([], segment_passes, validation_report)
+    paths = chain_artifact_paths(root_dir)
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["repair_hints"]).write_text(
+        json.dumps(repair_hints, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    refreshed_manifest = {
+        **manifest,
+        "overview": overview.to_dict(),
+        "validation_report": validation_report,
+        "repair_hints": repair_hints,
+        "segment_passes": [record.to_dict() for record in segment_passes],
+    }
+    Path(paths["manifest"]).write_text(
+        json.dumps(refreshed_manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return refreshed_manifest
+
+
 def run_overview_segmentation_pass(
     *,
     unit,
@@ -417,6 +459,34 @@ def run_overview_segmentation_pass(
             validation_report=validation_report,
             record=record,
         )
+    return record
+
+
+def refresh_cached_overview_record(record_data: dict[str, Any]) -> JsonPassRecord:
+    paths = record_data["artifact_paths"]
+    payload = json.loads(Path(paths["request_payload"]).read_text(encoding="utf-8"))
+    data = json.loads(Path(paths["result"]).read_text(encoding="utf-8"))
+    raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+    text = payload["text"]
+    validation_report = validate_overview_structure(data, text)
+    record = JsonPassRecord(
+        pass_name=record_data["pass_name"],
+        cache_key=record_data["cache_key"],
+        cache_dir=record_data["cache_dir"],
+        cache_hit=True,
+        raw_response=raw_response,
+        data=data,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(
+        json.dumps(record.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return record
 
 
@@ -506,6 +576,50 @@ def run_text_segment_extraction_pass(
             record=record,
         )
     return record
+
+
+def refresh_cached_segment_record(record_data: dict[str, Any]) -> ExtractionPassRecord:
+    paths = ensure_cached_pass_artifact_paths(record_data["artifact_paths"])
+    payload = json.loads(Path(paths["request_payload"]).read_text(encoding="utf-8"))
+    result = result_from_json(Path(paths["result"]).read_text(encoding="utf-8"))
+    text = payload["text"]
+    validation_report = validate_extraction_quality(
+        result.data,
+        text,
+        expected_unit_id=result.unit_id,
+    )
+    record = ExtractionPassRecord(
+        pass_name=record_data["pass_name"],
+        cache_key=record_data["cache_key"],
+        cache_dir=record_data["cache_dir"],
+        cache_hit=True,
+        result=result,
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+    Path(paths["validation_report"]).write_text(
+        json.dumps(validation_report.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["validated_result"]).write_text(
+        json.dumps(validation_report.to_validated_result(result.data), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    Path(paths["manifest"]).write_text(
+        json.dumps(record.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return record
+
+
+def ensure_cached_pass_artifact_paths(paths: dict[str, str]) -> dict[str, str]:
+    if "validated_result" in paths:
+        return paths
+    result_path = Path(paths["result"])
+    return {
+        **paths,
+        "validated_result": str(result_path.with_name("validated_result.json")),
+    }
 
 
 def build_segment_extraction_composition(
@@ -826,6 +940,37 @@ def build_chain_validation_report(
                 "start": segment.start,
                 "end": segment.end,
                 **text_length_stats(segment.text),
+            }
+            for segment in resolved_segments
+        ],
+        "segment_reports": segment_reports,
+        "error_count": error_count,
+        "warning_count": warning_count,
+    }
+
+
+def build_cached_chain_validation_report(
+    overview_report: dict[str, Any],
+    resolved_segments: list[dict[str, Any]],
+    segment_reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    error_count = overview_report["error_count"] + sum(
+        report["error_count"] for report in segment_reports
+    )
+    warning_count = overview_report["warning_count"] + sum(
+        report["warning_count"] for report in segment_reports
+    )
+    return {
+        "passed": error_count == 0,
+        "overview": overview_report,
+        "resolved_segment_count": len(resolved_segments),
+        "segment_pass_count": len(segment_reports),
+        "segment_lengths": [
+            {
+                "segment_id": segment["segment_id"],
+                "start": segment["start"],
+                "end": segment["end"],
+                **segment["length"],
             }
             for segment in resolved_segments
         ],

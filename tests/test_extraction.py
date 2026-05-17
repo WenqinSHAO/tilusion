@@ -29,6 +29,7 @@ from tilusion.extraction_pipeline import (
     build_overview_composition,
     build_segment_extraction_composition,
     generated_prompt_part,
+    refresh_chain_validation_cache,
     run_chained_extraction,
     run_segment_extraction_pass,
 )
@@ -193,6 +194,10 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
         assert Path(path).exists()
     assert Path(record.overview.artifact_paths["result"]).exists()
     assert Path(record.segment_passes[0].artifact_paths["result"]).exists()
+    refreshed = refresh_chain_validation_cache(record.cache_dir)
+    assert refreshed["overview"]["cache_hit"] is True
+    assert refreshed["segment_passes"][0]["cache_hit"] is True
+    assert refreshed["segment_passes"][0]["artifact_paths"]["validated_result"]
 
 
 def test_extraction_budget_rejects_oversized_input() -> None:

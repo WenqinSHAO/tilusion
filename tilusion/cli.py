@@ -12,7 +12,11 @@ from .extraction import (
     ExtractionError,
     MockExtractionBackend,
 )
-from .extraction_pipeline import run_chained_extraction, run_segment_extraction_pass
+from .extraction_pipeline import (
+    refresh_chain_validation_cache,
+    run_chained_extraction,
+    run_segment_extraction_pass,
+)
 from .extraction_quality import validate_extraction_quality
 
 
@@ -52,6 +56,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_chain_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     run_chain_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_chains")
     run_chain_parser.add_argument("--no-cache", action="store_true")
+
+    refresh_chain_parser = subparsers.add_parser(
+        "refresh-chain-validation",
+        help="Recompute validation artifacts for an existing chain cache without LLM calls",
+    )
+    refresh_chain_parser.add_argument("chain_cache_dir")
+    refresh_chain_parser.add_argument("--format", choices=["json", "text"], default="text")
 
     validate_parser = subparsers.add_parser(
         "validate-result", help="Validate an extraction result against source text"
@@ -117,6 +128,18 @@ def main(argv: list[str] | None = None) -> int:
         print(record.to_json())
         return 0
 
+    if args.command == "refresh-chain-validation":
+        try:
+            manifest = refresh_chain_validation_cache(args.chain_cache_dir)
+        except (OSError, ValueError, KeyError) as error:
+            print(f"validation refresh failed: {error}", file=sys.stderr)
+            return 1
+        if args.format == "json":
+            print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        else:
+            print(format_chain_refresh_text(manifest))
+        return 0
+
     if args.command == "validate-result":
         index = build_book_index(args.book)
         unit = index.unit_map().get(args.unit_id)
@@ -150,6 +173,23 @@ def format_quality_report_text(report) -> str:
             f"- {issue.severity} {issue.code} at {issue.path}: {issue.message} "
             f"repair: {issue.repair_hint}"
         )
+    return "\n".join(lines)
+
+
+def format_chain_refresh_text(manifest: dict) -> str:
+    validation = manifest["validation_report"]
+    repair_hints = manifest["repair_hints"]
+    lines = [
+        f"chain_cache_dir: {manifest['cache_dir']}",
+        f"unit_id: {manifest['unit_id']}",
+        f"passed: {str(validation['passed']).lower()}",
+        f"issues: {validation['error_count']} errors, {validation['warning_count']} warnings",
+        f"overview_cache_hit: {str(manifest['overview']['cache_hit']).lower()}",
+        f"segment_passes: {len(manifest.get('segment_passes', []))}",
+        f"ready_for_llm_repair: {str(repair_hints['ready_for_llm_repair']).lower()}",
+        f"validation_report: {manifest['artifact_paths']['validation_report']}",
+        f"repair_hints: {manifest['artifact_paths']['repair_hints']}",
+    ]
     return "\n".join(lines)
 
 

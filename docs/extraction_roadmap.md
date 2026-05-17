@@ -740,6 +740,20 @@ python -m tilusion.cli run-chain "./books/Fu Sheng Liu Ji --Zhong Hua Jing Dian 
 
 Both commands print a `cache_dir`.
 
+To refresh validation artifacts for an existing chain cache without any LLM/backend call:
+
+```bash
+python -m tilusion.cli refresh-chain-validation .tilusion_cache/extraction_chains/<chain-cache-key>
+```
+
+Use this after validator-only changes.
+
+It reads the cached overview and segment `result.json` plus their original `request_payload.json`, then rewrites validation reports, validated results, repair hints, and manifests.
+
+It does not rerun segment resolution or create extraction results for newly resolvable overview segments.
+
+That distinction matters because improving deterministic segment relocation can make a later `run-chain` resolve more overview segments than an older cache contains; those new segment passes would require fresh LLM extraction unless handled by a separate repair/resume command.
+
 For `run-chain`, inspect these files:
 
 - `chain_manifest.json`: full chain summary, source length, segment lengths, overview result, segment pass summaries, aggregate validation, and repair hints.
