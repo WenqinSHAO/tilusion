@@ -35,10 +35,12 @@ from tilusion.extraction_pipeline import (
     _dominant_issue_codes,
     build_overview_composition,
     build_segment_extraction_composition,
+    build_unit_finalization_composition,
     generated_prompt_part,
     refresh_chain_validation_cache,
     run_chained_extraction,
     run_segment_extraction_pass,
+    run_unit_finalization_pass,
 )
 
 
@@ -145,6 +147,16 @@ def test_overview_composition_tracks_static_prompt_contract() -> None:
     assert "end_quote" in prompt.content
 
 
+def test_unit_finalization_composition_tracks_static_prompt_contract() -> None:
+    prompt = build_unit_finalization_composition()
+
+    assert prompt.composition_id == "unit-finalization-v0.1"
+    assert prompt.parts[0].part_id == "unit-finalization-contract"
+    assert "You finalize source-grounded extraction" in prompt.content
+    assert "entity_records" in prompt.content
+    assert "Do not construct a final timeline" in prompt.content
+
+
 def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -> None:
     book = tmp_path / "sample.txt"
     book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
@@ -220,6 +232,21 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
     refreshed_overview = refreshed["validation_report"]["segment_quality_overview"]
     assert refreshed_overview["total_overview_segments"] == 1
     assert refreshed_overview["resolved_segments"] == 1
+
+    final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    cached_final = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+    )
+    assert not final.cache_hit
+    assert cached_final.cache_hit
+    assert final.validation_report["passed"]
+    assert final.data["unit_id"] == "unit-0001"
+    for path in final.artifact_paths.values():
+        assert Path(path).exists()
 
 
 def test_extraction_budget_rejects_oversized_input() -> None:
