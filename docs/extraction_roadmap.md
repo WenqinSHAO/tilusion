@@ -294,7 +294,9 @@ They are useful for go-to-location review, UI navigation, downstream merge, and 
 
 They should not be sent to an LLM repair pass unless the repair task specifically asks the model to judge whether a located quote semantically supports an object.
 
-The current `surface_not_in_cited_evidence` warning is too broad.
+The older `surface_not_in_cited_evidence` warning was too broad.
+
+The validator should check reconstructed evidence context, not only the exact locator quote.
 
 The intended refinement:
 
@@ -747,7 +749,7 @@ For `run-chain`, inspect these files:
 - `segments/<segment_id>/*/validation_report.json`: deterministic quality report for the per-segment result.
 - `repair_hints.json`: compact repair payloads for segments with deterministic issues.
 
-Current caveat: `repair_hints.json` still includes too many warnings, especially `surface_not_in_cited_evidence`.
+Current caveat: `repair_hints.json` may still include too many warnings, especially low-priority surface grounding warnings.
 
 Until the audience split is implemented, treat it as a diagnostic artifact rather than a ready-to-send LLM repair prompt.
 
@@ -759,7 +761,7 @@ How to judge whether the chain improved:
 - Open each `request_payload.json` to confirm the detailed pass received the intended segment text.
 - Use each segment `validation_report.json` to see whether evidence is exact, relocated, ambiguous, or missing.
 - Use `repair_hints.json` to find deterministic issues ready for a later LLM repair pass.
-- Treat warnings such as `surface_not_in_cited_evidence` as review targets, not automatic hallucination.
+- Treat surface grounding warnings as review targets, not automatic hallucination.
 
 ## Recommended LLM Workflow Pattern
 

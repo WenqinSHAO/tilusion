@@ -333,6 +333,58 @@ def test_extraction_quality_report_tracks_relocated_evidence_without_error() -> 
     assert "[7]" in (report.evidence_locations[0].match_text or "")
 
 
+def test_surface_grounding_uses_reconstructed_evidence_context() -> None:
+    text = "时吾父稼夫公在会稽幕府 [2] ，专役相迓 [3] ，受业于武林赵省斋先生门下 [4] 。\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "时吾父稼夫公在会稽幕府",
+                "start_hint": "paragraph start",
+                "end_hint": "paragraph start",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "赵省斋先生",
+                "kind": "person",
+                "summary": "沈复的老师。",
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [
+            {
+                "mention_id": "location-0001",
+                "surface": "武林",
+                "kind": "physical",
+                "summary": "赵省斋先生门下受业处。",
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "event_mentions": [
+            {
+                "event_id": "event-0001",
+                "summary": "沈复受业于赵省斋。",
+                "participant_mention_ids": ["entity-0001"],
+                "location_mention_ids": ["location-0001"],
+                "time_expression_ids": [],
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+
+    assert report.passed
+    assert report.issue_count == 0
+
+
 def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     text = "Alice met Bob in Paris.\nAlice returned later.\n"
     data = {
@@ -404,7 +456,7 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     assert "unresolved_evidence_ref" in codes
     assert "missing_evidence_refs" in codes
     assert "unresolved_object_ref" in codes
-    assert "surface_not_in_cited_evidence" in codes
+    assert "surface_not_in_evidence_context" in codes
     assert any(
         issue.code == "evidence_quote_missing" and issue.source_windows
         for issue in report.issues

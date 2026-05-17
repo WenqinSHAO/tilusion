@@ -168,6 +168,7 @@ def validate_extraction_quality(
     evidence_by_id = collect_objects_by_id(
         evidence_spans, "evidence_id", "evidence_spans", issues
     )
+    evidence_locations_by_id: dict[str, EvidenceLocation] = {}
     quote_locations: dict[str, list[tuple[int, int]]] = {}
     for index, evidence in enumerate(evidence_spans):
         path = f"evidence_spans[{index}]"
@@ -193,6 +194,7 @@ def validate_extraction_quality(
             source_window_chars=source_window_chars,
         )
         evidence_locations.append(relocation)
+        evidence_locations_by_id[evidence_id] = relocation
         quote_locations[evidence_id] = (
             [(relocation.start, relocation.end)]
             if relocation.start is not None and relocation.end is not None
@@ -264,8 +266,12 @@ def validate_extraction_quality(
     ]:
         validate_evidence_refs(data, collection, evidence_by_id, issues)
 
-    validate_surface_grounding(data, "entity_mentions", evidence_by_id, unit_text, issues)
-    validate_surface_grounding(data, "location_mentions", evidence_by_id, unit_text, issues)
+    validate_surface_grounding(
+        data, "entity_mentions", evidence_by_id, evidence_locations_by_id, unit_text, issues
+    )
+    validate_surface_grounding(
+        data, "location_mentions", evidence_by_id, evidence_locations_by_id, unit_text, issues
+    )
 
     for index, event in enumerate(data.get("event_mentions", []) or []):
         if not isinstance(event, dict):
@@ -661,6 +667,7 @@ def validate_surface_grounding(
     data: dict[str, Any],
     collection: str,
     evidence_by_id: dict[str, dict[str, Any]],
+    evidence_locations_by_id: dict[str, EvidenceLocation],
     unit_text: str,
     issues: list[ExtractionQualityIssue],
 ) -> None:
@@ -673,24 +680,73 @@ def validate_surface_grounding(
         refs = obj.get("evidence_span_ids")
         if not isinstance(refs, list):
             continue
-        quotes = [
-            evidence_by_id[ref].get("quote", "")
+        support_texts = [
+            evidence_support_text(unit_text, evidence_locations_by_id[ref])
             for ref in refs
-            if ref in evidence_by_id and isinstance(evidence_by_id[ref].get("quote"), str)
+            if ref in evidence_by_id and ref in evidence_locations_by_id
         ]
-        if quotes and surface not in "".join(quotes):
+        if support_texts and not surface_supported_by_texts(surface, support_texts):
             object_id = object_identifier(obj)
             issues.append(
                 quality_issue(
                     "warning",
-                    "surface_not_in_cited_evidence",
+                    "surface_not_in_evidence_context",
                     f"{collection}[{index}].surface",
-                    f"Surface `{surface}` does not appear in cited evidence quotes.",
-                    "Cite evidence containing the surface form, adjust the surface, or keep only if alias/context makes this unavoidable.",
+                    f"Surface `{surface}` does not appear in the reconstructed cited evidence context.",
+                    "Cite evidence near the surface form, adjust the surface, or keep only if alias/context makes this unavoidable.",
                     object_id=object_id,
                     source_windows=guess_source_windows_for_quote(unit_text, surface, 80),
                 )
             )
+
+
+def evidence_support_text(text: str, location: EvidenceLocation) -> str:
+    if location.start is None or location.end is None:
+        return location.match_text or location.quote
+    return containing_paragraph(text, location.start, location.end)
+
+
+def containing_paragraph(text: str, start: int, end: int, *, max_chars: int = 1200) -> str:
+    paragraph_start = text.rfind("\n\n", 0, start)
+    paragraph_start = 0 if paragraph_start < 0 else paragraph_start + 2
+    paragraph_end = text.find("\n\n", end)
+    paragraph_end = len(text) if paragraph_end < 0 else paragraph_end
+    if paragraph_end - paragraph_start <= max_chars:
+        return text[paragraph_start:paragraph_end]
+    window_start = max(paragraph_start, start - (max_chars // 2))
+    window_end = min(paragraph_end, end + (max_chars // 2))
+    return text[window_start:window_end]
+
+
+def surface_supported_by_texts(surface: str, texts: list[str]) -> bool:
+    needles = surface_needles(surface)
+    normalized_texts = [normalize_support_text(text) for text in texts]
+    for needle in needles:
+        normalized_needle = normalize_support_text(needle)
+        if normalized_needle and any(normalized_needle in text for text in normalized_texts):
+            return True
+    return False
+
+
+def surface_needles(surface: str) -> list[str]:
+    needles = [surface]
+    if len(surface) >= 3 and surface[0] in RELATIONAL_SURFACE_PREFIXES:
+        needles.append(surface[1:])
+    unique = []
+    for needle in needles:
+        if needle and needle not in unique:
+            unique.append(needle)
+    return unique
+
+
+def normalize_support_text(text: str) -> str:
+    normalized, _ = normalize_for_location(
+        text, strip_notes=True, fold_punctuation=True, drop_punctuation=True
+    )
+    return normalized
+
+
+RELATIONAL_SURFACE_PREFIXES = {"芸", "余", "吾", "我", "其"}
 
 
 def validate_link_refs(
