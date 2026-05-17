@@ -392,6 +392,72 @@ These are ordered by impact and will be implemented over subsequent commits.
 
 **5. Revisit evidence context reconstruction for CJK.** `containing_paragraph()` splits on `\n\n`. Classical Chinese paragraphs can be hundreds of characters long with no blank-line breaks between semantic units. Consider sentence-boundary-based context windows (`。`, `！`, `？`) as an alternative or supplement to paragraph-based windows for CJK text.
 
+### Second LLM-Backed Chain Trial: Follow-Up Issues (2026-05-17)
+
+A later `run-chain --backend deepseek` trial over the same `unit-0002` cache (`b1c97fb4...`) used the v0.5 segment extraction prompt and restored all overview segments.
+
+This run is a better stress test for finishing a full unit because it produced 14 finer segments instead of the earlier 6.
+
+#### Current Status
+
+- Overview proposed 14 segments; all 14 resolved to source offsets.
+- Segment extraction completed for all 14 segments.
+- Chain validation failed with 7 errors and 4 warnings.
+- Evidence relocation summary across segment results: 96 exact, 44 relocated, 4 missing, 1 ambiguous.
+- `repair_hints.ready_for_llm_repair` is true.
+- Non-actionable warnings are separated: 3 `surface_not_in_evidence_context` warnings affecting segments `overview-segment-0005` and `overview-segment-0011`.
+
+The failures are concentrated rather than systemic.
+
+They do not block cross-segment planning work, but they are worth tracking because they define the kinds of defects a final repair/QC pair should be able to catch.
+
+#### Segment Restoration Observations
+
+Segment restoration is much improved: every overview anchor is locatable.
+
+However, restored segments are not yet guaranteed to form a clean non-overlapping partition of the unit.
+
+Observed issue:
+
+- `overview-segment-0008` overlaps `overview-segment-0007` by 763 characters.
+
+Most other gaps appear to be note/commentary gaps or boundaries between extracted narrative ranges.
+
+The overlap is not fatal for local segment extraction, but it can create duplicate events, duplicated entities, or inconsistent summaries during merge.
+
+This is a whole-unit QC concern.
+
+#### Validation Issues Worth Patching Or Repairing
+
+The current validator surfaced these actionable issue types:
+
+- `evidence_quote_missing`: 4 cases. These are mostly LLM quote drift rather than hallucination. Examples include expanding source text from `亭在土山之巅` to `沧浪亭在土山之巅`, and using ellipsis-compressed quotes such as `明午，憨果至。……芸曰...`.
+- `missing_evidence_refs`: 2 cases. Segment `overview-segment-0007` emitted entity mentions with empty `evidence_span_ids`.
+- `evidence_quote_ambiguous`: 1 case. Segment `overview-segment-0010` used the quote `老妪`, which appears four times.
+- `unresolved_evidence_ref`: 1 case. Segment `overview-segment-0013` included prose inside an evidence reference: `evidence-0004尾段? 实际在段落4...`.
+- `surface_not_in_evidence_context`: 3 non-actionable cases. These remain useful human/QC signals but should not by themselves trigger local repair.
+
+These issues are not structural blockers for the next cross-segment pass design.
+
+They are exactly the kind of defects expected after first-pass segment extraction and should be handled by the repair/QC loop before accepting a unit as finished.
+
+#### Quality Interpretation
+
+The v0.5 prompt improved `surface` vs `canonical_name` behavior.
+
+Most canonical names are now editorial normalizations while surfaces remain closer to the attested text form, for example `余` with `canonical_name: 沈复` and `芸` with `canonical_name: 陈芸` or `芸娘`.
+
+The remaining failures are mostly mechanical:
+
+- quotes are semantically correct but not directly relocatable
+- some evidence references are missing or malformed
+- very short evidence quotes are ambiguous
+- segment overlap can duplicate downstream records
+
+This suggests final unit completion should not rely only on local segment validation.
+
+It needs at least one cross-segment merge/QC phase that checks overlap, duplicates, alias continuity, event continuity, unresolved local repair hints, and whether accepted outputs are still source-navigable.
+
 ### Long Unit Handling
 
 Some reader units are too long and semantically dense for one detailed extraction call.
