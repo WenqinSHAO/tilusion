@@ -737,7 +737,8 @@ def validate_surface_grounding(
                     "surface_not_in_evidence_context",
                     f"{collection}[{index}].surface",
                     f"Surface `{surface}` does not appear in the reconstructed cited evidence context.",
-                    "Cite evidence near the surface form, adjust the surface, or keep only if alias/context makes this unavoidable.",
+                    "Move the attested text form into `surface` and the editorial name into `canonical_name`, "
+                    "or cite evidence that contains the surface.",
                     object_id=object_id,
                     source_windows=guess_source_windows_for_quote(unit_text, surface, 80),
                 )

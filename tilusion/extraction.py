@@ -17,13 +17,13 @@ from .extraction_quality import (
 )
 
 
-PROMPT_VERSION = "segment-extraction-v0.4"
-SCHEMA_VERSION = "segment-extraction-v0.2"
+PROMPT_VERSION = "segment-extraction-v0.5"
+SCHEMA_VERSION = "segment-extraction-v0.3"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_MAX_TOKENS = 32768
 DEEPSEEK_CONTEXT_TOKENS = 1_000_000
 DEEPSEEK_MAX_OUTPUT_TOKENS = 384_000
-PROMPT_RESOURCE = "segment_extraction_v0.4.md"
+PROMPT_RESOURCE = "segment_extraction_v0.5.md"
 
 
 class ExtractionError(RuntimeError):
@@ -118,7 +118,21 @@ class MockExtractionBackend:
                 ]
                 if evidence
                 else [],
-                "entity_mentions": [],
+                "entity_mentions": [
+                    {
+                        "mention_id": "entity-0001",
+                        "surface": evidence[:40] if evidence else "placeholder",
+                        "canonical_name": None,
+                        "kind": "other",
+                        "summary": "Placeholder entity extracted by mock backend.",
+                        "alias_candidate_of": None,
+                        "alias_confidence": None,
+                        "alias_rationale": None,
+                        "evidence_span_ids": ["evidence-0001"] if evidence else [],
+                    }
+                ]
+                if evidence
+                else [],
                 "location_mentions": [],
                 "event_mentions": [
                     {

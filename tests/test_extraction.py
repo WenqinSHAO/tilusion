@@ -54,8 +54,8 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     model_payload = envelope.to_model_payload()
 
     assert envelope.task == "local_bundle_extraction"
-    assert envelope.prompt_version == "segment-extraction-v0.4"
-    assert envelope.schema_version == "segment-extraction-v0.2"
+    assert envelope.prompt_version == "segment-extraction-v0.5"
+    assert envelope.schema_version == "segment-extraction-v0.3"
     assert envelope.unit["id"] == "unit-0001"
     assert envelope.unit["source_range"]["kind"] == "txt-span"
     assert model_payload == {
@@ -71,8 +71,8 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     assert DEFAULT_MAX_TOKENS == 32768
     assert DEEPSEEK_CONTEXT_TOKENS == 1_000_000
     assert DEEPSEEK_MAX_OUTPUT_TOKENS == 384_000
-    assert PROMPT_VERSION == "segment-extraction-v0.4"
-    assert SCHEMA_VERSION == "segment-extraction-v0.2"
+    assert PROMPT_VERSION == "segment-extraction-v0.5"
+    assert SCHEMA_VERSION == "segment-extraction-v0.3"
 
 
 def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() -> None:
@@ -765,6 +765,83 @@ def test_chain_repair_hints_includes_non_actionable_warnings() -> None:
     assert summary["total"] == 1
     assert summary["by_code"]["surface_not_in_evidence_context"] == 1
     assert summary["affected_segments"] == ["unit-0001"]
+
+
+def test_canonical_name_avoids_surface_warning_when_surface_is_attested() -> None:
+    """When canonical_name differs from surface, only surface is checked against evidence."""
+    text = "Alice met Bob in Paris.\nCharlie stayed home.\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "Alice met Bob in Paris",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "Alice",
+                "canonical_name": "Alice Johnson",
+                "kind": "person",
+                "summary": "Main character",
+                "alias_candidate_of": None,
+                "alias_confidence": None,
+                "alias_rationale": None,
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [],
+        "event_mentions": [],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+    codes = [issue.code for issue in report.issues]
+    assert "surface_not_in_evidence_context" not in codes
+
+
+def test_surface_warning_still_fires_when_surface_absent_regardless_of_canonical() -> None:
+    """Even with canonical_name set, if surface is not in evidence, warning fires."""
+    text = "Alice met Bob in Paris.\n\nCharlie stayed home.\n"
+    data = {
+        "unit_id": "unit-0001",
+        "evidence_spans": [
+            {
+                "evidence_id": "evidence-0001",
+                "unit_id": "unit-0001",
+                "quote": "Alice met Bob in Paris",
+                "start_hint": "line 1",
+                "end_hint": "line 1",
+            }
+        ],
+        "entity_mentions": [
+            {
+                "mention_id": "entity-0001",
+                "surface": "Charlie",
+                "canonical_name": "Charles Brown",
+                "kind": "person",
+                "summary": "A character not in the evidence paragraph",
+                "alias_candidate_of": None,
+                "alias_confidence": None,
+                "alias_rationale": None,
+                "evidence_span_ids": ["evidence-0001"],
+            }
+        ],
+        "location_mentions": [],
+        "event_mentions": [],
+        "time_expressions": [],
+        "thread_candidates": [],
+        "warnings": [],
+    }
+    report = validate_extraction_quality(data, text, expected_unit_id="unit-0001")
+    assert "surface_not_in_evidence_context" in [
+        issue.code for issue in report.issues
+    ]
 
 
 def run_empty_context():
