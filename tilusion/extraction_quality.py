@@ -783,7 +783,7 @@ def surface_needles(surface: str) -> list[str]:
         needles.append(normalized[:-2])
     unique = []
     for needle in needles:
-        if len(needle) >= 2 and needle not in unique:
+        if len(needle) >= 1 and needle not in unique:
             unique.append(needle)
     return unique
 
