@@ -339,7 +339,74 @@ def test_validate_timeline_result_detects_event_mismatch() -> None:
         ],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
-    assert any(i["code"] == "events_missing_from_timelines" for i in report["issues"])
+    missing = [i for i in report["issues"] if i["code"] == "events_missing_from_timelines"]
+    assert len(missing) == 1
+    assert missing[0]["severity"] == "error"
+
+
+def test_validate_timeline_result_detects_self_loop() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Test",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": ["unit-event-0001"]}
+                ],
+            }
+        ],
+        "event_records": [{"event_id": "unit-event-0001"}],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    assert any(i["code"] == "timeline_self_loop" for i in report["issues"])
+
+
+def test_validate_timeline_result_detects_phantom_ref() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Test",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": ["unit-event-0999"]}
+                ],
+            }
+        ],
+        "event_records": [{"event_id": "unit-event-0001"}],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    assert any(i["code"] == "timeline_phantom_ref" for i in report["issues"])
+
+
+def test_validate_timeline_result_detects_duplicate_event_across_timelines() -> None:
+    data = {
+        "unit_id": "unit-0001",
+        "timelines": [
+            {
+                "timeline_id": "unit-timeline-0001",
+                "summary": "Timeline 1",
+                "confidence": "high",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": []}
+                ],
+            },
+            {
+                "timeline_id": "unit-timeline-0002",
+                "summary": "Timeline 2",
+                "confidence": "medium",
+                "ordered_events": [
+                    {"event_id": "unit-event-0001", "before_events": []}
+                ],
+            },
+        ],
+        "event_records": [{"event_id": "unit-event-0001"}],
+    }
+    report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
+    assert any(i["code"] == "timeline_duplicate_event" for i in report["issues"])
 
 
 def test_detect_timeline_cycles_finds_cycle() -> None:

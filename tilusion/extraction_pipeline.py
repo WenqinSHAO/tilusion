@@ -1340,7 +1340,9 @@ def validate_unit_timeline_result(
             "issues": issues,
         }
 
+    input_event_ids = {e.get("event_id") for e in data.get("event_records", []) if isinstance(e, dict)}
     all_event_ids: set[str] = set()
+    timeline_event_sets: list[set[str]] = []
     for i, timeline in enumerate(timelines):
         prefix = f"timelines[{i}]"
         for field in ["timeline_id", "summary", "ordered_events", "confidence"]:
@@ -1354,6 +1356,7 @@ def validate_unit_timeline_result(
             issues.append(unit_finalization_issue("warning", "wrong_field_type", f"{prefix}.confidence"))
 
         ordered = timeline.get("ordered_events")
+        tl_event_ids: set[str] = set()
         if isinstance(ordered, list):
             for j, entry in enumerate(ordered):
                 if not isinstance(entry, dict):
@@ -1364,13 +1367,37 @@ def validate_unit_timeline_result(
                     issues.append(unit_finalization_issue("error", "missing_required_field", f"{prefix}.ordered_events[{j}].event_id"))
                 else:
                     all_event_ids.add(eid)
+                    tl_event_ids.add(eid)
                 before = entry.get("before_events")
                 if before is not None and not isinstance(before, list):
                     issues.append(unit_finalization_issue("error", "wrong_field_type", f"{prefix}.ordered_events[{j}].before_events"))
                 has_edges = bool(before)
                 if has_edges and not isinstance(entry.get("rationale"), str):
                     issues.append(unit_finalization_issue("warning", "missing_required_field", f"{prefix}.ordered_events[{j}].rationale"))
+                # Self-loop check
+                if isinstance(eid, str) and isinstance(before, list) and eid in before:
+                    issues.append(
+                        {
+                            "severity": "error",
+                            "code": "timeline_self_loop",
+                            "path": f"{prefix}.ordered_events[{j}]",
+                            "message": f"Event {eid} lists itself in before_events.",
+                        }
+                    )
+                # Phantom ref check
+                if isinstance(before, list):
+                    for ref_id in before:
+                        if isinstance(ref_id, str) and ref_id not in input_event_ids:
+                            issues.append(
+                                {
+                                    "severity": "error",
+                                    "code": "timeline_phantom_ref",
+                                    "path": f"{prefix}.ordered_events[{j}].before_events",
+                                    "message": f"before_events references unknown event '{ref_id}'.",
+                                }
+                            )
 
+        timeline_event_sets.append(tl_event_ids)
         cycles = _detect_timeline_cycles(ordered if isinstance(ordered, list) else [])
         for cycle in cycles:
             issues.append(
@@ -1382,11 +1409,31 @@ def validate_unit_timeline_result(
                 }
             )
 
-    input_event_ids = {e.get("event_id") for e in data.get("event_records", []) if isinstance(e, dict)}
+    # Duplicate event across timelines check
+    for i in range(len(timeline_event_sets)):
+        for j in range(i + 1, len(timeline_event_sets)):
+            overlap = timeline_event_sets[i] & timeline_event_sets[j]
+            for eid in overlap:
+                issues.append(
+                    {
+                        "severity": "error",
+                        "code": "timeline_duplicate_event",
+                        "path": f"timelines[{i}],timelines[{j}]",
+                        "message": f"Event {eid} appears in multiple timelines.",
+                    }
+                )
+
     missing = input_event_ids - all_event_ids
     extra = all_event_ids - input_event_ids
     if missing:
-        issues.append(unit_finalization_issue("warning", "events_missing_from_timelines", f"missing: {sorted(missing)}"))
+        issues.append(
+            {
+                "severity": "error",
+                "code": "events_missing_from_timelines",
+                "path": "timelines",
+                "message": f"Events not covered by any timeline: {sorted(missing)}",
+            }
+        )
     if extra:
         issues.append(unit_finalization_issue("error", "unknown_events_in_timelines", f"extra: {sorted(extra)}"))
 
