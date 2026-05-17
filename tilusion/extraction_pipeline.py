@@ -331,7 +331,9 @@ def run_chained_extraction(
                 generated_prompt_parts=generated_parts,
             )
         )
-    validation_report = build_chain_validation_report(overview, resolved_segments, segment_passes)
+    validation_report = build_chain_validation_report(
+        overview, resolved_segments, segment_passes, overview_repairs=overview_repairs
+    )
     repair_hints = build_chain_repair_hints(overview_repairs, segment_passes, validation_report)
     paths = chain_artifact_paths(root_dir)
     record = ChainedExtractionRecord(
@@ -363,12 +365,17 @@ def refresh_chain_validation_cache(chain_dir: str | Path) -> dict[str, Any]:
         for record in manifest.get("segment_passes", [])
     ]
     resolved_segments = manifest.get("resolved_segments", [])
+    total_overview = len(overview.data.get("overview_segments") or [])
+    cached_hints = manifest.get("repair_hints") if isinstance(manifest.get("repair_hints"), dict) else {}
+    cached_overview_repairs = cached_hints.get("overview_repairs", [])
     validation_report = build_cached_chain_validation_report(
         overview.validation_report,
         resolved_segments,
         [record.validation_report.to_dict() for record in segment_passes],
+        total_overview_segments=total_overview,
+        overview_repairs=cached_overview_repairs,
     )
-    repair_hints = build_chain_repair_hints([], segment_passes, validation_report)
+    repair_hints = build_chain_repair_hints(cached_overview_repairs, segment_passes, validation_report)
     paths = chain_artifact_paths(root_dir)
     Path(paths["validation_report"]).write_text(
         json.dumps(validation_report, ensure_ascii=False, indent=2),
@@ -917,10 +924,83 @@ def segment_hint_payload(segment: ResolvedOverviewSegment) -> dict[str, Any]:
     }
 
 
+def _derive_unresolved_detail(repair: dict[str, Any]) -> str:
+    start = repair.get("start_location", {}) if isinstance(repair.get("start_location"), dict) else {}
+    end = repair.get("end_location", {}) if isinstance(repair.get("end_location"), dict) else {}
+    start_status = start.get("status", "unknown")
+    end_status = end.get("status", "unknown")
+    if start_status == "missing" or end_status == "missing":
+        return "unrelocatable anchor(s)"
+    if start_status == "ambiguous" or end_status == "ambiguous":
+        parts = []
+        if start_status == "ambiguous":
+            parts.append(f"start_quote ({start.get('candidate_count', 0)} candidates)")
+        if end_status == "ambiguous":
+            parts.append(f"end_quote ({end.get('candidate_count', 0)} candidates)")
+        return f"ambiguous: {', '.join(parts)}"
+    if isinstance(start.get("start"), int) and isinstance(end.get("end"), int):
+        if end["end"] < start["start"]:
+            return "inverted span (end before start)"
+    return repair.get("repair_hint", "unresolved")
+
+
+def _dominant_issue_codes(segment_reports: list[dict[str, Any]]) -> list[str]:
+    code_counts: dict[str, int] = {}
+    for report in segment_reports:
+        for issue in report.get("issues", []):
+            code = issue.get("code", "unknown")
+            code_counts[code] = code_counts.get(code, 0) + 1
+    return sorted(code_counts, key=code_counts.get, reverse=True)
+
+
+def _build_segment_quality_overview(
+    total_overview_segments: int,
+    overview_repairs: list[dict[str, Any]],
+    segment_reports: list[dict[str, Any]],
+    segment_lengths: list[dict[str, Any]],
+) -> dict[str, Any]:
+    resolved_count = len(segment_reports)
+    unresolved_count = max(0, total_overview_segments - resolved_count)
+    unresolved_reasons = []
+    for repair in overview_repairs:
+        unresolved_reasons.append(
+            {
+                "segment_id": repair.get("segment_id"),
+                "code": repair.get("code"),
+                "detail": _derive_unresolved_detail(repair),
+            }
+        )
+    per_segment = []
+    for lengths_entry, report in zip(segment_lengths, segment_reports):
+        issue_codes: dict[str, int] = {}
+        for issue in report.get("issues", []):
+            code = issue.get("code", "unknown")
+            issue_codes[code] = issue_codes.get(code, 0) + 1
+        per_segment.append(
+            {
+                "segment_id": lengths_entry.get("segment_id"),
+                "chars": lengths_entry.get("chars"),
+                "passed": report.get("passed"),
+                "issue_codes": issue_codes,
+                "evidence": report.get("evidence_location_summary", {}),
+            }
+        )
+    return {
+        "total_overview_segments": total_overview_segments,
+        "resolved_segments": resolved_count,
+        "unresolved_segments": unresolved_count,
+        "unresolved_reasons": unresolved_reasons,
+        "per_segment": per_segment,
+        "dominant_issues": _dominant_issue_codes(segment_reports),
+    }
+
+
 def build_chain_validation_report(
     overview: JsonPassRecord,
     resolved_segments: list[ResolvedOverviewSegment],
     segment_passes: list[ExtractionPassRecord],
+    *,
+    overview_repairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     segment_reports = [record.validation_report.to_dict() for record in segment_passes]
     error_count = overview.validation_report["error_count"] + sum(
@@ -929,21 +1009,29 @@ def build_chain_validation_report(
     warning_count = overview.validation_report["warning_count"] + sum(
         report["warning_count"] for report in segment_reports
     )
+    total_overview = len(overview.data.get("overview_segments") or [])
+    segment_lengths = [
+        {
+            "segment_id": segment.segment_id,
+            "start": segment.start,
+            "end": segment.end,
+            **text_length_stats(segment.text),
+        }
+        for segment in resolved_segments
+    ]
     return {
         "passed": error_count == 0,
         "overview": overview.validation_report,
         "resolved_segment_count": len(resolved_segments),
         "segment_pass_count": len(segment_passes),
-        "segment_lengths": [
-            {
-                "segment_id": segment.segment_id,
-                "start": segment.start,
-                "end": segment.end,
-                **text_length_stats(segment.text),
-            }
-            for segment in resolved_segments
-        ],
+        "segment_lengths": segment_lengths,
         "segment_reports": segment_reports,
+        "segment_quality_overview": _build_segment_quality_overview(
+            total_overview_segments=total_overview,
+            overview_repairs=overview_repairs or [],
+            segment_reports=segment_reports,
+            segment_lengths=segment_lengths,
+        ),
         "error_count": error_count,
         "warning_count": warning_count,
     }
@@ -953,6 +1041,9 @@ def build_cached_chain_validation_report(
     overview_report: dict[str, Any],
     resolved_segments: list[dict[str, Any]],
     segment_reports: list[dict[str, Any]],
+    *,
+    total_overview_segments: int = 0,
+    overview_repairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     error_count = overview_report["error_count"] + sum(
         report["error_count"] for report in segment_reports
@@ -960,21 +1051,28 @@ def build_cached_chain_validation_report(
     warning_count = overview_report["warning_count"] + sum(
         report["warning_count"] for report in segment_reports
     )
+    segment_lengths = [
+        {
+            "segment_id": segment["segment_id"],
+            "start": segment["start"],
+            "end": segment["end"],
+            **segment["length"],
+        }
+        for segment in resolved_segments
+    ]
     return {
         "passed": error_count == 0,
         "overview": overview_report,
         "resolved_segment_count": len(resolved_segments),
         "segment_pass_count": len(segment_reports),
-        "segment_lengths": [
-            {
-                "segment_id": segment["segment_id"],
-                "start": segment["start"],
-                "end": segment["end"],
-                **segment["length"],
-            }
-            for segment in resolved_segments
-        ],
+        "segment_lengths": segment_lengths,
         "segment_reports": segment_reports,
+        "segment_quality_overview": _build_segment_quality_overview(
+            total_overview_segments=total_overview_segments,
+            overview_repairs=overview_repairs or [],
+            segment_reports=segment_reports,
+            segment_lengths=segment_lengths,
+        ),
         "error_count": error_count,
         "warning_count": warning_count,
     }

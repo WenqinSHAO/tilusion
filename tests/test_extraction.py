@@ -26,6 +26,9 @@ from tilusion.extraction import (
 from tilusion.book_reader import build_book_index, extract_unit_text
 from tilusion.extraction_quality import relocate_evidence_quote, validate_extraction_quality
 from tilusion.extraction_pipeline import (
+    _build_segment_quality_overview,
+    _derive_unresolved_detail,
+    _dominant_issue_codes,
     build_overview_composition,
     build_segment_extraction_composition,
     generated_prompt_part,
@@ -189,6 +192,17 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
     assert len(record.segment_passes) == 1
     assert record.validation_report["passed"]
     assert record.validation_report["segment_lengths"][0]["segment_id"] == "overview-segment-0001"
+    overview = record.validation_report["segment_quality_overview"]
+    assert overview["total_overview_segments"] == 1
+    assert overview["resolved_segments"] == 1
+    assert overview["unresolved_segments"] == 0
+    assert overview["unresolved_reasons"] == []
+    assert overview["dominant_issues"] == []
+    assert len(overview["per_segment"]) == 1
+    seg = overview["per_segment"][0]
+    assert seg["segment_id"] == "overview-segment-0001"
+    assert seg["passed"] is True
+    assert seg["evidence"]["exact"] == 1
     assert record.repair_hints["ready_for_llm_repair"] is False
     for path in record.artifact_paths.values():
         assert Path(path).exists()
@@ -198,6 +212,9 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
     assert refreshed["overview"]["cache_hit"] is True
     assert refreshed["segment_passes"][0]["cache_hit"] is True
     assert refreshed["segment_passes"][0]["artifact_paths"]["validated_result"]
+    refreshed_overview = refreshed["validation_report"]["segment_quality_overview"]
+    assert refreshed_overview["total_overview_segments"] == 1
+    assert refreshed_overview["resolved_segments"] == 1
 
 
 def test_extraction_budget_rejects_oversized_input() -> None:
@@ -549,6 +566,104 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
     assert repair_payload["repair_instructions"]
     assert len(repair_payload["issues"]) == 3
     assert all(issue["code"] != "surface_not_in_evidence_context" for issue in repair_payload["issues"])
+
+
+def test_segment_quality_overview_reports_unresolved_segments_and_dominant_issues() -> None:
+    segment_reports = [
+        {
+            "unit_id": "seg-0001",
+            "passed": True,
+            "issue_count": 2,
+            "issues": [
+                {"code": "surface_not_in_evidence_context", "severity": "warning"},
+                {"code": "surface_not_in_evidence_context", "severity": "warning"},
+            ],
+            "evidence_location_summary": {"exact": 4, "relocated": 2, "ambiguous": 0, "missing": 0},
+        },
+        {
+            "unit_id": "seg-0002",
+            "passed": False,
+            "issue_count": 2,
+            "issues": [
+                {"code": "evidence_quote_missing", "severity": "error"},
+                {"code": "surface_not_in_evidence_context", "severity": "warning"},
+            ],
+            "evidence_location_summary": {"exact": 1, "relocated": 0, "ambiguous": 0, "missing": 1},
+        },
+    ]
+    segment_lengths = [
+        {"segment_id": "seg-0001", "chars": 800, "start": 0, "end": 800},
+        {"segment_id": "seg-0002", "chars": 2400, "start": 800, "end": 3200},
+    ]
+    repairs = [
+        {
+            "segment_id": "seg-0003",
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "ambiguous", "candidate_count": 4},
+            "end_location": {"status": "exact", "start": 5000, "end": 5050},
+        }
+    ]
+
+    overview = _build_segment_quality_overview(
+        total_overview_segments=3,
+        overview_repairs=repairs,
+        segment_reports=segment_reports,
+        segment_lengths=segment_lengths,
+    )
+
+    assert overview["total_overview_segments"] == 3
+    assert overview["resolved_segments"] == 2
+    assert overview["unresolved_segments"] == 1
+    assert len(overview["unresolved_reasons"]) == 1
+    assert overview["unresolved_reasons"][0]["segment_id"] == "seg-0003"
+    assert "ambiguous" in overview["unresolved_reasons"][0]["detail"]
+    assert overview["dominant_issues"] == ["surface_not_in_evidence_context", "evidence_quote_missing"]
+    assert len(overview["per_segment"]) == 2
+    assert overview["per_segment"][0]["issue_codes"] == {"surface_not_in_evidence_context": 2}
+    assert overview["per_segment"][1]["issue_codes"] == {
+        "evidence_quote_missing": 1,
+        "surface_not_in_evidence_context": 1,
+    }
+    assert overview["per_segment"][1]["passed"] is False
+    assert overview["per_segment"][1]["evidence"]["missing"] == 1
+
+
+def test_derive_unresolved_detail_reports_reason() -> None:
+    missing = _derive_unresolved_detail(
+        {
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "missing", "candidate_count": 0},
+            "end_location": {"status": "exact", "start": 100, "end": 200},
+        }
+    )
+    assert "unrelocatable" in missing
+
+    ambiguous = _derive_unresolved_detail(
+        {
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "ambiguous", "candidate_count": 3},
+            "end_location": {"status": "exact", "start": 100, "end": 200},
+        }
+    )
+    assert "ambiguous" in ambiguous
+    assert "3 candidates" in ambiguous
+
+    inverted = _derive_unresolved_detail(
+        {
+            "code": "segment_span_unresolved",
+            "start_location": {"status": "exact", "start": 200, "end": 300},
+            "end_location": {"status": "exact", "start": 50, "end": 150},
+        }
+    )
+    assert "inverted" in inverted
+
+
+def test_dominant_issue_codes_orders_by_frequency() -> None:
+    reports = [
+        {"issues": [{"code": "a"}, {"code": "b"}, {"code": "a"}]},
+        {"issues": [{"code": "c"}, {"code": "a"}]},
+    ]
+    assert _dominant_issue_codes(reports) == ["a", "b", "c"]
 
 
 def run_empty_context():
