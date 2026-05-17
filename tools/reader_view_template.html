@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reader View — {{UNIT_ID}}</title>
+  <style>
+    :root {
+      --bg: #f5efe1;
+      --ink: #15130f;
+      --muted: #7a715f;
+      --line: rgba(25, 22, 16, 0.14);
+      --soft-line: rgba(25, 22, 16, 0.08);
+      --paper: rgba(255, 251, 241, 0.88);
+      --panel: rgba(255, 248, 232, 0.72);
+      --event: #d75533;
+      --event-soft: rgba(215, 85, 51, 0.13);
+      --entity: #6f4b2a;
+      --entity-soft: rgba(111, 75, 42, 0.11);
+      --location: #395e4a;
+      --location-soft: rgba(57, 94, 74, 0.13);
+      --thread: #5f5946;
+      --accent: #d75533;
+      --accent-soft: rgba(215, 85, 51, 0.16);
+      --shadow: 0 16px 42px rgba(38, 31, 23, 0.10);
+      --radius: 20px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --serif: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", Georgia, "Times New Roman", serif;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --conf-high: #2d6a4f;
+      --conf-med: #9c6a2f;
+      --conf-low: #9a4a3f;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 24% 18%, rgba(215, 85, 51, 0.10), transparent 28%),
+        radial-gradient(circle at 80% 4%, rgba(57, 94, 74, 0.10), transparent 25%),
+        linear-gradient(135deg, #f7f0df 0%, #eee1c5 100%);
+      font-family: var(--sans);
+      overflow: hidden;
+    }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 14px;
+      gap: 10px;
+    }
+
+    /* ---- top bar ---- */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(255, 250, 240, 0.76);
+      backdrop-filter: blur(18px);
+      box-shadow: var(--shadow);
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+    }
+    .brand-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 36px; height: 36px;
+      border-radius: 14px;
+      background: var(--ink);
+      color: var(--bg);
+      font-family: var(--serif);
+      font-size: 22px;
+      transform: rotate(-3deg);
+      flex-shrink: 0;
+    }
+    .brand h1 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: clamp(20px, 3vw, 28px);
+      letter-spacing: -0.03em;
+      white-space: nowrap;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      margin-left: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .spacer { flex: 1; }
+
+    .mode-switch {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.33);
+    }
+    .mode-switch button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .mode-switch button.active {
+      background: var(--ink);
+      color: var(--bg);
+    }
+
+    /* ---- workspace ---- */
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(420px, 1fr) minmax(380px, 0.85fr);
+      gap: 10px;
+    }
+
+    .panel {
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .panel-header {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .eyebrow {
+      margin: 0 0 2px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .panel-title h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 20px;
+      letter-spacing: -0.03em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .panel-tools {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .tool-btn {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.36);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-family: var(--mono);
+      font-size: 10px;
+      cursor: pointer;
+      transition: background 140ms ease;
+      white-space: nowrap;
+    }
+    .tool-btn:hover { background: rgba(255,255,255,0.58); }
+    .tool-btn.active { background: var(--ink); color: var(--bg); }
+
+    /* ---- source pane ---- */
+    .source-scroll {
+      min-height: 0;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+      padding: 24px clamp(20px, 3vw, 48px) 120px;
+    }
+
+    .source-text {
+      font-family: var(--serif);
+      font-size: 18px;
+      line-height: 1.9;
+      letter-spacing: 0.01em;
+      text-align: justify;
+    }
+    .source-text p {
+      margin: 0 0 1em;
+      text-indent: 2em;
+    }
+    .source-text p:first-child { text-indent: 0; }
+
+    .segment-text {
+      font-family: var(--serif);
+      font-size: 18px;
+      line-height: 1.85;
+      letter-spacing: 0.01em;
+      text-align: justify;
+    }
+
+    /* marks */
+    mark {
+      background: transparent;
+      color: inherit;
+      padding: 1px 2px 2px;
+      border-radius: 5px;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+      cursor: pointer;
+      transition: background 140ms ease, box-shadow 140ms ease;
+    }
+    mark.entity { background: var(--entity-soft); box-shadow: inset 0 -2px rgba(111, 75, 42, 0.22); }
+    mark.event { background: var(--event-soft); box-shadow: inset 0 -2px rgba(215, 85, 51, 0.25); }
+    mark.location { background: var(--location-soft); box-shadow: inset 0 -2px rgba(57, 94, 74, 0.22); }
+    mark.active-span {
+      background: rgba(215, 85, 51, 0.30) !important;
+      box-shadow: 0 0 0 4px var(--accent-soft), inset 0 -2px rgba(215, 85, 51, 0.52) !important;
+    }
+
+    /* ---- timeline pane ---- */
+    .timeline-tabs {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--soft-line);
+      scroll-behavior: smooth;
+    }
+    .timeline-tabs::-webkit-scrollbar { height: 3px; }
+    .timeline-tabs::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+
+    .tl-tab {
+      flex-shrink: 0;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.28);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease, color 140ms ease;
+    }
+    .tl-tab:hover { background: rgba(255,255,255,0.52); }
+    .tl-tab.active { background: var(--ink); color: var(--bg); }
+    .tl-tab .conf-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .conf-dot.high { background: var(--conf-high); }
+    .conf-dot.medium { background: var(--conf-med); }
+    .conf-dot.low { background: var(--conf-low); }
+
+    .timeline-scroll {
+      min-height: 0;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+      padding: 0 16px 120px;
+    }
+
+    .tl-section {
+      margin-top: 20px;
+      padding-bottom: 8px;
+    }
+    .tl-section-header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      padding: 10px 0 8px;
+      background: linear-gradient(to bottom, rgba(246, 238, 222, 0.98), rgba(246, 238, 222, 0.80));
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--soft-line);
+      margin-bottom: 12px;
+    }
+    .tl-section-header h3 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 22px;
+      letter-spacing: -0.03em;
+    }
+    .tl-section-header .tl-meta {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    .event-card {
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 250, 240, 0.82);
+      box-shadow: 0 6px 18px rgba(38, 31, 23, 0.05);
+      cursor: pointer;
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, opacity 160ms ease;
+    }
+    .event-card:hover {
+      transform: translateX(3px);
+      border-color: rgba(215, 85, 51, 0.45);
+      background: #fffaf0;
+    }
+    .event-card.active {
+      border-color: rgba(215, 85, 51, 0.65);
+      background: #fffaf0;
+      box-shadow: 0 8px 24px rgba(215, 85, 51, 0.10);
+    }
+    .event-card.dimmed { opacity: 0.22; }
+
+    .event-card .ev-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 5px;
+    }
+    .event-card .ev-id {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .event-card .ev-summary {
+      font-family: var(--serif);
+      font-size: 19px;
+      letter-spacing: -0.02em;
+      margin: 0 0 6px;
+    }
+    .event-card .ev-rationale {
+      font-size: 12px;
+      color: #6b6052;
+      line-height: 1.4;
+      margin-bottom: 8px;
+      font-style: italic;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      align-items: center;
+    }
+    .tag {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.42);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease;
+    }
+    .tag:hover { background: rgba(255,255,255,0.68); }
+    .tag.entity-tag { color: var(--entity); border-color: rgba(111,75,42,0.24); }
+    .tag.location-tag { color: var(--location); border-color: rgba(57,94,74,0.24); }
+    .tag.thread-tag { color: var(--thread); border-color: rgba(95,89,70,0.24); }
+    .tag.conf-tag.high { color: var(--conf-high); border-color: rgba(45,106,79,0.24); }
+    .tag.conf-tag.medium { color: var(--conf-med); border-color: rgba(156,106,47,0.24); }
+    .tag.conf-tag.low { color: var(--conf-low); border-color: rgba(154,74,63,0.24); }
+    .tag.before-tag { color: var(--accent); border-color: rgba(215,85,51,0.24); font-size: 9px; }
+
+    /* ---- stats bar ---- */
+    .stats-bar {
+      display: flex;
+      gap: 12px;
+      padding: 10px 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(255, 250, 240, 0.76);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      overflow-x: auto;
+    }
+    .stat-item {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .stat-num {
+      font-family: var(--serif);
+      font-size: 22px;
+      letter-spacing: -0.04em;
+    }
+    .stat-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .stat-sep {
+      width: 1px;
+      background: var(--line);
+      align-self: stretch;
+      flex-shrink: 0;
+    }
+
+    /* ---- responsive ---- */
+    @media (max-width: 980px) {
+      body { overflow: auto; }
+      .app { height: auto; min-height: 100vh; }
+      .topbar { flex-wrap: wrap; }
+      .workspace { grid-template-columns: 1fr; min-height: 1000px; }
+      .panel { min-height: 500px; }
+    }
+    @media (max-width: 640px) {
+      .app { padding: 8px; }
+      .source-scroll { padding-left: 16px; padding-right: 12px; }
+      .brand h1 { font-size: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">✦</div>
+        <h1>Reader View</h1>
+        <span class="subtitle">{{UNIT_ID}} · {{BOOK_TITLE}}</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="mode-switch">
+        <button class="active" data-mode="reading">Reading</button>
+        <button data-mode="review">Review</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <section class="panel source-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <p class="eyebrow">Source text</p>
+            <h2>{{BOOK_TITLE}}</h2>
+          </div>
+          <div class="panel-tools">
+            <button class="tool-btn active" data-hl="all">All marks</button>
+            <button class="tool-btn" data-hl="entity">Entities</button>
+            <button class="tool-btn" data-hl="event">Events</button>
+            <button class="tool-btn" data-hl="clear">Clear</button>
+          </div>
+        </div>
+        <div class="source-scroll" id="sourceScroll">
+          <!-- SOURCE_HTML -->
+        </div>
+      </section>
+
+      <aside class="panel timeline-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <p class="eyebrow">Timelines</p>
+            <h2>{{TIMELINE_COUNT}} timelines</h2>
+          </div>
+          <div class="panel-tools">
+            <button class="tool-btn active" data-tl-filter="all">All</button>
+          </div>
+        </div>
+        <div class="timeline-tabs" id="timelineTabs">
+          <!-- TIMELINE_TABS -->
+        </div>
+        <div class="timeline-scroll" id="timelineScroll">
+          <!-- TIMELINE_HTML -->
+        </div>
+      </aside>
+    </section>
+
+    <footer class="stats-bar">
+      <div class="stat-item"><span class="stat-num">{{ENTITY_COUNT}}</span><span class="stat-label">entities</span></div>
+      <div class="stat-sep"></div>
+      <div class="stat-item"><span class="stat-num">{{LOCATION_COUNT}}</span><span class="stat-label">locations</span></div>
+      <div class="stat-sep"></div>
+      <div class="stat-item"><span class="stat-num">{{EVENT_COUNT}}</span><span class="stat-label">events</span></div>
+      <div class="stat-sep"></div>
+      <div class="stat-item"><span class="stat-num">{{TIMELINE_COUNT}}</span><span class="stat-label">timelines</span></div>
+      <div class="stat-sep"></div>
+      <div class="stat-item"><span class="stat-num">{{THREAD_COUNT}}</span><span class="stat-label">threads</span></div>
+      <div class="stat-sep"></div>
+      <div class="stat-item"><span class="stat-num">{{UNRESOLVED_COUNT}}</span><span class="stat-label">unresolved</span></div>
+    </footer>
+  </main>
+
+  <!-- DATA_SCRIPT -->
+
+  <script>
+    // ── Data ──
+    const EVENTS = DATA_PLACEHOLDER_EVENTS;
+    const ENTITIES = DATA_PLACEHOLDER_ENTITIES;
+    const LOCATIONS = DATA_PLACEHOLDER_LOCATIONS;
+    const THREADS = DATA_PLACEHOLDER_THREADS;
+    const TIMELINES = DATA_PLACEHOLDER_TIMELINES;
+    const EVENT_BY_ID = Object.fromEntries(EVENTS.map(e => [e.event_id, e]));
+    const ENTITY_BY_ID = Object.fromEntries(ENTITIES.map(e => [e.entity_id, e]));
+    const LOCATION_BY_ID = Object.fromEntries(LOCATIONS.map(l => [l.location_id, l]));
+    const THREAD_BY_ID = Object.fromEntries(THREADS.map(t => [t.thread_id, t]));
+
+    // ── DOM refs ──
+    const sourceScroll = document.getElementById('sourceScroll');
+    const timelineScroll = document.getElementById('timelineScroll');
+
+    function maxScroll(el) { return Math.max(1, el.scrollHeight - el.clientHeight); }
+
+    // ── Scroll sync ──
+    let syncLock = false;
+    function sync(from, to) {
+      if (syncLock) return;
+      syncLock = true;
+      to.scrollTop = (from.scrollTop / maxScroll(from)) * maxScroll(to);
+      requestAnimationFrame(() => { syncLock = false; });
+    }
+    sourceScroll.addEventListener('scroll', () => {
+      sync(sourceScroll, timelineScroll);
+      updateCurrentParagraph();
+    });
+    timelineScroll.addEventListener('scroll', () => {
+      sync(timelineScroll, sourceScroll);
+      updateActiveTab();
+    });
+
+    function updateCurrentParagraph() {
+      const paras = [...sourceScroll.querySelectorAll('.source-text p')];
+      let closest = null;
+      for (const p of paras) {
+        const delta = Math.abs(p.getBoundingClientRect().top - sourceScroll.getBoundingClientRect().top - 120);
+        if (!closest || delta < closest.delta) closest = { p, delta };
+      }
+      paras.forEach(p => p.style.background = '');
+      if (closest) closest.p.style.background = 'rgba(255,255,255,0.28)';
+    }
+
+    // ── Highlight buttons ──
+    document.querySelectorAll('[data-hl]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-hl]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const mode = btn.dataset.hl;
+        document.querySelectorAll('mark').forEach(m => {
+          if (mode === 'clear') { m.style.background = 'transparent'; m.style.boxShadow = 'none'; }
+          else if (mode === 'entity') { m.style.background = m.classList.contains('entity') ? '' : 'transparent'; m.style.boxShadow = m.classList.contains('entity') ? '' : 'none'; }
+          else if (mode === 'event') { m.style.background = m.classList.contains('event') ? '' : 'transparent'; m.style.boxShadow = m.classList.contains('event') ? '' : 'none'; }
+          else { m.style.background = ''; m.style.boxShadow = ''; }
+        });
+      });
+    });
+
+    // ── Mode switch ──
+    document.querySelectorAll('[data-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (btn.dataset.mode === 'review') {
+          document.querySelectorAll('.event-card').forEach(card => {
+            const ev = EVENT_BY_ID[card.dataset.event];
+            const needsReview = ev && ev.qc_notes && ev.qc_notes.length > 0;
+            card.classList.toggle('dimmed', !needsReview);
+            card.classList.toggle('active', needsReview);
+          });
+        } else {
+          document.querySelectorAll('.event-card').forEach(c => { card.classList.remove('dimmed','active'); });
+        }
+      });
+    });
+
+    // ── Event card click → highlight source evidence ──
+    document.querySelectorAll('.event-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        // Ignore clicks on tag buttons (they do filtering)
+        if (e.target.closest('.tag')) return;
+
+        const evId = card.dataset.event;
+        const ev = EVENT_BY_ID[evId];
+        if (!ev) return;
+
+        // Toggle active
+        const wasActive = card.classList.contains('active');
+        document.querySelectorAll('.event-card').forEach(c => c.classList.remove('active'));
+        document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
+        if (wasActive) return;
+        card.classList.add('active');
+
+        // Highlight evidence marks in source
+        if (ev.segment_ids) {
+          ev.segment_ids.forEach(sid => {
+            const marks = document.querySelectorAll(`mark.event[data-segment="${sid}"][data-event="${evId}"]`);
+            marks.forEach(m => m.classList.add('active-span'));
+            if (marks[0]) marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          });
+        }
+
+        // Also highlight participant entities
+        (ev.participant_entity_ids || []).forEach(eid => {
+          document.querySelectorAll(`mark.entity[data-entity="${eid}"]`).forEach(m => m.classList.add('active-span'));
+        });
+      });
+    });
+
+    // ── Entity tag click → filter timeline by entity ──
+    document.querySelectorAll('.tag.entity-tag').forEach(tag => {
+      tag.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const eid = tag.dataset.entity;
+        document.querySelectorAll('.event-card').forEach(card => {
+          const ev = EVENT_BY_ID[card.dataset.event];
+          const match = ev && (ev.participant_entity_ids || []).includes(eid);
+          card.classList.toggle('dimmed', !match);
+        });
+        document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
+        document.querySelectorAll(`mark.entity[data-entity="${eid}"]`).forEach(m => m.classList.add('active-span'));
+        if (document.querySelector(`mark.entity[data-entity="${eid}"]`)) {
+          document.querySelector(`mark.entity[data-entity="${eid}"]`).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    });
+
+    // ── Thread tag click → filter timeline by thread ──
+    document.querySelectorAll('.tag.thread-tag').forEach(tag => {
+      tag.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tid = tag.dataset.thread;
+        const thread = THREAD_BY_ID[tid];
+        if (!thread) return;
+        const threadEventIds = new Set();
+        (thread.evidence_refs || []).forEach(ref => {
+          // Thread evidence refs link to segments; find events in those segments
+          EVENTS.forEach(ev => {
+            if ((ev.segment_ids || []).includes(ref.segment_id)) threadEventIds.add(ev.event_id);
+          });
+        });
+        document.querySelectorAll('.event-card').forEach(card => {
+          card.classList.toggle('dimmed', !threadEventIds.has(card.dataset.event));
+        });
+      });
+    });
+
+    // ── Timeline tabs ──
+    function updateActiveTab() {
+      const sections = [...document.querySelectorAll('.tl-section')];
+      const scrollMid = timelineScroll.scrollTop + timelineScroll.clientHeight / 3;
+      let activeId = null;
+      for (const s of sections) {
+        if (s.offsetTop <= scrollMid) activeId = s.dataset.timeline;
+      }
+      document.querySelectorAll('.tl-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.timeline === activeId);
+      });
+    }
+
+    document.querySelectorAll('.tl-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const section = document.querySelector(`.tl-section[data-timeline="${tab.dataset.timeline}"]`);
+        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+
+    // ── Init ──
+    updateCurrentParagraph();
+    updateActiveTab();
+  </script>
+</body>
+</html>
