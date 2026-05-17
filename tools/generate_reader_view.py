@@ -19,6 +19,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tilusion.extraction_quality import relocate_evidence_quote
+
 
 # ── Data loading ──────────────────────────────────────────────────────────
 
@@ -51,6 +55,70 @@ def load_segment_evidence(chain_dir: str, segment_id: str) -> dict[str, str]:
     return {}
 
 
+def _segment_offsets(segments: list[dict[str, Any]]) -> dict[str, tuple[int, int]]:
+    offsets: dict[str, tuple[int, int]] = {}
+    for seg in segments:
+        sid = seg.get("segment_id")
+        start = seg.get("start")
+        end = seg.get("end")
+        if isinstance(sid, str) and isinstance(start, int) and isinstance(end, int):
+            offsets[sid] = (start, end)
+    return offsets
+
+
+def _locate_evidence_refs(
+    source_text: str,
+    segments: list[dict[str, Any]],
+    evidence_by_segment: dict[str, dict[str, str]],
+) -> dict[tuple[str, str], tuple[int, int]]:
+    """Locate segment evidence refs and return full-source offsets."""
+    locations: dict[tuple[str, str], tuple[int, int]] = {}
+    offsets = _segment_offsets(segments)
+    base_offset = _unit_base_offset(source_text, segments)
+    for sid, evidence in evidence_by_segment.items():
+        seg_offset = offsets.get(sid)
+        if not seg_offset:
+            continue
+        seg_start, seg_end = seg_offset
+        full_start = base_offset + seg_start
+        full_end = base_offset + seg_end
+        segment_text = source_text[full_start:full_end]
+        for evidence_id, quote in evidence.items():
+            if not quote:
+                continue
+            location = relocate_evidence_quote(
+                segment_text,
+                quote,
+                evidence_id=evidence_id,
+            )
+            if location.start is None or location.end is None:
+                continue
+            locations[(sid, evidence_id)] = (
+                full_start + location.start,
+                full_start + location.end,
+            )
+    return locations
+
+
+def _unit_base_offset(source_text: str, segments: list[dict[str, Any]]) -> int:
+    """Infer full-source offset for unit-local segment offsets."""
+    for seg in segments:
+        seg_start = seg.get("start")
+        source = seg.get("source") if isinstance(seg.get("source"), dict) else {}
+        start_quote = source.get("start_quote") if isinstance(source, dict) else None
+        local_start = (
+            seg.get("start_location", {}).get("start")
+            if isinstance(seg.get("start_location"), dict)
+            else None
+        )
+        if not isinstance(seg_start, int) or not isinstance(start_quote, str):
+            continue
+        found = source_text.find(start_quote)
+        if found >= 0:
+            return found - (local_start if isinstance(local_start, int) else seg_start)
+    return 0
+
+
 # ── Text annotation ────────────────────────────────────────────────────────
 
 def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
@@ -66,20 +134,6 @@ def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
     return results
 
 
-def _resolve_overlaps(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sort spans by (start, -length) so longer matches win; remove overlaps."""
-    if not spans:
-        return []
-    sorted_spans = sorted(spans, key=lambda s: (s["start"], -(s["end"] - s["start"])))
-    resolved = []
-    last_end = -1
-    for s in sorted_spans:
-        if s["start"] >= last_end:
-            resolved.append(s)
-            last_end = s["end"]
-    return sorted(resolved, key=lambda s: s["start"])
-
-
 # ── Source pane ────────────────────────────────────────────────────────────
 
 
@@ -87,17 +141,18 @@ def build_source_html(
     source_text: str,
     segments: list[dict[str, Any]],
     entities: list[dict[str, Any]],
+    locations: list[dict[str, Any]],
     events: list[dict[str, Any]],
     evidence_by_segment: dict[str, dict[str, str]],
 ) -> str:
-    """Build the full source pane HTML with entity/event highlights.
+    """Build the full source pane HTML with entity/location annotations.
 
     Renders the entire source text as a continuous scrollable block with
-    entity surfaces and event evidence quotes highlighted inline. Segment
-    boundaries are not shown — the timeline pane carries the structure.
+    entity and location surfaces highlighted inline. Event evidence is
+    included as data for right-pane navigation, but not visible by default.
     """
-    # Collect all highlight spans across the entire source text
-    spans: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+    evidence_locations = _locate_evidence_refs(source_text, segments, evidence_by_segment)
 
     # Entity surfaces
     for ent in entities:
@@ -105,44 +160,57 @@ def build_source_html(
             if not surface or len(surface) < 2:
                 continue
             for start, end in _find_all(source_text, surface):
-                spans.append({
-                    "start": start, "end": end,
-                    "cls": "entity",
-                    "attrs": f'data-entity="{html.escape(ent["entity_id"])}"',
-                })
+                annotations.append({"start": start, "end": end, "kind": "entity", "id": ent["entity_id"]})
 
-    # Event evidence quotes
+    # Location surfaces
+    for loc in locations:
+        for surface in loc.get("surfaces", []):
+            if not surface or len(surface) < 2:
+                continue
+            for start, end in _find_all(source_text, surface):
+                annotations.append({"start": start, "end": end, "kind": "location", "id": loc["location_id"]})
+
+    # Event evidence locations are navigation targets, not source-side marks.
     for ev in events:
         for ref in ev.get("evidence_refs", []):
             seg_id = ref.get("segment_id", "")
-            ev_quotes = evidence_by_segment.get(seg_id, {})
-            quote = ev_quotes.get(ref.get("evidence_id", ""), "")
-            if not quote or len(quote) < 3:
+            evidence_id = ref.get("evidence_id", "")
+            located = evidence_locations.get((seg_id, evidence_id))
+            if not located:
                 continue
-            for start, end in _find_all(source_text, quote):
-                spans.append({
-                    "start": start, "end": end,
-                    "cls": "event",
-                    "attrs": f'data-event="{html.escape(ev["event_id"])}" data-segment="{html.escape(seg_id)}"',
-                })
+            annotations.append({"start": located[0], "end": located[1], "kind": "event", "id": ev["event_id"]})
 
-    resolved = _resolve_overlaps(spans)
+    boundaries = {0, len(source_text)}
+    for item in annotations:
+        boundaries.add(item["start"])
+        boundaries.add(item["end"])
+    cuts = sorted(boundaries)
 
     # Build marked-up HTML with paragraph breaks on newlines
     parts: list[str] = []
-    cursor = 0
-    for s in resolved:
-        if s["start"] > cursor:
-            chunk = source_text[cursor:s["start"]]
-            # Preserve paragraph structure
-            chunk = html.escape(chunk).replace("\n\n", "</p><p>").replace("\n", "<br>")
+    for start, end in zip(cuts, cuts[1:]):
+        if start == end:
+            continue
+        chunk = html.escape(source_text[start:end]).replace("\n\n", "</p><p>").replace("\n", "<br>")
+        covered = [item for item in annotations if item["start"] <= start and item["end"] >= end]
+        if not covered:
             parts.append(chunk)
-        parts.append(f'<mark class="{s["cls"]}" {s["attrs"]}>{html.escape(source_text[s["start"]:s["end"]])}</mark>')
-        cursor = s["end"]
-    if cursor < len(source_text):
-        chunk = source_text[cursor:]
-        chunk = html.escape(chunk).replace("\n\n", "</p><p>").replace("\n", "<br>")
-        parts.append(chunk)
+            continue
+
+        entity_ids = sorted({item["id"] for item in covered if item["kind"] == "entity"})
+        location_ids = sorted({item["id"] for item in covered if item["kind"] == "location"})
+        event_ids = sorted({item["id"] for item in covered if item["kind"] == "event"})
+        classes = ["source-mark"]
+        attrs = []
+        if entity_ids:
+            classes.append("entity")
+            attrs.append(f'data-entities="{html.escape(",".join(entity_ids))}"')
+        if location_ids:
+            classes.append("location")
+            attrs.append(f'data-locations="{html.escape(",".join(location_ids))}"')
+        if event_ids:
+            attrs.append(f'data-events="{html.escape(",".join(event_ids))}"')
+        parts.append(f'<mark class="{" ".join(classes)}" {" ".join(attrs)}>{chunk}</mark>')
 
     body = "".join(parts)
     # Wrap in paragraphs; collapse empty <p></p>
@@ -180,8 +248,8 @@ def build_timeline_html(
     locations_by_id: dict[str, dict[str, Any]],
     threads_by_id: dict[str, dict[str, Any]],
 ) -> tuple[str, str]:
-    """Build timeline sections HTML and tabs HTML. Returns (tabs_html, timeline_html)."""
-    tab_parts = []
+    """Build timeline nav items and sections HTML. Returns (nav_html, timeline_html)."""
+    nav_parts = []
     section_parts = []
 
     for tl in timelines:
@@ -190,9 +258,9 @@ def build_timeline_html(
         summary = tl.get("summary", tid)
         ordered = tl.get("ordered_events", [])
 
-        # Tab
-        tab_parts.append(
-            f'<button class="tl-tab" data-timeline="{html.escape(tid)}">'
+        # Sidebar nav item
+        nav_parts.append(
+            f'<button class="nav-item" data-timeline="{html.escape(tid)}">'
             f'<span class="conf-dot {html.escape(conf)}"></span>'
             f"{html.escape(tid)}"
             f"</button>"
@@ -218,7 +286,7 @@ def build_timeline_html(
             # Locations
             for lid in ev.get("location_ids", []) or []:
                 tags.append(
-                    f'<span class="tag location-tag">'
+                    f'<span class="tag location-tag" data-location="{html.escape(lid)}">'
                     f"{_location_label(lid, locations_by_id)}</span>"
                 )
             # Confidence
@@ -242,7 +310,6 @@ def build_timeline_html(
                         f'<span class="tag thread-tag" data-thread="{html.escape(th["thread_id"])}">'
                         f"{html.escape(th.get('summary', th['thread_id']) )}</span>"
                     )
-                    break  # one thread tag per card is enough
 
             cards.append(
                 f'<article class="event-card" data-event="{html.escape(eid)}">'
@@ -263,7 +330,31 @@ def build_timeline_html(
             + "</div>"
         )
 
-    return "\n".join(tab_parts), "\n".join(section_parts)
+    return "\n".join(nav_parts), "\n".join(section_parts)
+
+
+def build_thread_nav(
+    threads: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> str:
+    """Build thread sidebar nav items. Returns nav HTML string."""
+    # Pre-compute event→segment mapping for counting
+    event_segment_sets = [
+        set(ev.get("segment_ids", []) or []) for ev in events
+    ]
+    nav_parts: list[str] = []
+    for thread in threads:
+        tid = thread["thread_id"]
+        thread_segments = set(thread.get("segment_ids", []) or [])
+        event_count = sum(1 for ess in event_segment_sets if ess & thread_segments)
+        summary = thread.get("summary", tid)
+        nav_parts.append(
+            f'<button class="nav-item" data-thread="{html.escape(tid)}" title="{html.escape(summary)} ({event_count} events)">'
+            f'{html.escape(summary)}'
+            f'<span style="color:var(--muted);margin-left:6px;font-size:9px">{event_count}</span>'
+            f'</button>'
+        )
+    return "\n".join(nav_parts)
 
 
 # ── Data embedding ─────────────────────────────────────────────────────────
@@ -283,11 +374,11 @@ def build_data_script(
     ]
     slim_events = [
         {k: ev[k] for k in ("event_id", "summary", "segment_ids", "source_order_hint",
-                             "participant_entity_ids", "location_ids", "qc_notes") if k in ev}
+                             "participant_entity_ids", "location_ids", "evidence_refs", "qc_notes") if k in ev}
         for ev in events
     ]
     slim_locations = [
-        {k: l[k] for k in ("location_id", "canonical_name", "kind", "summary") if k in l}
+        {k: l[k] for k in ("location_id", "canonical_name", "surfaces", "kind", "summary") if k in l}
         for l in locations
     ]
     slim_threads = [
@@ -360,18 +451,19 @@ def generate(
         evidence_by_segment[sid] = load_segment_evidence(chain_dir, sid)
 
     # Build components
-    source_html = build_source_html(source_text, segments, entities, events, evidence_by_segment)
-    tabs_html, timeline_html = build_timeline_html(
+    source_html = build_source_html(source_text, segments, entities, locations, events, evidence_by_segment)
+    timeline_nav_html, timeline_html = build_timeline_html(
         timelines, events_by_id, entities_by_id, locations_by_id, threads_by_id,
     )
+    thread_nav_html = build_thread_nav(threads, events)
     data_script = build_data_script(entities, events, locations, threads, timelines)
 
     # Build JS constants (replace DATA_PLACEHOLDER_* with real JSON arrays)
     js_constants = (
         '<script>\n'
-        f'const EVENTS = {json.dumps([{k: ev[k] for k in ("event_id","summary","segment_ids","source_order_hint","participant_entity_ids","location_ids","qc_notes") if k in ev} for ev in events], ensure_ascii=False)};\n'
+        f'const EVENTS = {json.dumps([{k: ev[k] for k in ("event_id","summary","segment_ids","source_order_hint","participant_entity_ids","location_ids","evidence_refs","qc_notes") if k in ev} for ev in events], ensure_ascii=False)};\n'
         f'const ENTITIES = {json.dumps([{k: e[k] for k in ("entity_id","canonical_name","surfaces","kind","summary") if k in e} for e in entities], ensure_ascii=False)};\n'
-        f'const LOCATIONS = {json.dumps([{k: l[k] for k in ("location_id","canonical_name","kind","summary") if k in l} for l in locations], ensure_ascii=False)};\n'
+        f'const LOCATIONS = {json.dumps([{k: l[k] for k in ("location_id","canonical_name","surfaces","kind","summary") if k in l} for l in locations], ensure_ascii=False)};\n'
         f'const THREADS = {json.dumps([{k: t[k] for k in ("thread_id","summary","status","segment_ids","evidence_refs") if k in t} for t in threads], ensure_ascii=False)};\n'
         f'const TIMELINES = {json.dumps(timelines, ensure_ascii=False)};\n'
         '</script>'
@@ -387,7 +479,8 @@ def generate(
         "{{THREAD_COUNT}}": str(len(threads)),
         "{{UNRESOLVED_COUNT}}": str(len(unresolved)),
         "<!-- SOURCE_HTML -->": source_html,
-        "<!-- TIMELINE_TABS -->": tabs_html,
+        "<!-- TIMELINE_NAV -->": timeline_nav_html,
+        "<!-- THREAD_NAV -->": thread_nav_html,
         "<!-- TIMELINE_HTML -->": timeline_html,
         "<!-- DATA_SCRIPT -->": js_constants,
         "const EVENTS = DATA_PLACEHOLDER_EVENTS;": "",
@@ -395,10 +488,6 @@ def generate(
         "const LOCATIONS = DATA_PLACEHOLDER_LOCATIONS;": "",
         "const THREADS = DATA_PLACEHOLDER_THREADS;": "",
         "const TIMELINES = DATA_PLACEHOLDER_TIMELINES;": "",
-        "const EVENT_BY_ID = Object.fromEntries(EVENTS.map(e => [e.event_id, e]));": "",
-        "const ENTITY_BY_ID = Object.fromEntries(ENTITIES.map(e => [e.entity_id, e]));": "",
-        "const LOCATION_BY_ID = Object.fromEntries(LOCATIONS.map(l => [l.location_id, l]));": "",
-        "const THREAD_BY_ID = Object.fromEntries(THREADS.map(t => [t.thread_id, t]));": "",
     }
 
     rendered = render(template, replacements)

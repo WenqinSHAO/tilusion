@@ -233,51 +233,94 @@
       transition: background 140ms ease, box-shadow 140ms ease;
     }
     mark.entity { background: var(--entity-soft); box-shadow: inset 0 -2px rgba(111, 75, 42, 0.22); }
-    mark.event { background: var(--event-soft); box-shadow: inset 0 -2px rgba(215, 85, 51, 0.25); }
     mark.location { background: var(--location-soft); box-shadow: inset 0 -2px rgba(57, 94, 74, 0.22); }
+    mark.hidden-mark {
+      background: transparent !important;
+      box-shadow: none !important;
+    }
     mark.active-span {
       background: rgba(215, 85, 51, 0.30) !important;
       box-shadow: 0 0 0 4px var(--accent-soft), inset 0 -2px rgba(215, 85, 51, 0.52) !important;
     }
 
-    /* ---- timeline pane ---- */
-    .timeline-tabs {
+    /* ---- right pane body (sidebar + content) ---- */
+    .right-pane-body {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* ---- vertical sidebar nav ---- */
+    .sidebar-nav {
+      min-height: 0;
+      overflow-y: auto;
+      border-right: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.35);
       display: flex;
-      gap: 6px;
-      overflow-x: auto;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--soft-line);
+      flex-direction: column;
       scroll-behavior: smooth;
     }
-    .timeline-tabs::-webkit-scrollbar { height: 3px; }
-    .timeline-tabs::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+    .sidebar-nav::-webkit-scrollbar { width: 3px; }
+    .sidebar-nav::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
 
-    .tl-tab {
-      flex-shrink: 0;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 12px;
+    .nav-section {
+      padding: 0;
+    }
+    .nav-section + .nav-section {
+      border-top: 1px solid var(--soft-line);
+    }
+    .nav-section-header {
       font-family: var(--mono);
       font-size: 10px;
       color: var(--muted);
-      background: rgba(255,255,255,0.28);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 12px 14px 6px;
+      position: sticky;
+      top: 0;
+      background: rgba(255, 250, 240, 0.92);
+      backdrop-filter: blur(6px);
+      z-index: 2;
+    }
+    .nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 4px 8px 10px;
+    }
+
+    .nav-item {
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink);
+      background: transparent;
       cursor: pointer;
       white-space: nowrap;
-      transition: background 140ms ease, color 140ms ease;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 140ms ease, border-color 140ms ease;
+      text-align: left;
+      width: 100%;
     }
-    .tl-tab:hover { background: rgba(255,255,255,0.52); }
-    .tl-tab.active { background: var(--ink); color: var(--bg); }
-    .tl-tab .conf-dot {
+    .nav-item:hover { background: rgba(255,255,255,0.52); border-color: var(--line); }
+    .nav-item.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .nav-item .conf-dot {
       display: inline-block;
       width: 7px; height: 7px;
       border-radius: 50%;
-      margin-right: 4px;
+      margin-right: 5px;
       vertical-align: middle;
+      flex-shrink: 0;
     }
     .conf-dot.high { background: var(--conf-high); }
     .conf-dot.medium { background: var(--conf-med); }
     .conf-dot.low { background: var(--conf-low); }
 
+    /* ---- timeline scroll area ---- */
     .timeline-scroll {
       min-height: 0;
       overflow-y: auto;
@@ -387,6 +430,34 @@
     .tag.conf-tag.low { color: var(--conf-low); border-color: rgba(154,74,63,0.24); }
     .tag.before-tag { color: var(--accent); border-color: rgba(215,85,51,0.24); font-size: 9px; }
 
+    .popover {
+      position: fixed;
+      z-index: 50;
+      max-width: 320px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 250, 240, 0.97);
+      box-shadow: 0 16px 42px rgba(38, 31, 23, 0.18);
+      color: var(--ink);
+      pointer-events: none;
+      display: none;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .popover strong {
+      display: block;
+      font-family: var(--serif);
+      font-size: 17px;
+      margin-bottom: 4px;
+    }
+    .popover .muted {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      margin-bottom: 6px;
+    }
+
     /* ---- stats bar ---- */
     .stats-bar {
       display: flex;
@@ -462,9 +533,9 @@
             <h2>{{BOOK_TITLE}}</h2>
           </div>
           <div class="panel-tools">
-            <button class="tool-btn active" data-hl="all">All marks</button>
+            <button class="tool-btn active" data-hl="all">Entity + location</button>
             <button class="tool-btn" data-hl="entity">Entities</button>
-            <button class="tool-btn" data-hl="event">Events</button>
+            <button class="tool-btn" data-hl="location">Locations</button>
             <button class="tool-btn" data-hl="clear">Clear</button>
           </div>
         </div>
@@ -473,21 +544,34 @@
         </div>
       </section>
 
-      <aside class="panel timeline-panel">
+      <aside class="panel timeline-panel" id="rightPane">
         <div class="panel-header">
           <div class="panel-title">
-            <p class="eyebrow">Timelines</p>
-            <h2>{{TIMELINE_COUNT}} timelines</h2>
+            <p class="eyebrow">Structured view</p>
+            <h2>{{TIMELINE_COUNT}} timelines · {{THREAD_COUNT}} threads</h2>
           </div>
           <div class="panel-tools">
-            <button class="tool-btn active" data-tl-filter="all">All</button>
+            <button class="tool-btn active filter-clear" id="clearFilterBtn">Show all</button>
           </div>
         </div>
-        <div class="timeline-tabs" id="timelineTabs">
-          <!-- TIMELINE_TABS -->
-        </div>
-        <div class="timeline-scroll" id="timelineScroll">
-          <!-- TIMELINE_HTML -->
+        <div class="right-pane-body">
+          <nav class="sidebar-nav" id="sidebarNav">
+            <div class="nav-section">
+              <div class="nav-section-header">Timelines</div>
+              <div class="nav-list" id="timelineNavList">
+                <!-- TIMELINE_NAV -->
+              </div>
+            </div>
+            <div class="nav-section">
+              <div class="nav-section-header">Threads</div>
+              <div class="nav-list" id="threadNavList">
+                <!-- THREAD_NAV -->
+              </div>
+            </div>
+          </nav>
+          <div class="timeline-scroll" id="timelineScroll">
+            <!-- TIMELINE_HTML -->
+          </div>
         </div>
       </aside>
     </section>
@@ -506,6 +590,7 @@
       <div class="stat-item"><span class="stat-num">{{UNRESOLVED_COUNT}}</span><span class="stat-label">unresolved</span></div>
     </footer>
   </main>
+  <div class="popover" id="popover"></div>
 
   <!-- DATA_SCRIPT -->
 
@@ -525,24 +610,11 @@
     const sourceScroll = document.getElementById('sourceScroll');
     const timelineScroll = document.getElementById('timelineScroll');
 
-    function maxScroll(el) { return Math.max(1, el.scrollHeight - el.clientHeight); }
+    const rightPane = document.getElementById('rightPane');
+    const popover = document.getElementById('popover');
 
-    // ── Scroll sync ──
-    let syncLock = false;
-    function sync(from, to) {
-      if (syncLock) return;
-      syncLock = true;
-      to.scrollTop = (from.scrollTop / maxScroll(from)) * maxScroll(to);
-      requestAnimationFrame(() => { syncLock = false; });
-    }
-    sourceScroll.addEventListener('scroll', () => {
-      sync(sourceScroll, timelineScroll);
-      updateCurrentParagraph();
-    });
-    timelineScroll.addEventListener('scroll', () => {
-      sync(timelineScroll, sourceScroll);
-      updateActiveTab();
-    });
+    sourceScroll.addEventListener('scroll', updateCurrentParagraph);
+    timelineScroll.addEventListener('scroll', updateActiveNav);
 
     function updateCurrentParagraph() {
       const paras = [...sourceScroll.querySelectorAll('.source-text p')];
@@ -555,19 +627,75 @@
       if (closest) closest.p.style.background = 'rgba(255,255,255,0.28)';
     }
 
+    function csvAttr(el, name) {
+      const value = el.dataset[name] || '';
+      return value ? value.split(',').filter(Boolean) : [];
+    }
+
+    function setMarkMode(mode) {
+      document.querySelectorAll('mark.source-mark').forEach(m => {
+        const hasEntity = m.classList.contains('entity');
+        const hasLocation = m.classList.contains('location');
+        const visible =
+          mode === 'all' ||
+          (mode === 'entity' && hasEntity) ||
+          (mode === 'location' && hasLocation);
+        m.classList.toggle('hidden-mark', mode === 'clear' || !visible);
+      });
+    }
+
+    function entityPopoverHtml(entity) {
+      if (!entity) return '';
+      const surfaces = (entity.surfaces || []).join(' · ');
+      return `
+        <strong>${entity.canonical_name || entity.entity_id}</strong>
+        <div class="muted">${entity.entity_id}${entity.kind ? ' · ' + entity.kind : ''}</div>
+        ${surfaces ? `<div><b>aliases:</b> ${surfaces}</div>` : ''}
+        ${entity.summary ? `<div>${entity.summary}</div>` : ''}
+      `;
+    }
+
+    function locationPopoverHtml(location) {
+      if (!location) return '';
+      const surfaces = (location.surfaces || []).join(' · ');
+      return `
+        <strong>${location.canonical_name || location.location_id}</strong>
+        <div class="muted">${location.location_id}${location.kind ? ' · ' + location.kind : ''}</div>
+        ${surfaces ? `<div><b>aliases:</b> ${surfaces}</div>` : ''}
+        ${location.summary ? `<div>${location.summary}</div>` : ''}
+      `;
+    }
+
+    function showPopover(html, clientX, clientY) {
+      if (!html) return;
+      popover.innerHTML = html;
+      popover.style.display = 'block';
+      const pad = 14;
+      const x = Math.min(clientX + pad, window.innerWidth - popover.offsetWidth - pad);
+      const y = Math.min(clientY + pad, window.innerHeight - popover.offsetHeight - pad);
+      popover.style.left = `${Math.max(pad, x)}px`;
+      popover.style.top = `${Math.max(pad, y)}px`;
+    }
+
+    function hidePopover() {
+      popover.style.display = 'none';
+    }
+
     // ── Highlight buttons ──
     document.querySelectorAll('[data-hl]').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('[data-hl]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        const mode = btn.dataset.hl;
-        document.querySelectorAll('mark').forEach(m => {
-          if (mode === 'clear') { m.style.background = 'transparent'; m.style.boxShadow = 'none'; }
-          else if (mode === 'entity') { m.style.background = m.classList.contains('entity') ? '' : 'transparent'; m.style.boxShadow = m.classList.contains('entity') ? '' : 'none'; }
-          else if (mode === 'event') { m.style.background = m.classList.contains('event') ? '' : 'transparent'; m.style.boxShadow = m.classList.contains('event') ? '' : 'none'; }
-          else { m.style.background = ''; m.style.boxShadow = ''; }
-        });
+        setMarkMode(btn.dataset.hl);
       });
+    });
+
+    // ── Clear filter button ──
+    const clearFilterBtn = document.getElementById('clearFilterBtn');
+    clearFilterBtn.addEventListener('click', () => {
+      document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      clearFilterBtn.classList.add('active');
     });
 
     // ── Mode switch ──
@@ -583,9 +711,71 @@
             card.classList.toggle('active', needsReview);
           });
         } else {
-          document.querySelectorAll('.event-card').forEach(c => { card.classList.remove('dimmed','active'); });
+          document.querySelectorAll('.event-card').forEach(card => { card.classList.remove('dimmed','active'); });
         }
       });
+    });
+
+    function clearActiveSource() {
+      document.querySelectorAll('.event-card').forEach(c => c.classList.remove('active'));
+      document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
+    }
+
+    function activateEvent(evId) {
+      const ev = EVENT_BY_ID[evId];
+      if (!ev) return;
+      clearActiveSource();
+      document.querySelectorAll(`.event-card[data-event="${evId}"]`).forEach(card => card.classList.add('active'));
+
+      const eventMarks = [...document.querySelectorAll('mark[data-events]')].filter(m => csvAttr(m, 'events').includes(evId));
+      eventMarks.forEach(m => m.classList.add('active-span'));
+      if (eventMarks[0]) eventMarks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      (ev.participant_entity_ids || []).forEach(eid => {
+        document.querySelectorAll('mark[data-entities]').forEach(m => {
+          if (csvAttr(m, 'entities').includes(eid)) m.classList.add('active-span');
+        });
+      });
+    }
+
+    function threadEventIds(thread) {
+      const segments = new Set(thread.segment_ids || []);
+      return new Set(EVENTS.filter(ev => (ev.segment_ids || []).some(sid => segments.has(sid))).map(ev => ev.event_id));
+    }
+
+    function activateThread(tid) {
+      const thread = THREAD_BY_ID[tid];
+      if (!thread) return;
+      // Highlight the active thread nav item, clear timeline nav
+      document.querySelectorAll('#threadNavList .nav-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.thread === tid);
+      });
+      document.querySelectorAll('#timelineNavList .nav-item').forEach(item => {
+        item.classList.remove('active');
+      });
+      clearFilterBtn.classList.remove('active');
+
+      const ids = threadEventIds(thread);
+      document.querySelectorAll('.event-card').forEach(card => {
+        card.classList.toggle('dimmed', !ids.has(card.dataset.event));
+      });
+      // Scroll to first visible card
+      const firstVisible = document.querySelector('.event-card:not(.dimmed)');
+      if (firstVisible) firstVisible.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // ── Source marks ──
+    document.querySelectorAll('mark.source-mark').forEach(mark => {
+      mark.addEventListener('mouseenter', (e) => {
+        const entityId = csvAttr(mark, 'entities')[0];
+        const locationId = csvAttr(mark, 'locations')[0];
+        if (entityId) showPopover(entityPopoverHtml(ENTITY_BY_ID[entityId]), e.clientX, e.clientY);
+        else if (locationId) showPopover(locationPopoverHtml(LOCATION_BY_ID[locationId]), e.clientX, e.clientY);
+      });
+      mark.addEventListener('mousemove', (e) => {
+        if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
+      });
+      mark.addEventListener('mouseleave', hidePopover);
     });
 
     // ── Event card click → highlight source evidence ──
@@ -593,31 +783,7 @@
       card.addEventListener('click', (e) => {
         // Ignore clicks on tag buttons (they do filtering)
         if (e.target.closest('.tag')) return;
-
-        const evId = card.dataset.event;
-        const ev = EVENT_BY_ID[evId];
-        if (!ev) return;
-
-        // Toggle active
-        const wasActive = card.classList.contains('active');
-        document.querySelectorAll('.event-card').forEach(c => c.classList.remove('active'));
-        document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
-        if (wasActive) return;
-        card.classList.add('active');
-
-        // Highlight evidence marks in source
-        if (ev.segment_ids) {
-          ev.segment_ids.forEach(sid => {
-            const marks = document.querySelectorAll(`mark.event[data-segment="${sid}"][data-event="${evId}"]`);
-            marks.forEach(m => m.classList.add('active-span'));
-            if (marks[0]) marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-          });
-        }
-
-        // Also highlight participant entities
-        (ev.participant_entity_ids || []).forEach(eid => {
-          document.querySelectorAll(`mark.entity[data-entity="${eid}"]`).forEach(m => m.classList.add('active-span'));
-        });
+        activateEvent(card.dataset.event);
       });
     });
 
@@ -632,56 +798,76 @@
           card.classList.toggle('dimmed', !match);
         });
         document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
-        document.querySelectorAll(`mark.entity[data-entity="${eid}"]`).forEach(m => m.classList.add('active-span'));
-        if (document.querySelector(`mark.entity[data-entity="${eid}"]`)) {
-          document.querySelector(`mark.entity[data-entity="${eid}"]`).scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
+        const marks = [...document.querySelectorAll('mark[data-entities]')].filter(m => csvAttr(m, 'entities').includes(eid));
+        marks.forEach(m => m.classList.add('active-span'));
+        if (marks[0]) marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
+      tag.addEventListener('mouseenter', (e) => showPopover(entityPopoverHtml(ENTITY_BY_ID[tag.dataset.entity]), e.clientX, e.clientY));
+      tag.addEventListener('mousemove', (e) => showPopover(popover.innerHTML, e.clientX, e.clientY));
+      tag.addEventListener('mouseleave', hidePopover);
+    });
+
+    document.querySelectorAll('.tag.location-tag').forEach(tag => {
+      tag.addEventListener('mouseenter', (e) => showPopover(locationPopoverHtml(LOCATION_BY_ID[tag.dataset.location]), e.clientX, e.clientY));
+      tag.addEventListener('mousemove', (e) => showPopover(popover.innerHTML, e.clientX, e.clientY));
+      tag.addEventListener('mouseleave', hidePopover);
     });
 
     // ── Thread tag click → filter timeline by thread ──
     document.querySelectorAll('.tag.thread-tag').forEach(tag => {
       tag.addEventListener('click', (e) => {
         e.stopPropagation();
-        const tid = tag.dataset.thread;
-        const thread = THREAD_BY_ID[tid];
-        if (!thread) return;
-        const threadEventIds = new Set();
-        (thread.evidence_refs || []).forEach(ref => {
-          // Thread evidence refs link to segments; find events in those segments
-          EVENTS.forEach(ev => {
-            if ((ev.segment_ids || []).includes(ref.segment_id)) threadEventIds.add(ev.event_id);
-          });
-        });
-        document.querySelectorAll('.event-card').forEach(card => {
-          card.classList.toggle('dimmed', !threadEventIds.has(card.dataset.event));
-        });
+        activateThread(tag.dataset.thread);
       });
     });
 
-    // ── Timeline tabs ──
-    function updateActiveTab() {
+    // ── Sidebar nav ──
+    function updateActiveNav() {
       const sections = [...document.querySelectorAll('.tl-section')];
       const scrollMid = timelineScroll.scrollTop + timelineScroll.clientHeight / 3;
       let activeId = null;
       for (const s of sections) {
         if (s.offsetTop <= scrollMid) activeId = s.dataset.timeline;
       }
-      document.querySelectorAll('.tl-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.timeline === activeId);
-      });
+      // Only auto-update timeline nav if no thread filter is active
+      const threadActive = document.querySelector('#threadNavList .nav-item.active');
+      if (!threadActive) {
+        document.querySelectorAll('#timelineNavList .nav-item').forEach(item => {
+          item.classList.toggle('active', item.dataset.timeline === activeId);
+        });
+      }
     }
 
-    document.querySelectorAll('.tl-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const section = document.querySelector(`.tl-section[data-timeline="${tab.dataset.timeline}"]`);
-        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Timeline nav items
+    document.querySelectorAll('#timelineNavList .nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        // Clear thread filter
+        document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
+        document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
+        clearFilterBtn.classList.add('active');
+        // Highlight this timeline
+        document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
+        item.classList.add('active');
+        // Scroll to section
+        const section = document.querySelector(`.tl-section[data-timeline="${item.dataset.timeline}"]`);
+        if (!section) return;
+        timelineScroll.scrollTo({
+          top: section.offsetTop - timelineScroll.offsetTop,
+          behavior: 'smooth',
+        });
+      });
+    });
+
+    // Thread nav items
+    document.querySelectorAll('#threadNavList .nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        activateThread(item.dataset.thread);
       });
     });
 
     // ── Init ──
     updateCurrentParagraph();
-    updateActiveTab();
+    updateActiveNav();
   </script>
 </body>
 </html>
