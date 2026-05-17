@@ -345,6 +345,53 @@ Planned improvements:
 
 All three are independent, additive changes touching `extraction_pipeline.py`, `extraction_quality.py`, and `cli.py`. No schema migration needed.
 
+Proposals A, B, and C are now implemented (commits `69aab40`, `ac66822`, `9db21bb`).
+
+### First LLM-Backed Chain Trial Findings (2026-05-17)
+
+A `run-chain --backend deepseek` trial over `unit-0002` (浮生六记, ~15.7K chars) completed with the following results and observations.
+
+#### Segment Restoration
+
+All 6 overview segments resolved to character offsets with 56 exact and 25 relocated evidence spans. Zero ambiguous or missing anchors. The relocation logic handles Classical Chinese punctuation variations well — omitted quote marks, annotation-style whitespace, and wrapper punctuation drift are all recovered.
+
+#### Validation Summary
+
+- 0 errors, 16 warnings — chain passed.
+- All 16 warnings are `surface_not_in_evidence_context` (non-actionable).
+- `ready_for_llm_repair: false` — no LLM repair pass needed.
+
+#### Warning Pattern Analysis
+
+The `surface_not_in_evidence_context` warnings fall into two categories:
+
+1. **Canonical names vs. narrative surface forms.** The LLM correctly identifies "沈复" (author name) and "陈芸" (full wife name) as canonical entities, but the Classical Chinese first-person narrative uses "余" (I) and "芸" (diminutive). The evidence paragraphs contain the narrative surface forms but not the canonical names. These are correct extractions with a surface-form mismatch between entity normalization and the evidence context.
+
+2. **Short/high-frequency CJK characters.** Surfaces like "余", "母", "芸", "吴", "吾姊" appear throughout the full text but not necessarily within the specific evidence paragraphs the LLM selected. For CJK text, 1-2 character surfaces are particularly sensitive to this because they can appear as substrings of other words or be distributed across paragraph boundaries.
+
+The validator's `containing_paragraph()` reconstructs evidence context from paragraphs containing the cited evidence spans. When a canonical name like "沈复" appears only in the preface/colophon while the narrative body uses "余", the evidence paragraphs correctly do not contain "沈复". The warning is accurate — the entity surface genuinely differs from the source form — but it does not indicate hallucination.
+
+#### Extraction Quality Observations
+
+- **Strengths:** Entity mentions include `alias_candidate_of` with confidence and rationale. Events cross-reference participant, location, and time mention IDs. Segment summaries are semantically coherent.
+- **Evidence granularity is coarse:** Many evidence spans quote entire paragraphs (50-150+ chars) rather than the specific phrases supporting each claim. This dilutes evidence-to-claim precision and enlarges the evidence context window, which in turn makes surface grounding harder.
+- **No cross-segment entity linking:** Each segment independently extracts entities. "沈复", "余", "芸", "陈芸" appear in multiple segments as separate mentions. The `alias_candidate_of` field works within segments but cross-segment linking is absent.
+- **Overview caching works:** The overview pass hit cache; all 6 segment passes ran with fresh cache keys.
+
+#### Proposed Improvements
+
+These are ordered by impact and will be implemented over subsequent commits.
+
+**1. Separate `canonical_name` from `surface` in the extraction schema.** The LLM should express "沈复" as `canonical_name` while keeping "余" as `surface` (the attested text form). This eliminates most `surface_not_in_evidence_context` warnings without losing information. The validator would ground `surface` in evidence context and treat `canonical_name` as an editorial normalization.
+
+**2. Add evidence-granularity guidance to the segment extraction prompt.** The system prompt should prefer sentence-level or phrase-level evidence quotes over paragraph-level quotes. This tightens grounding and shrinks the evidence context window, making surface validation more precise.
+
+**3. CJK-aware surface validation.** For segments where >50% of characters are CJK (Unicode ranges `一-鿿` etc.), single-character surfaces should skip the evidence-context grounding check. These are almost always valid pronouns, names, or common nouns that permeate the text.
+
+**4. Add cross-segment entity aliasing to the chain-level validation report.** The chain-level QC should flag entity mentions with identical or subset surfaces across segments as candidate aliases. This gives downstream merging a head start without requiring a full cross-unit canonicalization pass.
+
+**5. Revisit evidence context reconstruction for CJK.** `containing_paragraph()` splits on `\n\n`. Classical Chinese paragraphs can be hundreds of characters long with no blank-line breaks between semantic units. Consider sentence-boundary-based context windows (`。`, `！`, `？`) as an alternative or supplement to paragraph-based windows for CJK text.
+
 ### Long Unit Handling
 
 Some reader units are too long and semantically dense for one detailed extraction call.
