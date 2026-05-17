@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any, Protocol
 
 from .book_reader import StructureUnit, build_book_index, extract_unit_text
@@ -160,6 +161,10 @@ class MockExtractionBackend:
         )
 
 
+DEEPSEEK_DEFAULT_TIMEOUT = 300
+DEEPSEEK_DEFAULT_MAX_RETRIES = 3
+
+
 class DeepSeekBackend:
     def __init__(
         self,
@@ -168,6 +173,8 @@ class DeepSeekBackend:
         thinking: bool = False,
         reasoning_effort: str = "high",
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        timeout: float = DEEPSEEK_DEFAULT_TIMEOUT,
+        max_retries: int = DEEPSEEK_DEFAULT_MAX_RETRIES,
     ) -> None:
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
@@ -180,12 +187,19 @@ class DeepSeekBackend:
         self.thinking = thinking
         self.reasoning_effort = reasoning_effort
         self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.max_retries = max_retries
         self.api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DS_API_KEY")
         if not self.api_key:
             raise RuntimeError("DEEPSEEK_API_KEY or DS_API_KEY is required for DeepSeek extraction")
         from openai import OpenAI
 
-        self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com")
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url="https://api.deepseek.com",
+            timeout=timeout,
+            max_retries=0,
+        )
 
     @property
     def model_identity(self) -> str:
@@ -206,18 +220,32 @@ class DeepSeekBackend:
         }
         if self.thinking:
             kwargs["reasoning_effort"] = self.reasoning_effort
-        response = self.client.chat.completions.create(**kwargs)
-        choice = response.choices[0]
-        finish_reason = getattr(choice, "finish_reason", None)
-        content = choice.message.content
-        if not content:
-            raise RuntimeError("DeepSeek returned empty content for JSON extraction")
-        if finish_reason == "length":
-            raise ExtractionError(
-                "DeepSeek stopped because generation hit max_tokens or context length; "
-                "retry with a higher --max-tokens value or a smaller input segment."
-            )
-        return content
+
+        last_exception: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                last_exception = exc
+                if attempt < self.max_retries and _is_retryable(exc):
+                    delay = 2 ** attempt
+                    time.sleep(delay)
+                    continue
+                raise
+
+            choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
+            content = choice.message.content
+            if not content:
+                raise RuntimeError("DeepSeek returned empty content for JSON extraction")
+            if finish_reason == "length":
+                raise ExtractionError(
+                    "DeepSeek stopped because generation hit max_tokens or context length; "
+                    "retry with a higher --max-tokens value or a smaller input segment."
+                )
+            return content
+
+        raise last_exception  # type: ignore[misc]
 
 
 def run_local_bundle_extraction(
@@ -580,3 +608,18 @@ def last_nonempty_line(text: str) -> str:
         if stripped:
             return stripped
     return ""
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True for transient errors worth retrying (network, rate-limit, server)."""
+    try:
+        from openai import (  # type: ignore[import-untyped]
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+        )
+    except ImportError:
+        return False
+
+    return isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError))

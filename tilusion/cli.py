@@ -8,6 +8,8 @@ import sys
 from .book_reader import build_book_index, extract_unit_text
 from .extraction import (
     DEFAULT_MAX_TOKENS,
+    DEEPSEEK_DEFAULT_MAX_RETRIES,
+    DEEPSEEK_DEFAULT_TIMEOUT,
     DeepSeekBackend,
     ExtractionError,
     MockExtractionBackend,
@@ -22,6 +24,16 @@ from .extraction_pipeline import (
     run_unit_timeline_repair_pass,
 )
 from .extraction_quality import validate_extraction_quality
+
+
+def _add_llm_backend_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
+    parser.add_argument("--model", default="deepseek-v4-flash")
+    parser.add_argument("--thinking", action="store_true")
+    parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--timeout", type=float, default=DEEPSEEK_DEFAULT_TIMEOUT)
+    parser.add_argument("--retries", type=int, default=DEEPSEEK_DEFAULT_MAX_RETRIES)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,11 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_pass_parser.add_argument("book")
     run_pass_parser.add_argument("unit_id")
     run_pass_parser.add_argument("--pass", dest="pass_name", choices=["local-bundle"], default="local-bundle")
-    run_pass_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    run_pass_parser.add_argument("--model", default="deepseek-v4-flash")
-    run_pass_parser.add_argument("--thinking", action="store_true")
-    run_pass_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    run_pass_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(run_pass_parser)
     run_pass_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_passes")
     run_pass_parser.add_argument("--no-cache", action="store_true")
 
@@ -53,11 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_chain_parser.add_argument("book")
     run_chain_parser.add_argument("unit_id")
-    run_chain_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    run_chain_parser.add_argument("--model", default="deepseek-v4-flash")
-    run_chain_parser.add_argument("--thinking", action="store_true")
-    run_chain_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    run_chain_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(run_chain_parser)
     run_chain_parser.add_argument("--cache-dir", default=".tilusion_cache/extraction_chains")
     run_chain_parser.add_argument("--no-cache", action="store_true")
 
@@ -73,11 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run unit-level finalization over an existing extraction chain cache",
     )
     finalize_parser.add_argument("chain_cache_dir")
-    finalize_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    finalize_parser.add_argument("--model", default="deepseek-v4-flash")
-    finalize_parser.add_argument("--thinking", action="store_true")
-    finalize_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    finalize_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(finalize_parser)
     finalize_parser.add_argument("--no-cache", action="store_true")
 
     repair_parser = subparsers.add_parser(
@@ -85,11 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run unit-level repair pass over an existing unit finalization cache",
     )
     repair_parser.add_argument("finalization_pass_dir")
-    repair_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    repair_parser.add_argument("--model", default="deepseek-v4-flash")
-    repair_parser.add_argument("--thinking", action="store_true")
-    repair_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    repair_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(repair_parser)
     repair_parser.add_argument("--no-cache", action="store_true")
 
     timeline_parser = subparsers.add_parser(
@@ -97,11 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Construct partially-ordered timelines from repaired unit extraction",
     )
     timeline_parser.add_argument("repair_pass_dir")
-    timeline_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    timeline_parser.add_argument("--model", default="deepseek-v4-flash")
-    timeline_parser.add_argument("--thinking", action="store_true")
-    timeline_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    timeline_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(timeline_parser)
     timeline_parser.add_argument("--no-cache", action="store_true")
 
     timeline_repair_parser = subparsers.add_parser(
@@ -109,11 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repair specific issues in a timeline construction output",
     )
     timeline_repair_parser.add_argument("timeline_pass_dir")
-    timeline_repair_parser.add_argument("--backend", choices=["mock", "deepseek"], default="mock")
-    timeline_repair_parser.add_argument("--model", default="deepseek-v4-flash")
-    timeline_repair_parser.add_argument("--thinking", action="store_true")
-    timeline_repair_parser.add_argument("--reasoning-effort", default="high", choices=["high", "max"])
-    timeline_repair_parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    _add_llm_backend_args(timeline_repair_parser)
     timeline_repair_parser.add_argument("--no-cache", action="store_true")
 
     validate_parser = subparsers.add_parser(
@@ -342,6 +330,8 @@ def build_backend(args):
             thinking=args.thinking,
             reasoning_effort=args.reasoning_effort,
             max_tokens=args.max_tokens,
+            timeout=getattr(args, "timeout", DEEPSEEK_DEFAULT_TIMEOUT),
+            max_retries=getattr(args, "retries", DEEPSEEK_DEFAULT_MAX_RETRIES),
         )
     )
 
