@@ -304,6 +304,14 @@
     .conf-dot.medium { background: var(--conf-med); }
     .conf-dot.low { background: var(--conf-low); }
 
+    /* ---- right pane content column ---- */
+    .right-pane-content {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
     /* ---- timeline scroll area ---- */
     .timeline-scroll {
       min-height: 0;
@@ -452,8 +460,6 @@
 
     /* ---- thread view ---- */
     .thread-view-header {
-      position: sticky;
-      top: 0;
       z-index: 5;
       padding: 10px 20px;
       background: linear-gradient(to bottom, rgba(246, 238, 222, 0.98), rgba(246, 238, 222, 0.82));
@@ -463,6 +469,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      flex-shrink: 0;
     }
     .thread-view-header-info h3 {
       margin: 0;
@@ -702,9 +709,7 @@
               </div>
             </div>
           </nav>
-          <div class="timeline-scroll" id="timelineScroll">
-            <!-- TIMELINE_HTML -->
-          </div>
+          <!-- TIMELINE_HTML -->
         </div>
       </aside>
     </section>

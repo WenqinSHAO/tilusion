@@ -462,13 +462,15 @@ def generate(
         "<!-- TIMELINE_NAV -->": timeline_nav_html,
         "<!-- THREAD_NAV -->": thread_nav_html,
         "<!-- TIMELINE_HTML -->": (
-            '<div id="timelineContent" class="tl-content">'
+            '<div id="rightPaneContent" class="right-pane-content">'
             '<div class="thread-view-header" id="threadViewHeader" style="display:none">'
             '<div class="thread-view-header-info" id="threadViewHeaderInfo"></div>'
             '<button class="thread-toggle-btn" id="threadToggleBtn">Cards</button>'
             '</div>'
+            '<div class="timeline-scroll" id="timelineScroll">'
             '<svg id="timelineGraph" class="tl-graph"></svg>'
             '<div id="threadCardStack" class="thread-card-stack" style="display:none"></div>'
+            '</div>'
             '</div>'
         ),
         "<!-- DATA_SCRIPT -->": js_constants,
