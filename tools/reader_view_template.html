@@ -614,28 +614,67 @@
       backdrop-filter: blur(16px);
       box-shadow: var(--shadow);
       overflow: hidden;
-      min-height: 48px;
-      max-height: 280px;
-      transition: min-height 200ms ease;
+      min-height: 44px;
+      max-height: 260px;
+      transition: min-height 200ms ease, max-height 200ms ease;
     }
-    .chat-panel.expanded {
-      min-height: 220px;
+    .chat-panel.has-messages {
+      min-height: 200px;
+    }
+    .chat-panel.collapsed {
+      min-height: 44px;
+      max-height: 44px;
+    }
+    .chat-panel.collapsed .chat-messages,
+    .chat-panel.collapsed .chat-input-area {
+      display: none;
+    }
+    .chat-panel-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 16px;
+      flex-shrink: 0;
+    }
+    .chat-panel-title {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .chat-panel-toggle {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 6px;
+      line-height: 1;
+      border-radius: 6px;
+      transition: background 140ms ease;
+    }
+    .chat-panel-toggle:hover {
+      background: rgba(0,0,0,0.06);
+    }
+    .chat-panel.collapsed .chat-panel-toggle {
+      font-size: 18px;
     }
     .chat-messages {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
-      padding: 12px 16px;
+      padding: 4px 14px 8px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 6px;
     }
     .chat-message {
       max-width: 88%;
-      padding: 8px 12px;
-      border-radius: 14px;
-      font-size: 13px;
-      line-height: 1.55;
+      padding: 5px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      line-height: 1.45;
     }
     .chat-message.user {
       align-self: flex-end;
@@ -668,8 +707,8 @@
     }
     .chat-input-area {
       display: flex;
-      gap: 8px;
-      padding: 8px 14px;
+      gap: 6px;
+      padding: 6px 12px;
       border-top: 1px solid var(--soft-line);
       background: rgba(255, 250, 240, 0.45);
     }
@@ -677,13 +716,25 @@
       flex: 1;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 7px 14px;
+      padding: 5px 12px;
       font-family: var(--sans);
-      font-size: 13px;
+      font-size: 12px;
       color: var(--ink);
       background: rgba(255, 255, 255, 0.55);
       outline: none;
       transition: border-color 140ms ease;
+    }
+    .chat-input-area button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 12px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.55);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease;
     }
     .chat-input-area input:focus {
       border-color: rgba(215, 85, 51, 0.40);
@@ -692,22 +743,6 @@
       color: var(--muted);
       font-style: italic;
     }
-    .chat-input-area button {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 7px 16px;
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--ink);
-      background: rgba(255, 255, 255, 0.55);
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background 140ms ease;
-    }
-    .chat-input-area button:hover {
-      background: rgba(255,255,255,0.78);
-    }
-
     /* ---- responsive ---- */
     @media (max-width: 980px) {
       body { overflow: auto; }
@@ -782,6 +817,10 @@
     </section>
 
     <footer class="chat-panel" id="chatPanel">
+      <div class="chat-panel-bar">
+        <span class="chat-panel-title">Ask the book</span>
+        <button class="chat-panel-toggle" id="chatPanelToggle" title="Collapse chat">−</button>
+      </div>
       <div class="chat-messages" id="chatMessages">
         <div class="chat-message app">
           欢迎！你可以用自然语言询问关于《浮生六记》的事件、人物和时间线。<br>
@@ -1666,7 +1705,9 @@
       div.innerHTML = text;
       chatMessages.appendChild(div);
       chatMessages.scrollTop = chatMessages.scrollHeight;
-      chatPanel.classList.add('expanded');
+      chatPanel.classList.add('has-messages');
+      chatPanel.classList.remove('collapsed');
+      document.getElementById('chatPanelToggle').textContent = '−';
 
       // Wire up event citations
       div.querySelectorAll('.ev-cite').forEach(cite => {
@@ -1704,6 +1745,12 @@
     chatSendBtn.addEventListener('click', sendMessage);
     chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') sendMessage();
+    });
+
+    document.getElementById('chatPanelToggle').addEventListener('click', () => {
+      const btn = document.getElementById('chatPanelToggle');
+      chatPanel.classList.toggle('collapsed');
+      btn.textContent = chatPanel.classList.contains('collapsed') ? '+' : '−';
     });
   </script>
 </body>
