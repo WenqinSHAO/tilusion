@@ -241,96 +241,21 @@ def _location_label(lid: str, locations_by_id: dict[str, dict[str, Any]]) -> str
     return html.escape(loc.get("canonical_name", lid))
 
 
-def build_timeline_html(
+def build_timeline_nav(
     timelines: list[dict[str, Any]],
-    events_by_id: dict[str, dict[str, Any]],
-    entities_by_id: dict[str, dict[str, Any]],
-    locations_by_id: dict[str, dict[str, Any]],
-    threads_by_id: dict[str, dict[str, Any]],
-) -> tuple[str, str]:
-    """Build timeline nav items and sections HTML. Returns (nav_html, timeline_html)."""
+) -> str:
+    """Build timeline sidebar nav items. Returns nav HTML string."""
     nav_parts = []
-    section_parts = []
-
     for tl in timelines:
         tid = tl["timeline_id"]
         conf = tl.get("confidence", "medium")
-        summary = tl.get("summary", tid)
-        ordered = tl.get("ordered_events", [])
-
-        # Sidebar nav item
         nav_parts.append(
             f'<button class="nav-item" data-timeline="{html.escape(tid)}">'
             f'<span class="conf-dot {html.escape(conf)}"></span>'
             f"{html.escape(tid)}"
             f"</button>"
         )
-
-        # Section
-        cards = []
-        for entry in ordered:
-            eid = entry.get("event_id", "")
-            ev = events_by_id.get(eid)
-            if not ev:
-                continue
-            before = entry.get("before_events", []) or []
-            rationale = entry.get("rationale", "")
-
-            tags = []
-            # Participants
-            for peid in ev.get("participant_entity_ids", []) or []:
-                tags.append(
-                    f'<span class="tag entity-tag" data-entity="{html.escape(peid)}">'
-                    f"{_entity_label(peid, entities_by_id)}</span>"
-                )
-            # Locations
-            for lid in ev.get("location_ids", []) or []:
-                tags.append(
-                    f'<span class="tag location-tag" data-location="{html.escape(lid)}">'
-                    f"{_location_label(lid, locations_by_id)}</span>"
-                )
-            # Confidence
-            ev_conf = ev.get("confidence", "")
-            if ev_conf:
-                tags.append(f'<span class="tag conf-tag {html.escape(ev_conf)}">{html.escape(ev_conf)}</span>')
-            # QC notes flag
-            if ev.get("qc_notes"):
-                tags.append('<span class="tag" style="color:#9a4a3f">needs review</span>')
-            # before_edges
-            for beid in before:
-                tags.append(
-                    f'<span class="tag before-tag">&rarr; {html.escape(beid)}</span>'
-                )
-            # Thread associations
-            for th in threads_by_id.values():
-                th_sids = th.get("segment_ids", []) or []
-                ev_sids = ev.get("segment_ids", []) or []
-                if set(th_sids) & set(ev_sids):
-                    tags.append(
-                        f'<span class="tag thread-tag" data-thread="{html.escape(th["thread_id"])}">'
-                        f"{html.escape(th.get('summary', th['thread_id']) )}</span>"
-                    )
-
-            cards.append(
-                f'<article class="event-card" data-event="{html.escape(eid)}">'
-                f'<div class="ev-head"><span class="ev-id">{html.escape(eid)}</span></div>'
-                f'<div class="ev-summary">{html.escape(ev.get("summary", eid))}</div>'
-                + (f'<div class="ev-rationale">{html.escape(rationale)}</div>' if rationale else "")
-                + f'<div class="meta-row">{"".join(tags)}</div>'
-                f"</article>"
-            )
-
-        section_parts.append(
-            f'<div class="tl-section" data-timeline="{html.escape(tid)}">'
-            f'<div class="tl-section-header">'
-            f'<h3>{html.escape(summary)}</h3>'
-            f'<div class="tl-meta">{html.escape(tid)} · {len(cards)} events · confidence: {html.escape(conf)}</div>'
-            f"</div>"
-            + "\n".join(cards)
-            + "</div>"
-        )
-
-    return "\n".join(nav_parts), "\n".join(section_parts)
+    return "\n".join(nav_parts)
 
 
 def build_thread_nav(
@@ -374,7 +299,8 @@ def build_data_script(
     ]
     slim_events = [
         {k: ev[k] for k in ("event_id", "summary", "segment_ids", "source_order_hint",
-                             "participant_entity_ids", "location_ids", "evidence_refs", "qc_notes") if k in ev}
+                             "participant_entity_ids", "location_ids", "evidence_refs",
+                             "qc_notes", "time_refs", "confidence") if k in ev}
         for ev in events
     ]
     slim_locations = [
@@ -452,16 +378,14 @@ def generate(
 
     # Build components
     source_html = build_source_html(source_text, segments, entities, locations, events, evidence_by_segment)
-    timeline_nav_html, timeline_html = build_timeline_html(
-        timelines, events_by_id, entities_by_id, locations_by_id, threads_by_id,
-    )
+    timeline_nav_html = build_timeline_nav(timelines)
     thread_nav_html = build_thread_nav(threads, events)
     data_script = build_data_script(entities, events, locations, threads, timelines)
 
     # Build JS constants (replace DATA_PLACEHOLDER_* with real JSON arrays)
     js_constants = (
         '<script>\n'
-        f'const EVENTS = {json.dumps([{k: ev[k] for k in ("event_id","summary","segment_ids","source_order_hint","participant_entity_ids","location_ids","evidence_refs","qc_notes") if k in ev} for ev in events], ensure_ascii=False)};\n'
+        f'const EVENTS = {json.dumps([{k: ev[k] for k in ("event_id","summary","segment_ids","source_order_hint","participant_entity_ids","location_ids","evidence_refs","qc_notes","time_refs","confidence") if k in ev} for ev in events], ensure_ascii=False)};\n'
         f'const ENTITIES = {json.dumps([{k: e[k] for k in ("entity_id","canonical_name","surfaces","kind","summary") if k in e} for e in entities], ensure_ascii=False)};\n'
         f'const LOCATIONS = {json.dumps([{k: l[k] for k in ("location_id","canonical_name","surfaces","kind","summary") if k in l} for l in locations], ensure_ascii=False)};\n'
         f'const THREADS = {json.dumps([{k: t[k] for k in ("thread_id","summary","status","segment_ids","evidence_refs") if k in t} for t in threads], ensure_ascii=False)};\n'
@@ -481,7 +405,15 @@ def generate(
         "<!-- SOURCE_HTML -->": source_html,
         "<!-- TIMELINE_NAV -->": timeline_nav_html,
         "<!-- THREAD_NAV -->": thread_nav_html,
-        "<!-- TIMELINE_HTML -->": timeline_html,
+        "<!-- TIMELINE_HTML -->": (
+            '<div id="timelineContent" class="tl-content">'
+            '<svg id="timelineGraph" class="tl-graph"></svg>'
+            '<div id="threadView" class="thread-view" style="display:none">'
+            '<div class="thread-view-header" id="threadViewHeader"></div>'
+            '<div class="thread-card-stack" id="threadCardStack"></div>'
+            '</div>'
+            '</div>'
+        ),
         "<!-- DATA_SCRIPT -->": js_constants,
         "const EVENTS = DATA_PLACEHOLDER_EVENTS;": "",
         "const ENTITIES = DATA_PLACEHOLDER_ENTITIES;": "",

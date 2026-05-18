@@ -30,6 +30,8 @@
       --conf-high: #2d6a4f;
       --conf-med: #9c6a2f;
       --conf-low: #9a4a3f;
+      --graph-lane: rgba(21,19,15,0.18);
+      --graph-dot-stroke: rgba(21,19,15,0.40);
     }
 
     * { box-sizing: border-box; }
@@ -213,14 +215,6 @@
     }
     .source-text p:first-child { text-indent: 0; }
 
-    .segment-text {
-      font-family: var(--serif);
-      font-size: 18px;
-      line-height: 1.85;
-      letter-spacing: 0.01em;
-      text-align: justify;
-    }
-
     /* marks */
     mark {
       background: transparent;
@@ -325,34 +319,105 @@
       min-height: 0;
       overflow-y: auto;
       scroll-behavior: smooth;
-      padding: 0 16px 120px;
     }
 
-    .tl-section {
-      margin-top: 20px;
-      padding-bottom: 8px;
+    /* ---- SVG git graph ---- */
+    .tl-graph {
+      display: block;
+      width: 100%;
+      cursor: default;
     }
-    .tl-section-header {
+    .tl-graph .lane-line {
+      stroke: var(--graph-lane);
+      stroke-width: 2.5;
+      fill: none;
+      stroke-linecap: round;
+    }
+    .tl-graph .edge-curve {
+      stroke: var(--graph-lane);
+      stroke-width: 1.8;
+      fill: none;
+      stroke-linecap: round;
+      stroke-dasharray: 5 4;
+      opacity: 0.8;
+    }
+    .tl-graph .edge-curve.same-lane {
+      stroke: rgba(21,19,15,0.12);
+      stroke-dasharray: none;
+      stroke-width: 2;
+    }
+    .tl-graph .cross-lane-connector {
+      stroke: rgba(21,19,15,0.13);
+      stroke-width: 1.5;
+      fill: none;
+      stroke-dasharray: 3 4;
+    }
+    .tl-graph .event-dot {
+      cursor: pointer;
+      transition: r 140ms ease, filter 140ms ease;
+    }
+    .tl-graph .event-dot:hover {
+      filter: brightness(0.85);
+    }
+    .tl-graph .event-dot.active-dot {
+      filter: brightness(0.8) drop-shadow(0 0 4px var(--accent-soft));
+    }
+    .tl-graph .event-dot.conf-high { fill: var(--conf-high); stroke: var(--conf-high); }
+    .tl-graph .event-dot.conf-medium { fill: var(--conf-med); stroke: var(--conf-med); }
+    .tl-graph .event-dot.conf-low { fill: var(--conf-low); stroke: var(--conf-low); }
+    .tl-graph .event-dot.conf-unknown { fill: var(--muted); stroke: var(--muted); }
+    .tl-graph .time-anchor-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      fill: var(--muted);
+      pointer-events: none;
+      user-select: none;
+    }
+    .tl-graph .event-summary-label {
+      font-family: var(--serif);
+      font-size: 14px;
+      fill: var(--ink);
+      pointer-events: none;
+      user-select: none;
+    }
+    .tl-graph .timeline-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      fill: var(--muted);
+      text-anchor: middle;
+      pointer-events: none;
+      user-select: none;
+    }
+    .tl-graph .dimmed-dot {
+      opacity: 0.18;
+      transition: opacity 200ms ease;
+    }
+
+    /* ---- thread view ---- */
+    .thread-view {
+      padding: 0 16px 120px;
+    }
+    .thread-view-header {
       position: sticky;
       top: 0;
       z-index: 5;
-      padding: 10px 0 8px;
-      background: linear-gradient(to bottom, rgba(246, 238, 222, 0.98), rgba(246, 238, 222, 0.80));
+      padding: 14px 0 10px;
+      background: linear-gradient(to bottom, rgba(246, 238, 222, 0.98), rgba(246, 238, 222, 0.82));
       backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--soft-line);
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
-    .tl-section-header h3 {
+    .thread-view-header h3 {
       margin: 0;
       font-family: var(--serif);
-      font-size: 22px;
+      font-size: 24px;
       letter-spacing: -0.03em;
     }
-    .tl-section-header .tl-meta {
+    .thread-view-header .thread-meta {
       font-family: var(--mono);
       font-size: 10px;
       color: var(--muted);
-      margin-top: 3px;
+      margin-top: 4px;
     }
 
     .event-card {
@@ -395,13 +460,6 @@
       letter-spacing: -0.02em;
       margin: 0 0 6px;
     }
-    .event-card .ev-rationale {
-      font-size: 12px;
-      color: #6b6052;
-      line-height: 1.4;
-      margin-bottom: 8px;
-      font-style: italic;
-    }
 
     .meta-row {
       display: flex;
@@ -428,12 +486,11 @@
     .tag.conf-tag.high { color: var(--conf-high); border-color: rgba(45,106,79,0.24); }
     .tag.conf-tag.medium { color: var(--conf-med); border-color: rgba(156,106,47,0.24); }
     .tag.conf-tag.low { color: var(--conf-low); border-color: rgba(154,74,63,0.24); }
-    .tag.before-tag { color: var(--accent); border-color: rgba(215,85,51,0.24); font-size: 9px; }
 
     .popover {
       position: fixed;
       z-index: 50;
-      max-width: 320px;
+      max-width: 340px;
       padding: 12px 14px;
       border: 1px solid var(--line);
       border-radius: 14px;
@@ -609,12 +666,16 @@
     // ── DOM refs ──
     const sourceScroll = document.getElementById('sourceScroll');
     const timelineScroll = document.getElementById('timelineScroll');
-
-    const rightPane = document.getElementById('rightPane');
     const popover = document.getElementById('popover');
+    const clearFilterBtn = document.getElementById('clearFilterBtn');
+
+    // ── State ──
+    let currentView = 'timeline'; // 'timeline' | 'thread'
+    let activeThreadId = null;
+    let activeTimelineId = null;
+    let _graphLayout = null;
 
     sourceScroll.addEventListener('scroll', updateCurrentParagraph);
-    timelineScroll.addEventListener('scroll', updateActiveNav);
 
     function updateCurrentParagraph() {
       const paras = [...sourceScroll.querySelectorAll('.source-text p')];
@@ -644,6 +705,16 @@
       });
     }
 
+    function entityLabel(eid) {
+      const ent = ENTITY_BY_ID[eid];
+      return ent ? (ent.canonical_name || eid) : eid;
+    }
+
+    function locationLabel(lid) {
+      const loc = LOCATION_BY_ID[lid];
+      return loc ? (loc.canonical_name || lid) : lid;
+    }
+
     function entityPopoverHtml(entity) {
       if (!entity) return '';
       const surfaces = (entity.surfaces || []).join(' · ');
@@ -663,6 +734,30 @@
         <div class="muted">${location.location_id}${location.kind ? ' · ' + location.kind : ''}</div>
         ${surfaces ? `<div><b>aliases:</b> ${surfaces}</div>` : ''}
         ${location.summary ? `<div>${location.summary}</div>` : ''}
+      `;
+    }
+
+    function eventCardHtml(ev, rationales) {
+      const tags = [];
+      (ev.participant_entity_ids || []).forEach(eid => {
+        tags.push(`<span class="tag entity-tag">${entityLabel(eid)}</span>`);
+      });
+      (ev.location_ids || []).forEach(lid => {
+        tags.push(`<span class="tag location-tag">${locationLabel(lid)}</span>`);
+      });
+      if (ev.confidence) {
+        tags.push(`<span class="tag conf-tag ${ev.confidence}">${ev.confidence}</span>`);
+      }
+      if (ev.qc_notes && ev.qc_notes.length > 0) {
+        tags.push('<span class="tag" style="color:#9a4a3f">needs review</span>');
+      }
+      const rat = rationales && rationales.length ? `<div style="font-size:11px;color:#6b6052;margin-top:4px;font-style:italic">${rationales.join(' · ')}</div>` : '';
+      return `
+        <strong>${ev.summary || ev.event_id}</strong>
+        <div class="muted">${ev.event_id}</div>
+        ${ev.time_refs && ev.time_refs.length ? '<div style="margin-bottom:4px">' + ev.time_refs.map(tr => tr.surface || tr.normalized_hint || '').filter(Boolean).join(' · ') + '</div>' : ''}
+        ${tags.length ? '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">' + tags.join('') + '</div>' : ''}
+        ${rat}
       `;
     }
 
@@ -690,33 +785,31 @@
       });
     });
 
-    // ── Clear filter button ──
-    const clearFilterBtn = document.getElementById('clearFilterBtn');
-    clearFilterBtn.addEventListener('click', () => {
-      document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
-      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-      clearFilterBtn.classList.add('active');
-    });
-
     // ── Mode switch ──
     document.querySelectorAll('[data-mode]').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         if (btn.dataset.mode === 'review') {
+          document.querySelectorAll('.event-dot').forEach(dot => {
+            const ev = EVENT_BY_ID[dot.dataset.event];
+            const needsReview = ev && ev.qc_notes && ev.qc_notes.length > 0;
+            dot.classList.toggle('dimmed-dot', !needsReview);
+          });
           document.querySelectorAll('.event-card').forEach(card => {
             const ev = EVENT_BY_ID[card.dataset.event];
             const needsReview = ev && ev.qc_notes && ev.qc_notes.length > 0;
             card.classList.toggle('dimmed', !needsReview);
-            card.classList.toggle('active', needsReview);
           });
         } else {
-          document.querySelectorAll('.event-card').forEach(card => { card.classList.remove('dimmed','active'); });
+          document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('dimmed-dot'));
+          document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
         }
       });
     });
 
     function clearActiveSource() {
+      document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('active-dot'));
       document.querySelectorAll('.event-card').forEach(c => c.classList.remove('active'));
       document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
     }
@@ -725,8 +818,13 @@
       const ev = EVENT_BY_ID[evId];
       if (!ev) return;
       clearActiveSource();
-      document.querySelectorAll(`.event-card[data-event="${evId}"]`).forEach(card => card.classList.add('active'));
 
+      // Activate dot in graph
+      document.querySelectorAll(`.event-dot[data-event="${evId}"]`).forEach(d => d.classList.add('active-dot'));
+      // Activate card in thread view
+      document.querySelectorAll(`.event-card[data-event="${evId}"]`).forEach(c => c.classList.add('active'));
+
+      // Highlight source evidence
       const eventMarks = [...document.querySelectorAll('mark[data-events]')].filter(m => csvAttr(m, 'events').includes(evId));
       eventMarks.forEach(m => m.classList.add('active-span'));
       if (eventMarks[0]) eventMarks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -743,28 +841,468 @@
       return new Set(EVENTS.filter(ev => (ev.segment_ids || []).some(sid => segments.has(sid))).map(ev => ev.event_id));
     }
 
-    function activateThread(tid) {
-      const thread = THREAD_BY_ID[tid];
-      if (!thread) return;
-      // Highlight the active thread nav item, clear timeline nav
-      document.querySelectorAll('#threadNavList .nav-item').forEach(item => {
-        item.classList.toggle('active', item.dataset.thread === tid);
-      });
-      document.querySelectorAll('#timelineNavList .nav-item').forEach(item => {
-        item.classList.remove('active');
-      });
-      clearFilterBtn.classList.remove('active');
+    // ── Timeline graph rendering ──
 
-      const ids = threadEventIds(thread);
-      document.querySelectorAll('.event-card').forEach(card => {
-        card.classList.toggle('dimmed', !ids.has(card.dataset.event));
+    function computeGraphLayout() {
+      if (_graphLayout) return _graphLayout;
+
+      // Build adjacency from all before_edges across all timelines
+      const adj = {};       // event_id -> [child_event_id]
+      const inDegree = {};  // event_id -> count
+      const allEventIds = new Set(EVENTS.map(e => e.event_id));
+
+      // Initialize
+      allEventIds.forEach(eid => { adj[eid] = []; inDegree[eid] = 0; });
+
+      TIMELINES.forEach(tl => {
+        tl.ordered_events.forEach(oe => {
+          const eid = oe.event_id;
+          if (!adj[eid]) { adj[eid] = []; inDegree[eid] = 0; }
+          (oe.before_events || []).forEach(beid => {
+            // eid is before beid → edge from eid to beid
+            if (adj[eid]) adj[eid].push(beid);
+            inDegree[beid] = (inDegree[beid] || 0) + 1;
+          });
+        });
       });
-      // Scroll to first visible card
-      const firstVisible = document.querySelector('.event-card:not(.dimmed)');
-      if (firstVisible) firstVisible.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      // Topological sort (Kahn's algorithm) with rank = longest path
+      const ranks = {};
+      const queue = [];
+      for (const [eid, deg] of Object.entries(inDegree)) {
+        if (deg === 0) {
+          ranks[eid] = 0;
+          queue.push(eid);
+        }
+      }
+
+      while (queue.length > 0) {
+        const eid = queue.shift();
+        for (const child of (adj[eid] || [])) {
+          ranks[child] = Math.max(ranks[child] || 0, (ranks[eid] || 0) + 1);
+          inDegree[child]--;
+          if (inDegree[child] === 0) queue.push(child);
+        }
+      }
+
+      // Assign default rank to any remaining
+      allEventIds.forEach(eid => {
+        if (!(eid in ranks)) ranks[eid] = 0;
+      });
+
+      // Per-timeline ordering: within a timeline, events without before_edges
+      // get ordered by their position in ordered_events. Compute timeline-local order.
+      const timelineLocalOrder = {};
+      TIMELINES.forEach(tl => {
+        const localOrder = {};
+        tl.ordered_events.forEach((oe, i) => { localOrder[oe.event_id] = i; });
+        timelineLocalOrder[tl.timeline_id] = localOrder;
+      });
+
+      // Refine ranks: within each timeline, ensure events are ordered by local position
+      // when they have the same topological rank
+      // Build rank groups, sort each group by earliest timeline position
+      const rankGroups = {};
+      allEventIds.forEach(eid => {
+        const r = ranks[eid] || 0;
+        if (!rankGroups[r]) rankGroups[r] = [];
+        rankGroups[r].push(eid);
+      });
+
+      // For events at the same rank, assign sub-ranks based on timeline order
+      // so they don't overlap visually
+      const subRanks = {};
+      Object.entries(rankGroups).forEach(([r, eids]) => {
+        // Sort by first appearance in any timeline
+        eids.sort((a, b) => {
+          let aFirst = Infinity, bFirst = Infinity;
+          TIMELINES.forEach(tl => {
+            const lo = timelineLocalOrder[tl.timeline_id];
+            if (lo && a in lo && lo[a] < aFirst) aFirst = lo[a];
+            if (lo && b in lo && lo[b] < bFirst) bFirst = lo[b];
+          });
+          return aFirst - bFirst;
+        });
+        eids.forEach((eid, i) => { subRanks[eid] = parseInt(r) + i * 0.01; });
+      });
+
+      // Map each event to which timelines contain it
+      const eventTimelines = {};
+      const eventRationales = {};
+      TIMELINES.forEach(tl => {
+        tl.ordered_events.forEach(oe => {
+          if (!eventTimelines[oe.event_id]) {
+            eventTimelines[oe.event_id] = [];
+            eventRationales[oe.event_id] = [];
+          }
+          eventTimelines[oe.event_id].push(tl.timeline_id);
+          if (oe.rationale) eventRationales[oe.event_id].push(oe.rationale);
+        });
+      });
+
+      // Collect edges for rendering
+      const edges = [];
+      const edgeKey = (a, b) => `${a}|||${b}`;
+      const addedEdges = new Set();
+      TIMELINES.forEach(tl => {
+        const tid = tl.timeline_id;
+        tl.ordered_events.forEach(oe => {
+          (oe.before_events || []).forEach(beid => {
+            const key = edgeKey(oe.event_id, beid);
+            if (!addedEdges.has(key)) {
+              addedEdges.add(key);
+              edges.push({
+                from: oe.event_id,
+                to: beid,
+                fromTimeline: tid,
+                toTimelines: eventTimelines[beid] || [],
+              });
+            }
+          });
+        });
+      });
+
+      // Pick a "primary lane" for each event (first timeline it appears in)
+      const primaryLane = {};
+      TIMELINES.forEach(tl => {
+        tl.ordered_events.forEach(oe => {
+          if (!(oe.event_id in primaryLane)) {
+            primaryLane[oe.event_id] = tl.timeline_id;
+          }
+        });
+      });
+
+      _graphLayout = {
+        ranks,
+        subRanks,
+        eventTimelines,
+        eventRationales,
+        edges,
+        primaryLane,
+        timelineLocalOrder,
+      };
+      return _graphLayout;
     }
 
-    // ── Source marks ──
+    function renderTimelineGraph() {
+      const layout = computeGraphLayout();
+      const { ranks, subRanks, eventTimelines, eventRationales, edges, primaryLane } = layout;
+
+      const svg = document.getElementById('timelineGraph');
+      const container = timelineScroll;
+      const containerWidth = container.clientWidth;
+      if (containerWidth <= 0) return;
+
+      const numLanes = TIMELINES.length;
+      const margin = { top: 50, right: 24, left: 24, bottom: 60 };
+      const laneSpacing = Math.max(160, Math.min(240, (containerWidth - margin.left - margin.right - 40) / Math.max(1, numLanes)));
+      const rowHeight = 80;
+      const dotRadius = 7;
+
+      // Lane X positions
+      const laneX = {};
+      TIMELINES.forEach((tl, i) => {
+        laneX[tl.timeline_id] = margin.left + 30 + i * laneSpacing;
+      });
+
+      // Max sub-rank
+      let maxSubRank = 0;
+      Object.values(subRanks).forEach(sr => { if (sr > maxSubRank) maxSubRank = sr; });
+      const totalRows = Math.ceil(maxSubRank) + 2;
+
+      const svgWidth = margin.left + numLanes * laneSpacing + margin.right;
+      const svgHeight = margin.top + totalRows * rowHeight + margin.bottom;
+
+      svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
+      svg.setAttribute('width', svgWidth);
+      svg.style.minHeight = svgHeight + 'px';
+      svg.innerHTML = '';
+
+      // Defs for arrowheads
+      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      defs.innerHTML = `
+        <marker id="arrowhead" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="6" markerHeight="5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="rgba(21,19,15,0.35)" />
+        </marker>
+      `;
+      svg.appendChild(defs);
+
+      // Background group
+      const bgGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+      // Draw lane lines
+      TIMELINES.forEach(tl => {
+        const x = laneX[tl.timeline_id];
+        // Find min and max sub-rank for events in this timeline
+        let minY = Infinity, maxY = -Infinity;
+        tl.ordered_events.forEach(oe => {
+          const sr = subRanks[oe.event_id];
+          if (sr !== undefined) {
+            if (sr < minY) minY = sr;
+            if (sr > maxY) maxY = sr;
+          }
+        });
+        if (!isFinite(minY)) { minY = 0; maxY = 1; }
+        const y1 = margin.top + minY * rowHeight;
+        const y2 = margin.top + maxY * rowHeight;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x);
+        line.setAttribute('y1', y1 - 12);
+        line.setAttribute('x2', x);
+        line.setAttribute('y2', y2 + 12);
+        line.setAttribute('class', 'lane-line');
+        bgGroup.appendChild(line);
+      });
+
+      // Draw cross-lane connectors for events in multiple timelines
+      Object.entries(eventTimelines).forEach(([eid, tids]) => {
+        if (tids.length < 2) return;
+        const sr = subRanks[eid];
+        if (sr === undefined) return;
+        const y = margin.top + sr * rowHeight;
+        const xs = tids.map(tid => laneX[tid]).sort((a, b) => a - b);
+        for (let i = 0; i < xs.length - 1; i++) {
+          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          line.setAttribute('x1', xs[i] + dotRadius);
+          line.setAttribute('y1', y);
+          line.setAttribute('x2', xs[i + 1] - dotRadius);
+          line.setAttribute('y2', y);
+          line.setAttribute('class', 'cross-lane-connector');
+          bgGroup.appendChild(line);
+        }
+      });
+
+      // Draw before_edges as bezier curves
+      const edgesGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      edges.forEach(edge => {
+        const fromSr = subRanks[edge.from];
+        const toSr = subRanks[edge.to];
+        if (fromSr === undefined || toSr === undefined) return;
+
+        const fromX = laneX[edge.fromTimeline] || laneX[primaryLane[edge.from]];
+        if (!fromX) return;
+        const toX = laneX[primaryLane[edge.to]];
+        if (!toX) return;
+
+        const y1 = margin.top + fromSr * rowHeight + dotRadius;
+        const y2 = margin.top + toSr * rowHeight - dotRadius;
+
+        const sameLane = Math.abs(fromX - toX) < 1;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+
+        if (sameLane) {
+          path.setAttribute('d', `M ${fromX} ${y1} L ${toX} ${y2}`);
+          path.setAttribute('class', 'edge-curve same-lane');
+        } else {
+          const midY = (y1 + y2) / 2;
+          const dx = Math.abs(toX - fromX) * 0.4;
+          path.setAttribute('d', `M ${fromX} ${y1} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${y2}`);
+          path.setAttribute('class', 'edge-curve');
+          path.setAttribute('marker-end', 'url(#arrowhead)');
+        }
+        edgesGroup.appendChild(path);
+      });
+
+      // Draw event dots and labels
+      const dotsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      const labelsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+      // For each timeline, render dots
+      const renderedEvents = new Set();
+      TIMELINES.forEach(tl => {
+        tl.ordered_events.forEach(oe => {
+          const eid = oe.event_id;
+          const ev = EVENT_BY_ID[eid];
+          if (!ev) return;
+          const sr = subRanks[eid];
+          if (sr === undefined) return;
+
+          const x = laneX[tl.timeline_id];
+          const y = margin.top + sr * rowHeight;
+          const conf = ev.confidence || 'unknown';
+
+          // Draw dot
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', x);
+          circle.setAttribute('cy', y);
+          circle.setAttribute('r', dotRadius);
+          circle.setAttribute('class', `event-dot conf-${conf}`);
+          circle.setAttribute('data-event', eid);
+          circle.setAttribute('data-x', x);
+          circle.setAttribute('data-y', y);
+          circle.setAttribute('stroke', 'var(--graph-dot-stroke)');
+          circle.setAttribute('stroke-width', '1.5');
+
+          // Hover → popover
+          circle.addEventListener('mouseenter', (e) => {
+            const rationaleList = eventRationales[eid] || [];
+            showPopover(eventCardHtml(ev, rationaleList), e.clientX, e.clientY);
+          });
+          circle.addEventListener('mousemove', (e) => {
+            if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
+          });
+          circle.addEventListener('mouseleave', hidePopover);
+
+          // Click → activate
+          circle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            activateEvent(eid);
+          });
+
+          dotsGroup.appendChild(circle);
+          renderedEvents.add(eid);
+
+          // Time anchor label (right of dot)
+          const timeAnchors = [];
+          (ev.time_refs || []).forEach(tr => {
+            const s = tr.surface || tr.normalized_hint || '';
+            if (s && s.length < 50) timeAnchors.push(s);
+          });
+          if (timeAnchors.length > 0) {
+            const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            label.setAttribute('x', x + dotRadius + 6);
+            label.setAttribute('y', y + 3);
+            label.setAttribute('class', 'time-anchor-label');
+            label.textContent = timeAnchors.slice(0, 3).join(' · ');
+            labelsGroup.appendChild(label);
+          }
+
+          // Event summary label (right of dot, below time anchor)
+          const summaryLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          summaryLabel.setAttribute('x', x + dotRadius + 6);
+          summaryLabel.setAttribute('y', y + 19);
+          summaryLabel.setAttribute('class', 'event-summary-label');
+          const summary = (ev.summary || eid);
+          summaryLabel.textContent = summary.length > 28 ? summary.slice(0, 26) + '…' : summary;
+          labelsGroup.appendChild(summaryLabel);
+        });
+      });
+
+      // Timeline title at top of each lane
+      TIMELINES.forEach(tl => {
+        const x = laneX[tl.timeline_id];
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        title.setAttribute('x', x);
+        title.setAttribute('y', margin.top - 20);
+        title.setAttribute('class', 'timeline-title');
+        const tconf = tl.confidence || 'medium';
+        title.textContent = tl.timeline_id;
+        labelsGroup.appendChild(title);
+
+        // Confidence dot
+        const cdot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        cdot.setAttribute('cx', x);
+        cdot.setAttribute('cy', margin.top - 28);
+        cdot.setAttribute('r', 4);
+        cdot.setAttribute('fill', `var(--conf-${tconf})`);
+        cdot.setAttribute('opacity', '0.7');
+        labelsGroup.appendChild(cdot);
+      });
+
+      svg.appendChild(bgGroup);
+      svg.appendChild(edgesGroup);
+      svg.appendChild(dotsGroup);
+      svg.appendChild(labelsGroup);
+
+      // Invalidate layout cache for next render
+      _graphLayout = null;
+    }
+
+    // ── Thread view rendering ──
+
+    function renderThreadView(threadId) {
+      const thread = THREAD_BY_ID[threadId];
+      if (!thread) return;
+
+      document.getElementById('timelineGraph').style.display = 'none';
+      const threadView = document.getElementById('threadView');
+      threadView.style.display = 'block';
+
+      const header = document.getElementById('threadViewHeader');
+      const eventCount = threadEventIds(thread).size;
+      header.innerHTML = `
+        <h3>${thread.summary || thread.thread_id}</h3>
+        <div class="thread-meta">${thread.thread_id} · ${eventCount} events · ${thread.status || 'active'}</div>
+      `;
+
+      const stack = document.getElementById('threadCardStack');
+      const ids = threadEventIds(thread);
+
+      // Sort events by source_order_hint
+      const threadEvents = EVENTS
+        .filter(ev => ids.has(ev.event_id))
+        .sort((a, b) => (a.source_order_hint || 0) - (b.source_order_hint || 0));
+
+      const cards = threadEvents.map(ev => {
+        const tags = [];
+        (ev.participant_entity_ids || []).forEach(eid => {
+          tags.push(`<span class="tag entity-tag">${entityLabel(eid)}</span>`);
+        });
+        (ev.location_ids || []).forEach(lid => {
+          tags.push(`<span class="tag location-tag">${locationLabel(lid)}</span>`);
+        });
+        if (ev.confidence) {
+          tags.push(`<span class="tag conf-tag ${ev.confidence}">${ev.confidence}</span>`);
+        }
+        if (ev.qc_notes && ev.qc_notes.length > 0) {
+          tags.push('<span class="tag" style="color:#9a4a3f">needs review</span>');
+        }
+        // Show time refs if any
+        (ev.time_refs || []).forEach(tr => {
+          const s = tr.surface || tr.normalized_hint || '';
+          if (s) tags.push(`<span class="tag" style="color:var(--muted)">${s}</span>`);
+        });
+
+        return `
+          <article class="event-card" data-event="${ev.event_id}">
+            <div class="ev-head"><span class="ev-id">${ev.event_id}</span></div>
+            <div class="ev-summary">${ev.summary || ev.event_id}</div>
+            <div class="meta-row">${tags.join('')}</div>
+          </article>
+        `;
+      });
+
+      stack.innerHTML = cards.join('\n');
+
+      // Wire up card click → source highlight
+      stack.querySelectorAll('.event-card').forEach(card => {
+        card.addEventListener('click', () => activateEvent(card.dataset.event));
+      });
+
+      // Wire up entity/location tag hover → popover
+      stack.querySelectorAll('.tag.entity-tag').forEach(tag => {
+        tag.addEventListener('mouseenter', (e) => {
+          const eid = ENTITY_BY_ID[tag.textContent.trim()] ? Object.entries(ENTITY_BY_ID).find(([_, v]) => v.canonical_name === tag.textContent.trim())?.[0] : null;
+          if (eid) showPopover(entityPopoverHtml(ENTITY_BY_ID[eid]), e.clientX, e.clientY);
+        });
+        tag.addEventListener('mousemove', (e) => {
+          if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
+        });
+        tag.addEventListener('mouseleave', hidePopover);
+      });
+    }
+
+    function showTimelineView() {
+      currentView = 'timeline';
+      activeThreadId = null;
+      document.getElementById('threadView').style.display = 'none';
+      document.getElementById('timelineGraph').style.display = 'block';
+      document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
+      clearFilterBtn.classList.add('active');
+      renderTimelineGraph();
+    }
+
+    // ── Clear filter ──
+    clearFilterBtn.addEventListener('click', () => {
+      if (currentView === 'thread') showTimelineView();
+      document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('dimmed-dot'));
+      document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
+      clearFilterBtn.classList.add('active');
+    });
+
+    // ── Source marks hover → popover ──
     document.querySelectorAll('mark.source-mark').forEach(mark => {
       mark.addEventListener('mouseenter', (e) => {
         const entityId = csvAttr(mark, 'entities')[0];
@@ -778,96 +1316,72 @@
       mark.addEventListener('mouseleave', hidePopover);
     });
 
-    // ── Event card click → highlight source evidence ──
-    document.querySelectorAll('.event-card').forEach(card => {
-      card.addEventListener('click', (e) => {
-        // Ignore clicks on tag buttons (they do filtering)
-        if (e.target.closest('.tag')) return;
-        activateEvent(card.dataset.event);
-      });
-    });
-
-    // ── Entity tag click → filter timeline by entity ──
-    document.querySelectorAll('.tag.entity-tag').forEach(tag => {
-      tag.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const eid = tag.dataset.entity;
-        document.querySelectorAll('.event-card').forEach(card => {
-          const ev = EVENT_BY_ID[card.dataset.event];
-          const match = ev && (ev.participant_entity_ids || []).includes(eid);
-          card.classList.toggle('dimmed', !match);
-        });
-        document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
-        const marks = [...document.querySelectorAll('mark[data-entities]')].filter(m => csvAttr(m, 'entities').includes(eid));
-        marks.forEach(m => m.classList.add('active-span'));
-        if (marks[0]) marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
-      tag.addEventListener('mouseenter', (e) => showPopover(entityPopoverHtml(ENTITY_BY_ID[tag.dataset.entity]), e.clientX, e.clientY));
-      tag.addEventListener('mousemove', (e) => showPopover(popover.innerHTML, e.clientX, e.clientY));
-      tag.addEventListener('mouseleave', hidePopover);
-    });
-
-    document.querySelectorAll('.tag.location-tag').forEach(tag => {
-      tag.addEventListener('mouseenter', (e) => showPopover(locationPopoverHtml(LOCATION_BY_ID[tag.dataset.location]), e.clientX, e.clientY));
-      tag.addEventListener('mousemove', (e) => showPopover(popover.innerHTML, e.clientX, e.clientY));
-      tag.addEventListener('mouseleave', hidePopover);
-    });
-
-    // ── Thread tag click → filter timeline by thread ──
-    document.querySelectorAll('.tag.thread-tag').forEach(tag => {
-      tag.addEventListener('click', (e) => {
-        e.stopPropagation();
-        activateThread(tag.dataset.thread);
-      });
-    });
-
-    // ── Sidebar nav ──
-    function updateActiveNav() {
-      const sections = [...document.querySelectorAll('.tl-section')];
-      const scrollMid = timelineScroll.scrollTop + timelineScroll.clientHeight / 3;
-      let activeId = null;
-      for (const s of sections) {
-        if (s.offsetTop <= scrollMid) activeId = s.dataset.timeline;
-      }
-      // Only auto-update timeline nav if no thread filter is active
-      const threadActive = document.querySelector('#threadNavList .nav-item.active');
-      if (!threadActive) {
-        document.querySelectorAll('#timelineNavList .nav-item').forEach(item => {
-          item.classList.toggle('active', item.dataset.timeline === activeId);
-        });
-      }
-    }
-
-    // Timeline nav items
+    // ── Timeline nav items ──
     document.querySelectorAll('#timelineNavList .nav-item').forEach(item => {
       item.addEventListener('click', () => {
-        // Clear thread filter
+        if (currentView !== 'timeline') showTimelineView();
+        document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('dimmed-dot'));
         document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
         document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
         clearFilterBtn.classList.add('active');
-        // Highlight this timeline
+
+        // Highlight active timeline nav
         document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
         item.classList.add('active');
-        // Scroll to section
-        const section = document.querySelector(`.tl-section[data-timeline="${item.dataset.timeline}"]`);
-        if (!section) return;
-        timelineScroll.scrollTo({
-          top: section.offsetTop - timelineScroll.offsetTop,
-          behavior: 'smooth',
+        activeTimelineId = item.dataset.timeline;
+
+        // Scroll SVG to show this timeline's lane
+        const layout = computeGraphLayout();
+        const laneX = {};
+        TIMELINES.forEach((tl, i) => {
+          const margin = { left: 24, right: 24 };
+          const containerWidth = timelineScroll.clientWidth;
+          const numLanes = TIMELINES.length;
+          const laneSpacing = Math.max(160, Math.min(240, (containerWidth - margin.left - margin.right - 40) / Math.max(1, numLanes)));
+          laneX[tl.timeline_id] = margin.left + 30 + i * laneSpacing;
         });
+        const targetX = laneX[activeTimelineId];
+        if (targetX !== undefined) {
+          timelineScroll.scrollLeft = Math.max(0, targetX - timelineScroll.clientWidth / 2);
+        }
+
+        _graphLayout = null; // invalidate to recalculate with new container width
       });
     });
 
-    // Thread nav items
+    // ── Thread nav items ──
     document.querySelectorAll('#threadNavList .nav-item').forEach(item => {
       item.addEventListener('click', () => {
-        activateThread(item.dataset.thread);
+        currentView = 'thread';
+        activeThreadId = item.dataset.thread;
+        document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
+        document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
+        item.classList.add('active');
+        clearFilterBtn.classList.remove('active');
+        renderThreadView(activeThreadId);
+        timelineScroll.scrollTop = 0;
       });
     });
 
     // ── Init ──
-    updateCurrentParagraph();
-    updateActiveNav();
+    function init() {
+      renderTimelineGraph();
+      updateCurrentParagraph();
+
+      // Observe resize to re-render graph
+      const ro = new ResizeObserver(() => {
+        if (currentView === 'timeline') {
+          _graphLayout = null;
+          renderTimelineGraph();
+        }
+      });
+      ro.observe(timelineScroll);
+    }
+
+    // Delay init to let layout settle
+    requestAnimationFrame(() => {
+      requestAnimationFrame(init);
+    });
   </script>
 </body>
 </html>
