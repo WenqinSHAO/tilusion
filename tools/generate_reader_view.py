@@ -55,6 +55,20 @@ def load_segment_evidence(chain_dir: str, segment_id: str) -> dict[str, str]:
     return {}
 
 
+def load_segment_times(chain_dir: str, segment_id: str) -> list[dict[str, Any]]:
+    """Return time expression records for a segment by reading its result.json."""
+    seg_dir = Path(chain_dir) / "segments" / segment_id
+    if not seg_dir.exists():
+        return []
+    for root, _dirs, files in os.walk(seg_dir):
+        if "result.json" in files:
+            with open(Path(root) / "result.json", encoding="utf-8") as f:
+                data = json.load(f)
+            records = data.get("data", {}).get("time_expressions", [])
+            return [record for record in records if isinstance(record, dict)]
+    return []
+
+
 def _segment_offsets(segments: list[dict[str, Any]]) -> dict[str, tuple[int, int]]:
     offsets: dict[str, tuple[int, int]] = {}
     for seg in segments:
@@ -144,6 +158,7 @@ def build_source_html(
     locations: list[dict[str, Any]],
     events: list[dict[str, Any]],
     evidence_by_segment: dict[str, dict[str, str]],
+    times_by_segment: dict[str, list[dict[str, Any]]],
 ) -> str:
     """Build the full source pane HTML with entity/location annotations.
 
@@ -153,6 +168,8 @@ def build_source_html(
     """
     annotations: list[dict[str, Any]] = []
     evidence_locations = _locate_evidence_refs(source_text, segments, evidence_by_segment)
+    offsets = _segment_offsets(segments)
+    base_offset = _unit_base_offset(source_text, segments)
 
     # Entity surfaces
     for ent in entities:
@@ -169,6 +186,31 @@ def build_source_html(
                 continue
             for start, end in _find_all(source_text, surface):
                 annotations.append({"start": start, "end": end, "kind": "location", "id": loc["location_id"]})
+
+    # Segment-scoped time expressions. Locate within segment windows to avoid
+    # over-marking repeated generic surfaces such as "是年".
+    for sid, time_records in times_by_segment.items():
+        seg_offset = offsets.get(sid)
+        if not seg_offset:
+            continue
+        seg_start, seg_end = seg_offset
+        full_start = base_offset + seg_start
+        full_end = base_offset + seg_end
+        segment_text = source_text[full_start:full_end]
+        for time_record in time_records:
+            surface = time_record.get("surface")
+            time_id = time_record.get("time_expression_id")
+            if not isinstance(surface, str) or not surface or len(surface) < 2:
+                continue
+            if not isinstance(time_id, str):
+                time_id = surface
+            for local_start, local_end in _find_all(segment_text, surface):
+                annotations.append({
+                    "start": full_start + local_start,
+                    "end": full_start + local_end,
+                    "kind": "time",
+                    "id": f"{sid}:{time_id}",
+                })
 
     # Event evidence locations are navigation targets, not source-side marks.
     for ev in events:
@@ -199,6 +241,7 @@ def build_source_html(
 
         entity_ids = sorted({item["id"] for item in covered if item["kind"] == "entity"})
         location_ids = sorted({item["id"] for item in covered if item["kind"] == "location"})
+        time_ids = sorted({item["id"] for item in covered if item["kind"] == "time"})
         event_ids = sorted({item["id"] for item in covered if item["kind"] == "event"})
         classes = ["source-mark"]
         attrs = []
@@ -208,6 +251,9 @@ def build_source_html(
         if location_ids:
             classes.append("location")
             attrs.append(f'data-locations="{html.escape(",".join(location_ids))}"')
+        if time_ids:
+            classes.append("time")
+            attrs.append(f'data-times="{html.escape(",".join(time_ids))}"')
         if event_ids:
             attrs.append(f'data-events="{html.escape(",".join(event_ids))}"')
         parts.append(f'<mark class="{" ".join(classes)}" {" ".join(attrs)}>{chunk}</mark>')
@@ -372,12 +418,22 @@ def generate(
     # Load evidence quotes for all segments
     chain_dir = str(Path(segments_path).parent)
     evidence_by_segment: dict[str, dict[str, str]] = {}
+    times_by_segment: dict[str, list[dict[str, Any]]] = {}
     for seg in segments:
         sid = seg["segment_id"]
         evidence_by_segment[sid] = load_segment_evidence(chain_dir, sid)
+        times_by_segment[sid] = load_segment_times(chain_dir, sid)
 
     # Build components
-    source_html = build_source_html(source_text, segments, entities, locations, events, evidence_by_segment)
+    source_html = build_source_html(
+        source_text,
+        segments,
+        entities,
+        locations,
+        events,
+        evidence_by_segment,
+        times_by_segment,
+    )
     timeline_nav_html = build_timeline_nav(timelines)
     thread_nav_html = build_thread_nav(threads, events)
     data_script = build_data_script(entities, events, locations, threads, timelines)

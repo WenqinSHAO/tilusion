@@ -156,6 +156,24 @@
       justify-content: space-between;
       gap: 10px;
     }
+    .source-panel .panel-header {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .source-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    .source-marker-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding-top: 8px;
+    }
     .eyebrow {
       margin: 0 0 2px;
       font-family: var(--mono);
@@ -228,6 +246,7 @@
     }
     mark.entity { background: var(--entity-soft); box-shadow: inset 0 -2px rgba(111, 75, 42, 0.22); }
     mark.location { background: var(--location-soft); box-shadow: inset 0 -2px rgba(57, 94, 74, 0.22); }
+    mark.time { background: rgba(156, 106, 47, 0.12); box-shadow: inset 0 -2px rgba(156, 106, 47, 0.24); }
     mark.hidden-mark {
       background: transparent !important;
       box-shadow: none !important;
@@ -317,15 +336,37 @@
     /* ---- timeline scroll area ---- */
     .timeline-scroll {
       min-height: 0;
-      overflow-y: auto;
+      overflow: auto;
       scroll-behavior: smooth;
+      cursor: grab;
+      background:
+        radial-gradient(circle at 8% 4%, rgba(215,85,51,0.06), transparent 18%),
+        linear-gradient(180deg, rgba(255,250,240,0.28), rgba(255,250,240,0.04));
+    }
+    .timeline-scroll.dragging {
+      cursor: grabbing;
+      user-select: none;
     }
 
     /* ---- SVG git graph ---- */
     .tl-graph {
       display: block;
-      width: 100%;
-      cursor: default;
+      min-width: 1100px;
+      min-height: 900px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+    .timeline-scroll.dragging .tl-graph {
+      cursor: grabbing;
+    }
+    .tl-graph .pan-surface {
+      fill: transparent;
+      pointer-events: all;
+      cursor: grab;
+    }
+    .timeline-scroll.dragging .pan-surface {
+      cursor: grabbing;
     }
     .tl-graph .lane-line {
       stroke: var(--graph-lane);
@@ -368,17 +409,38 @@
     .tl-graph .event-dot.conf-unknown { fill: var(--muted); stroke: var(--muted); }
     .tl-graph .time-anchor-label {
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 11px;
       fill: var(--muted);
       pointer-events: none;
       user-select: none;
     }
     .tl-graph .event-summary-label {
       font-family: var(--serif);
-      font-size: 14px;
+      font-size: 13px;
       fill: var(--ink);
       pointer-events: none;
       user-select: none;
+      text-anchor: middle;
+    }
+    .tl-graph .event-label-box {
+      fill: rgba(255, 250, 240, 0.92);
+      stroke: rgba(25, 22, 16, 0.16);
+      stroke-width: 1;
+      cursor: pointer;
+      transition: stroke 160ms ease, stroke-width 160ms ease, fill 160ms ease;
+    }
+    .tl-graph .graph-event-node:hover .event-label-box {
+      stroke: rgba(215, 85, 51, 0.48);
+      fill: #fffaf0;
+    }
+    .tl-graph .graph-event-node.selected .event-label-box {
+      stroke: var(--accent);
+      stroke-width: 2.5;
+      fill: rgba(255, 240, 230, 0.95);
+    }
+    .tl-graph .graph-event-node.selected .event-summary-label {
+      fill: var(--accent);
+      font-weight: 600;
     }
     .tl-graph .timeline-title {
       font-family: var(--mono);
@@ -387,6 +449,26 @@
       text-anchor: middle;
       pointer-events: none;
       user-select: none;
+      transition: font-size 180ms ease, fill 180ms ease, font-weight 180ms ease;
+    }
+    .tl-graph .timeline-desc {
+      font-family: var(--serif);
+      font-size: 12px;
+      fill: var(--muted);
+      text-anchor: middle;
+      pointer-events: none;
+      user-select: none;
+      transition: font-size 180ms ease, fill 180ms ease;
+    }
+    .tl-graph .timeline-title.selected {
+      font-size: 16px;
+      fill: var(--accent);
+      font-weight: 700;
+    }
+    .tl-graph .timeline-desc.selected {
+      font-size: 18px;
+      fill: var(--ink);
+      font-weight: 600;
     }
     .tl-graph .dimmed-dot {
       opacity: 0.18;
@@ -490,8 +572,8 @@
     .popover {
       position: fixed;
       z-index: 50;
-      max-width: 340px;
-      padding: 12px 14px;
+      max-width: 520px;
+      padding: 16px 18px;
       border: 1px solid var(--line);
       border-radius: 14px;
       background: rgba(255, 250, 240, 0.97);
@@ -499,20 +581,20 @@
       color: var(--ink);
       pointer-events: none;
       display: none;
-      font-size: 12px;
-      line-height: 1.45;
+      font-size: 14px;
+      line-height: 1.55;
     }
     .popover strong {
       display: block;
       font-family: var(--serif);
-      font-size: 17px;
+      font-size: 22px;
       margin-bottom: 4px;
     }
     .popover .muted {
       color: var(--muted);
       font-family: var(--mono);
-      font-size: 10px;
-      margin-bottom: 6px;
+      font-size: 11px;
+      margin-bottom: 8px;
     }
 
     /* ---- stats bar ---- */
@@ -585,14 +667,16 @@
     <section class="workspace">
       <section class="panel source-panel">
         <div class="panel-header">
-          <div class="panel-title">
-            <p class="eyebrow">Source text</p>
-            <h2>{{BOOK_TITLE}}</h2>
+          <div class="source-title-row">
+            <div class="panel-title">
+              <p class="eyebrow">Source text</p>
+              <h2>{{BOOK_TITLE}}</h2>
+            </div>
           </div>
-          <div class="panel-tools">
-            <button class="tool-btn active" data-hl="all">Entity + location</button>
-            <button class="tool-btn" data-hl="entity">Entities</button>
-            <button class="tool-btn" data-hl="location">Locations</button>
+          <div class="source-marker-row">
+            <button class="tool-btn active" data-hl="entity">Entities</button>
+            <button class="tool-btn active" data-hl="location">Locations</button>
+            <button class="tool-btn active" data-hl="time">Time</button>
             <button class="tool-btn" data-hl="clear">Clear</button>
           </div>
         </div>
@@ -606,9 +690,6 @@
           <div class="panel-title">
             <p class="eyebrow">Structured view</p>
             <h2>{{TIMELINE_COUNT}} timelines · {{THREAD_COUNT}} threads</h2>
-          </div>
-          <div class="panel-tools">
-            <button class="tool-btn active filter-clear" id="clearFilterBtn">Show all</button>
           </div>
         </div>
         <div class="right-pane-body">
@@ -667,15 +748,62 @@
     const sourceScroll = document.getElementById('sourceScroll');
     const timelineScroll = document.getElementById('timelineScroll');
     const popover = document.getElementById('popover');
-    const clearFilterBtn = document.getElementById('clearFilterBtn');
 
     // ── State ──
     let currentView = 'timeline'; // 'timeline' | 'thread'
     let activeThreadId = null;
     let activeTimelineId = null;
     let _graphLayout = null;
+    const activeMarkTypes = new Set(['entity', 'location', 'time']);
 
     sourceScroll.addEventListener('scroll', updateCurrentParagraph);
+
+    // Drag-to-pan the graph canvas. Native wheel/trackpad scrolling still works.
+    let isPanning = false;
+    let panStartX = 0;
+    let panStartY = 0;
+    let panScrollLeft = 0;
+    let panScrollTop = 0;
+    let panMoved = false;
+    let suppressGraphClick = false;
+    function beginPan(e) {
+      if (currentView !== 'timeline') return;
+      if (e.button !== 0) return;
+      if (e.target.closest && e.target.closest('.graph-event-node')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      isPanning = true;
+      panMoved = false;
+      suppressGraphClick = false;
+      panStartX = e.clientX;
+      panStartY = e.clientY;
+      panScrollLeft = timelineScroll.scrollLeft;
+      panScrollTop = timelineScroll.scrollTop;
+      timelineScroll.classList.add('dragging');
+    }
+    timelineScroll.addEventListener('pointerdown', beginPan);
+    document.addEventListener('pointermove', (e) => {
+      if (!isPanning) return;
+      e.preventDefault();
+      const dx = e.clientX - panStartX;
+      const dy = e.clientY - panStartY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) panMoved = true;
+      timelineScroll.scrollLeft = panScrollLeft - dx;
+      timelineScroll.scrollTop = panScrollTop - dy;
+    });
+    document.addEventListener('pointerup', () => {
+      if (!isPanning) return;
+      suppressGraphClick = panMoved;
+      isPanning = false;
+      timelineScroll.classList.remove('dragging');
+      if (suppressGraphClick) {
+        setTimeout(() => { suppressGraphClick = false; }, 0);
+      }
+    });
+    timelineScroll.addEventListener('pointercancel', () => {
+      isPanning = false;
+      timelineScroll.classList.remove('dragging');
+    });
 
     function updateCurrentParagraph() {
       const paras = [...sourceScroll.querySelectorAll('.source-text p')];
@@ -693,15 +821,16 @@
       return value ? value.split(',').filter(Boolean) : [];
     }
 
-    function setMarkMode(mode) {
+    function applyMarkModes() {
       document.querySelectorAll('mark.source-mark').forEach(m => {
         const hasEntity = m.classList.contains('entity');
         const hasLocation = m.classList.contains('location');
+        const hasTime = m.classList.contains('time');
         const visible =
-          mode === 'all' ||
-          (mode === 'entity' && hasEntity) ||
-          (mode === 'location' && hasLocation);
-        m.classList.toggle('hidden-mark', mode === 'clear' || !visible);
+          (activeMarkTypes.has('entity') && hasEntity) ||
+          (activeMarkTypes.has('location') && hasLocation) ||
+          (activeMarkTypes.has('time') && hasTime);
+        m.classList.toggle('hidden-mark', !visible);
       });
     }
 
@@ -779,9 +908,19 @@
     // ── Highlight buttons ──
     document.querySelectorAll('[data-hl]').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('[data-hl]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        setMarkMode(btn.dataset.hl);
+        const mode = btn.dataset.hl;
+        if (mode === 'clear') {
+          activeMarkTypes.clear();
+        } else if (activeMarkTypes.has(mode)) {
+          activeMarkTypes.delete(mode);
+        } else {
+          activeMarkTypes.add(mode);
+        }
+        document.querySelectorAll('[data-hl]').forEach(b => {
+          const bMode = b.dataset.hl;
+          b.classList.toggle('active', bMode !== 'clear' && activeMarkTypes.has(bMode));
+        });
+        applyMarkModes();
       });
     });
 
@@ -834,6 +973,36 @@
           if (csvAttr(m, 'entities').includes(eid)) m.classList.add('active-span');
         });
       });
+    }
+
+    function eventTimeIds(ev) {
+      return (ev.time_refs || [])
+        .map(tr => `${tr.segment_id}:${tr.time_expression_id}`)
+        .filter(Boolean);
+    }
+
+    function scrollGraphEventIntoView(evId) {
+      const node = document.querySelector(`.graph-event-node[data-event="${evId}"]`);
+      if (!node || typeof node.getBBox !== 'function') return;
+      const box = node.getBBox();
+      timelineScroll.scrollTo({
+        left: Math.max(0, box.x + box.width / 2 - timelineScroll.clientWidth / 2),
+        top: Math.max(0, box.y + box.height / 2 - timelineScroll.clientHeight / 2),
+        behavior: 'smooth',
+      });
+    }
+
+    function activateTimeIds(timeIds) {
+      const wanted = new Set(timeIds);
+      const matches = EVENTS.filter(ev => eventTimeIds(ev).some(tid => wanted.has(tid)));
+      if (!matches.length) return;
+      if (currentView !== 'timeline') showTimelineView();
+      clearActiveSource();
+      matches.forEach(ev => {
+        document.querySelectorAll(`.event-dot[data-event="${ev.event_id}"]`).forEach(d => d.classList.add('active-dot'));
+        document.querySelectorAll(`.event-card[data-event="${ev.event_id}"]`).forEach(c => c.classList.add('active'));
+      });
+      scrollGraphEventIntoView(matches[0].event_id);
     }
 
     function threadEventIds(thread) {
@@ -909,10 +1078,11 @@
         rankGroups[r].push(eid);
       });
 
-      // For events at the same rank, assign sub-ranks based on timeline order
-      // so they don't overlap visually
+      // Assign visual rows. Topological ranks preserve coarse order, but every
+      // event in a dense rank gets its own row so dots and labels do not pile up.
       const subRanks = {};
-      Object.entries(rankGroups).forEach(([r, eids]) => {
+      let visualRow = 0;
+      Object.entries(rankGroups).sort((a, b) => Number(a[0]) - Number(b[0])).forEach(([, eids]) => {
         // Sort by first appearance in any timeline
         eids.sort((a, b) => {
           let aFirst = Infinity, bFirst = Infinity;
@@ -923,7 +1093,11 @@
           });
           return aFirst - bFirst;
         });
-        eids.forEach((eid, i) => { subRanks[eid] = parseInt(r) + i * 0.01; });
+        eids.forEach((eid) => {
+          subRanks[eid] = visualRow;
+          visualRow += 1;
+        });
+        visualRow += 0.35;
       });
 
       // Map each event to which timelines contain it
@@ -986,225 +1160,205 @@
 
     function renderTimelineGraph() {
       const layout = computeGraphLayout();
-      const { ranks, subRanks, eventTimelines, eventRationales, edges, primaryLane } = layout;
-
+      const { eventRationales } = layout;
       const svg = document.getElementById('timelineGraph');
-      const container = timelineScroll;
-      const containerWidth = container.clientWidth;
+      const containerWidth = timelineScroll.clientWidth;
+      const containerHeight = timelineScroll.clientHeight;
       if (containerWidth <= 0) return;
 
-      const numLanes = TIMELINES.length;
-      const margin = { top: 50, right: 24, left: 24, bottom: 60 };
-      const laneSpacing = Math.max(160, Math.min(240, (containerWidth - margin.left - margin.right - 40) / Math.max(1, numLanes)));
-      const rowHeight = 80;
+      const margin = { top: 86, right: 90, left: 76, bottom: 100 };
+      const laneSpacing = 190;
       const dotRadius = 7;
-
-      // Lane X positions
+      const boxWidth = 142;
+      const lineHeight = 15;
+      const boxPadX = 8;
+      const boxPadY = 7;
+      const dotToBox = 12;
+      const eventGap = 16;
       const laneX = {};
+      const laneBottoms = {};
+      const positions = {};
+
+      function wrapSummary(text, maxChars = 10, maxLines = 4) {
+        const value = text || '';
+        const lines = [];
+        for (let i = 0; i < value.length && lines.length < maxLines; i += maxChars) {
+          lines.push(value.slice(i, i + maxChars));
+        }
+        if (value.length > maxChars * maxLines && lines.length) {
+          lines[lines.length - 1] = lines[lines.length - 1].slice(0, Math.max(1, maxChars - 1)) + '…';
+        }
+        return lines.length ? lines : [''];
+      }
+
       TIMELINES.forEach((tl, i) => {
-        laneX[tl.timeline_id] = margin.left + 30 + i * laneSpacing;
+        const x = margin.left + i * laneSpacing;
+        laneX[tl.timeline_id] = x;
+        let y = margin.top;
+        (tl.ordered_events || []).forEach(oe => {
+          const ev = EVENT_BY_ID[oe.event_id];
+          if (!ev) return;
+          const timeText = (ev.time_refs || [])
+            .map(tr => tr.surface || tr.normalized_hint || '')
+            .filter(Boolean)
+            .slice(0, 2)
+            .join(' · ');
+          const timeLines = timeText ? wrapSummary(timeText, 11, 2) : [];
+          const lines = wrapSummary(ev.summary || ev.event_id);
+          const boxHeight = (lines.length + timeLines.length) * lineHeight + boxPadY * 2 + (timeLines.length ? 3 : 0);
+          const dotY = y;
+          const boxY = dotY + dotToBox;
+          positions[`${tl.timeline_id}::${oe.event_id}`] = {
+            x, dotY, boxY, boxHeight, lines, timeLines, eventId: oe.event_id,
+          };
+          y = boxY + boxHeight + eventGap;
+        });
+        laneBottoms[tl.timeline_id] = Math.max(y, margin.top + 80);
       });
 
-      // Max sub-rank
-      let maxSubRank = 0;
-      Object.values(subRanks).forEach(sr => { if (sr > maxSubRank) maxSubRank = sr; });
-      const totalRows = Math.ceil(maxSubRank) + 2;
-
-      const svgWidth = margin.left + numLanes * laneSpacing + margin.right;
-      const svgHeight = margin.top + totalRows * rowHeight + margin.bottom;
+      const svgWidth = Math.max(containerWidth * 1.3, margin.left + TIMELINES.length * laneSpacing + margin.right);
+      const svgHeight = Math.max(containerHeight * 1.25, Math.max(...Object.values(laneBottoms), margin.top + 200) + margin.bottom);
 
       svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
       svg.setAttribute('width', svgWidth);
+      svg.setAttribute('height', svgHeight);
+      svg.style.minWidth = svgWidth + 'px';
       svg.style.minHeight = svgHeight + 'px';
       svg.innerHTML = '';
 
-      // Defs for arrowheads
-      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-      defs.innerHTML = `
-        <marker id="arrowhead" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="6" markerHeight="5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="rgba(21,19,15,0.35)" />
-        </marker>
-      `;
-      svg.appendChild(defs);
+      const panSurface = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      panSurface.setAttribute('x', '0');
+      panSurface.setAttribute('y', '0');
+      panSurface.setAttribute('width', svgWidth);
+      panSurface.setAttribute('height', svgHeight);
+      panSurface.setAttribute('class', 'pan-surface');
+      panSurface.addEventListener('pointerdown', beginPan);
+      panSurface.addEventListener('click', (e) => {
+        if (suppressGraphClick) return;
+        document.querySelectorAll('.graph-event-node.selected').forEach(n => n.classList.remove('selected'));
+      });
+      svg.appendChild(panSurface);
 
-      // Background group
       const bgGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
 
-      // Draw lane lines
-      TIMELINES.forEach(tl => {
-        const x = laneX[tl.timeline_id];
-        // Find min and max sub-rank for events in this timeline
-        let minY = Infinity, maxY = -Infinity;
-        tl.ordered_events.forEach(oe => {
-          const sr = subRanks[oe.event_id];
-          if (sr !== undefined) {
-            if (sr < minY) minY = sr;
-            if (sr > maxY) maxY = sr;
-          }
-        });
-        if (!isFinite(minY)) { minY = 0; maxY = 1; }
-        const y1 = margin.top + minY * rowHeight;
-        const y2 = margin.top + maxY * rowHeight;
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', x);
-        line.setAttribute('y1', y1 - 12);
-        line.setAttribute('x2', x);
-        line.setAttribute('y2', y2 + 12);
-        line.setAttribute('class', 'lane-line');
-        bgGroup.appendChild(line);
-      });
-
-      // Draw cross-lane connectors for events in multiple timelines
-      Object.entries(eventTimelines).forEach(([eid, tids]) => {
-        if (tids.length < 2) return;
-        const sr = subRanks[eid];
-        if (sr === undefined) return;
-        const y = margin.top + sr * rowHeight;
-        const xs = tids.map(tid => laneX[tid]).sort((a, b) => a - b);
-        for (let i = 0; i < xs.length - 1; i++) {
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          line.setAttribute('x1', xs[i] + dotRadius);
-          line.setAttribute('y1', y);
-          line.setAttribute('x2', xs[i + 1] - dotRadius);
-          line.setAttribute('y2', y);
-          line.setAttribute('class', 'cross-lane-connector');
-          bgGroup.appendChild(line);
-        }
-      });
-
-      // Draw before_edges as bezier curves
-      const edgesGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      edges.forEach(edge => {
-        const fromSr = subRanks[edge.from];
-        const toSr = subRanks[edge.to];
-        if (fromSr === undefined || toSr === undefined) return;
-
-        const fromX = laneX[edge.fromTimeline] || laneX[primaryLane[edge.from]];
-        if (!fromX) return;
-        const toX = laneX[primaryLane[edge.to]];
-        if (!toX) return;
-
-        const y1 = margin.top + fromSr * rowHeight + dotRadius;
-        const y2 = margin.top + toSr * rowHeight - dotRadius;
-
-        const sameLane = Math.abs(fromX - toX) < 1;
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-
-        if (sameLane) {
-          path.setAttribute('d', `M ${fromX} ${y1} L ${toX} ${y2}`);
-          path.setAttribute('class', 'edge-curve same-lane');
-        } else {
-          const midY = (y1 + y2) / 2;
-          const dx = Math.abs(toX - fromX) * 0.4;
-          path.setAttribute('d', `M ${fromX} ${y1} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${y2}`);
-          path.setAttribute('class', 'edge-curve');
-          path.setAttribute('marker-end', 'url(#arrowhead)');
-        }
-        edgesGroup.appendChild(path);
-      });
-
-      // Draw event dots and labels
-      const dotsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      const labelsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-
-      // For each timeline, render dots
-      const renderedEvents = new Set();
-      TIMELINES.forEach(tl => {
-        tl.ordered_events.forEach(oe => {
-          const eid = oe.event_id;
-          const ev = EVENT_BY_ID[eid];
-          if (!ev) return;
-          const sr = subRanks[eid];
-          if (sr === undefined) return;
-
-          const x = laneX[tl.timeline_id];
-          const y = margin.top + sr * rowHeight;
-          const conf = ev.confidence || 'unknown';
-
-          // Draw dot
-          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-          circle.setAttribute('cx', x);
-          circle.setAttribute('cy', y);
-          circle.setAttribute('r', dotRadius);
-          circle.setAttribute('class', `event-dot conf-${conf}`);
-          circle.setAttribute('data-event', eid);
-          circle.setAttribute('data-x', x);
-          circle.setAttribute('data-y', y);
-          circle.setAttribute('stroke', 'var(--graph-dot-stroke)');
-          circle.setAttribute('stroke-width', '1.5');
-
-          // Hover → popover
-          circle.addEventListener('mouseenter', (e) => {
-            const rationaleList = eventRationales[eid] || [];
-            showPopover(eventCardHtml(ev, rationaleList), e.clientX, e.clientY);
-          });
-          circle.addEventListener('mousemove', (e) => {
-            if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
-          });
-          circle.addEventListener('mouseleave', hidePopover);
-
-          // Click → activate
-          circle.addEventListener('click', (e) => {
-            e.stopPropagation();
-            activateEvent(eid);
-          });
-
-          dotsGroup.appendChild(circle);
-          renderedEvents.add(eid);
-
-          // Time anchor label (right of dot)
-          const timeAnchors = [];
-          (ev.time_refs || []).forEach(tr => {
-            const s = tr.surface || tr.normalized_hint || '';
-            if (s && s.length < 50) timeAnchors.push(s);
-          });
-          if (timeAnchors.length > 0) {
-            const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            label.setAttribute('x', x + dotRadius + 6);
-            label.setAttribute('y', y + 3);
-            label.setAttribute('class', 'time-anchor-label');
-            label.textContent = timeAnchors.slice(0, 3).join(' · ');
-            labelsGroup.appendChild(label);
-          }
-
-          // Event summary label (right of dot, below time anchor)
-          const summaryLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          summaryLabel.setAttribute('x', x + dotRadius + 6);
-          summaryLabel.setAttribute('y', y + 19);
-          summaryLabel.setAttribute('class', 'event-summary-label');
-          const summary = (ev.summary || eid);
-          summaryLabel.textContent = summary.length > 28 ? summary.slice(0, 26) + '…' : summary;
-          labelsGroup.appendChild(summaryLabel);
-        });
-      });
-
-      // Timeline title at top of each lane
       TIMELINES.forEach(tl => {
         const x = laneX[tl.timeline_id];
         const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         title.setAttribute('x', x);
-        title.setAttribute('y', margin.top - 20);
+        title.setAttribute('y', margin.top - 44);
         title.setAttribute('class', 'timeline-title');
-        const tconf = tl.confidence || 'medium';
+        title.setAttribute('data-timeline', tl.timeline_id);
         title.textContent = tl.timeline_id;
-        labelsGroup.appendChild(title);
+        bgGroup.appendChild(title);
 
-        // Confidence dot
-        const cdot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        cdot.setAttribute('cx', x);
-        cdot.setAttribute('cy', margin.top - 28);
-        cdot.setAttribute('r', 4);
-        cdot.setAttribute('fill', `var(--conf-${tconf})`);
-        cdot.setAttribute('opacity', '0.7');
-        labelsGroup.appendChild(cdot);
+        const summary = tl.summary || '';
+        if (summary) {
+          const desc = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          desc.setAttribute('x', x);
+          desc.setAttribute('y', margin.top - 24);
+          desc.setAttribute('class', 'timeline-desc');
+          desc.setAttribute('data-timeline', tl.timeline_id);
+          const maxChars = 20;
+          desc.textContent = summary.length > maxChars ? summary.slice(0, maxChars) + '…' : summary;
+          bgGroup.appendChild(desc);
+        }
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x);
+        line.setAttribute('y1', margin.top - 8);
+        line.setAttribute('x2', x);
+        line.setAttribute('y2', laneBottoms[tl.timeline_id] - eventGap);
+        line.setAttribute('class', 'lane-line');
+        bgGroup.appendChild(line);
+
+        (tl.ordered_events || []).forEach(oe => {
+          const from = positions[`${tl.timeline_id}::${oe.event_id}`];
+          if (!from) return;
+          (oe.before_events || []).forEach(beid => {
+            const to = positions[`${tl.timeline_id}::${beid}`];
+            if (!to) return;
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', `M ${x} ${from.dotY + dotRadius} L ${x} ${to.dotY - dotRadius}`);
+            path.setAttribute('class', 'edge-curve same-lane');
+            edgeGroup.appendChild(path);
+          });
+        });
+
+        (tl.ordered_events || []).forEach(oe => {
+          const ev = EVENT_BY_ID[oe.event_id];
+          const pos = positions[`${tl.timeline_id}::${oe.event_id}`];
+          if (!ev || !pos) return;
+          const conf = ev.confidence || 'unknown';
+          const node = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+          node.setAttribute('class', 'graph-event-node');
+          node.setAttribute('data-event', oe.event_id);
+          node.addEventListener('mouseenter', (e) => {
+            const rationaleList = eventRationales[oe.event_id] || [];
+            showPopover(eventCardHtml(ev, rationaleList), e.clientX, e.clientY);
+          });
+          node.addEventListener('mousemove', (e) => {
+            if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
+          });
+          node.addEventListener('mouseleave', hidePopover);
+          node.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (suppressGraphClick) return;
+            const wasSelected = node.classList.contains('selected');
+            // Deselect all event nodes
+            document.querySelectorAll('.graph-event-node.selected').forEach(n => n.classList.remove('selected'));
+            // Toggle this node
+            if (!wasSelected) node.classList.add('selected');
+            selectTimeline(tl.timeline_id);
+            activateEvent(oe.event_id);
+          });
+
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', pos.x);
+          circle.setAttribute('cy', pos.dotY);
+          circle.setAttribute('r', dotRadius);
+          circle.setAttribute('class', `event-dot conf-${conf}`);
+          circle.setAttribute('data-event', oe.event_id);
+          circle.setAttribute('stroke', 'var(--graph-dot-stroke)');
+          circle.setAttribute('stroke-width', '1.5');
+          node.appendChild(circle);
+
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', pos.x - boxWidth / 2);
+          rect.setAttribute('y', pos.boxY);
+          rect.setAttribute('width', boxWidth);
+          rect.setAttribute('height', pos.boxHeight);
+          rect.setAttribute('rx', '10');
+          rect.setAttribute('class', 'event-label-box');
+          node.appendChild(rect);
+
+          pos.timeLines.forEach((lineText, idx) => {
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', pos.x);
+            text.setAttribute('y', pos.boxY + boxPadY + lineHeight * (idx + 0.72));
+            text.setAttribute('class', 'time-anchor-label');
+            text.setAttribute('text-anchor', 'middle');
+            text.textContent = lineText;
+            node.appendChild(text);
+          });
+
+          const summaryStart = pos.timeLines.length ? pos.timeLines.length + 0.28 : 0;
+          pos.lines.forEach((lineText, idx) => {
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', pos.x);
+            text.setAttribute('y', pos.boxY + boxPadY + lineHeight * (summaryStart + idx + 0.78));
+            text.setAttribute('class', 'event-summary-label');
+            text.textContent = lineText;
+            node.appendChild(text);
+          });
+          nodeGroup.appendChild(node);
+        });
       });
 
       svg.appendChild(bgGroup);
-      svg.appendChild(edgesGroup);
-      svg.appendChild(dotsGroup);
-      svg.appendChild(labelsGroup);
-
-      // Invalidate layout cache for next render
+      svg.appendChild(edgeGroup);
+      svg.appendChild(nodeGroup);
       _graphLayout = null;
     }
 
@@ -1264,9 +1418,19 @@
 
       stack.innerHTML = cards.join('\n');
 
-      // Wire up card click → source highlight
+      // Wire up card click → source highlight + timeline selection
       stack.querySelectorAll('.event-card').forEach(card => {
-        card.addEventListener('click', () => activateEvent(card.dataset.event));
+        card.addEventListener('click', () => {
+          // Find the event's timeline and select it
+          const evId = card.dataset.event;
+          for (const tl of TIMELINES) {
+            if (tl.ordered_events.some(oe => oe.event_id === evId)) {
+              selectTimeline(tl.timeline_id);
+              break;
+            }
+          }
+          activateEvent(evId);
+        });
       });
 
       // Wire up entity/location tag hover → popover
@@ -1288,19 +1452,21 @@
       document.getElementById('threadView').style.display = 'none';
       document.getElementById('timelineGraph').style.display = 'block';
       document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
-      clearFilterBtn.classList.add('active');
       renderTimelineGraph();
     }
 
-    // ── Clear filter ──
-    clearFilterBtn.addEventListener('click', () => {
-      if (currentView === 'thread') showTimelineView();
-      document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('dimmed-dot'));
-      document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
-      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-      document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
-      clearFilterBtn.classList.add('active');
-    });
+    function selectTimeline(tid) {
+      activeTimelineId = tid;
+      // Update SVG title/desc selection classes
+      document.querySelectorAll('.timeline-title, .timeline-desc').forEach(el => {
+        el.classList.toggle('selected', el.dataset.timeline === tid);
+      });
+      // Update sidebar nav
+      document.querySelectorAll('#timelineNavList .nav-item').forEach(n => {
+        n.classList.toggle('active', n.dataset.timeline === tid);
+      });
+      document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
+    }
 
     // ── Source marks hover → popover ──
     document.querySelectorAll('mark.source-mark').forEach(mark => {
@@ -1314,6 +1480,10 @@
         if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
       });
       mark.addEventListener('mouseleave', hidePopover);
+      mark.addEventListener('click', () => {
+        const timeIds = csvAttr(mark, 'times');
+        if (timeIds.length) activateTimeIds(timeIds);
+      });
     });
 
     // ── Timeline nav items ──
@@ -1322,30 +1492,21 @@
         if (currentView !== 'timeline') showTimelineView();
         document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('dimmed-dot'));
         document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
-        document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
-        clearFilterBtn.classList.add('active');
 
-        // Highlight active timeline nav
-        document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
-        item.classList.add('active');
-        activeTimelineId = item.dataset.timeline;
+        const tid = item.dataset.timeline;
+        selectTimeline(tid);
 
         // Scroll SVG to show this timeline's lane
-        const layout = computeGraphLayout();
+        const margin = { left: 76, right: 90 };
+        const laneSpacing = 190;
         const laneX = {};
-        TIMELINES.forEach((tl, i) => {
-          const margin = { left: 24, right: 24 };
-          const containerWidth = timelineScroll.clientWidth;
-          const numLanes = TIMELINES.length;
-          const laneSpacing = Math.max(160, Math.min(240, (containerWidth - margin.left - margin.right - 40) / Math.max(1, numLanes)));
-          laneX[tl.timeline_id] = margin.left + 30 + i * laneSpacing;
-        });
-        const targetX = laneX[activeTimelineId];
+        TIMELINES.forEach((tl, i) => { laneX[tl.timeline_id] = margin.left + i * laneSpacing; });
+        const targetX = laneX[tid];
         if (targetX !== undefined) {
           timelineScroll.scrollLeft = Math.max(0, targetX - timelineScroll.clientWidth / 2);
         }
 
-        _graphLayout = null; // invalidate to recalculate with new container width
+        _graphLayout = null;
       });
     });
 
@@ -1357,7 +1518,6 @@
         document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
         document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
         item.classList.add('active');
-        clearFilterBtn.classList.remove('active');
         renderThreadView(activeThreadId);
         timelineScroll.scrollTop = 0;
       });
