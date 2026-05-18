@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Novel Timeline Workbench — Prototype 01</title>
+  <style>
+    :root {
+      --bg: #f5efe1;
+      --ink: #15130f;
+      --muted: #7a715f;
+      --line: rgba(25, 22, 16, 0.14);
+      --soft-line: rgba(25, 22, 16, 0.08);
+      --paper: rgba(255, 251, 241, 0.88);
+      --paper-strong: #fffaf0;
+      --panel: rgba(255, 248, 232, 0.72);
+      --event: #261f17;
+      --entity: #6f4b2a;
+      --thread: #5f5946;
+      --location: #395e4a;
+      --uncertain: #9c6a2f;
+      --accent: #d75533;
+      --accent-soft: rgba(215, 85, 51, 0.16);
+      --shadow: 0 16px 42px rgba(38, 31, 23, 0.10);
+      --radius: 20px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --serif: Georgia, "Times New Roman", Times, serif;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 24% 18%, rgba(215, 85, 51, 0.13), transparent 28%),
+        radial-gradient(circle at 80% 4%, rgba(57, 94, 74, 0.13), transparent 25%),
+        linear-gradient(135deg, #f7f0df 0%, #eee1c5 100%);
+      font-family: var(--sans);
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.38;
+      background-image:
+        linear-gradient(rgba(21, 19, 15, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(21, 19, 15, 0.04) 1px, transparent 1px);
+      background-size: 26px 26px;
+      mask-image: linear-gradient(to bottom, black, transparent 88%);
+    }
+
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 18px;
+      gap: 14px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(260px, 1.4fr) auto auto;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: rgba(255, 250, 240, 0.76);
+      backdrop-filter: blur(18px);
+      box-shadow: var(--shadow);
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 13px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 16px;
+      background: var(--ink);
+      color: var(--bg);
+      font-family: var(--serif);
+      font-size: 28px;
+      transform: rotate(-3deg);
+      box-shadow: 6px 6px 0 rgba(215, 85, 51, 0.22);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: var(--serif);
+      letter-spacing: -0.045em;
+      font-size: clamp(24px, 4vw, 42px);
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .frontier-chip, .status-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.36);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 5px var(--accent-soft);
+    }
+
+    .mode-switch {
+      display: inline-flex;
+      gap: 6px;
+      padding: 5px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.33);
+    }
+
+    .mode-switch button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .mode-switch button.active {
+      background: var(--ink);
+      color: var(--bg);
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(420px, 1fr) minmax(360px, 0.92fr);
+      gap: 14px;
+    }
+
+    .panel {
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .panel-header {
+      padding: 15px 17px 13px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .panel-title {
+      min-width: 0;
+    }
+
+    .eyebrow {
+      margin: 0 0 4px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .panel-title h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 24px;
+      letter-spacing: -0.03em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .panel-tools {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+
+    .tool-btn, .small-pill, .ghost-btn {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.36);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      transition: transform 140ms ease, background 140ms ease, border 140ms ease;
+    }
+
+    .tool-btn:hover, .ghost-btn:hover { transform: translateY(-1px); background: rgba(255,255,255,0.58); }
+    .tool-btn.active { background: var(--ink); color: var(--bg); }
+
+    .source-scroll, .timeline-scroll {
+      min-height: 0;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+    }
+
+    .source-scroll {
+      padding: 28px clamp(24px, 4vw, 58px) 150px;
+    }
+
+    .chapter-kicker {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 22px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .chapter-kicker::before, .chapter-kicker::after {
+      content: "";
+      height: 1px;
+      background: var(--line);
+      flex: 1;
+    }
+
+    .book-title {
+      font-family: var(--serif);
+      font-size: clamp(34px, 5vw, 64px);
+      letter-spacing: -0.06em;
+      line-height: 0.92;
+      margin: 0 0 16px;
+      max-width: 11ch;
+    }
+
+    .source-note {
+      max-width: 58ch;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+      margin: 0 0 30px;
+    }
+
+    .paragraph {
+      position: relative;
+      padding: 15px 18px 15px 22px;
+      border-left: 2px solid transparent;
+      border-radius: 16px;
+      margin: 0 0 8px;
+      max-width: 76ch;
+      font-family: var(--serif);
+      font-size: 19px;
+      line-height: 1.7;
+      letter-spacing: -0.01em;
+      transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
+    }
+
+    .paragraph::before {
+      content: attr(data-ref);
+      position: absolute;
+      left: -44px;
+      top: 24px;
+      color: rgba(21, 19, 15, 0.32);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: -0.05em;
+    }
+
+    .paragraph.current {
+      background: rgba(255, 255, 255, 0.34);
+      border-left-color: var(--accent);
+      transform: translateX(2px);
+    }
+
+    mark {
+      background: transparent;
+      color: inherit;
+      padding: 2px 2px 3px;
+      border-radius: 6px;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+      transition: background 160ms ease, box-shadow 160ms ease;
+    }
+
+    mark.entity { background: rgba(111, 75, 42, 0.11); box-shadow: inset 0 -2px rgba(111, 75, 42, 0.28); }
+    mark.event { background: rgba(215, 85, 51, 0.13); box-shadow: inset 0 -2px rgba(215, 85, 51, 0.32); }
+    mark.location { background: rgba(57, 94, 74, 0.13); box-shadow: inset 0 -2px rgba(57, 94, 74, 0.30); }
+    mark.active-span { background: rgba(215, 85, 51, 0.30); box-shadow: 0 0 0 4px rgba(215, 85, 51, 0.13), inset 0 -2px rgba(215, 85, 51, 0.52); }
+
+    .timeline-scroll {
+      position: relative;
+      padding: 0 18px 160px;
+    }
+
+    .timeline-stage {
+      position: relative;
+      min-height: 1780px;
+      padding-top: 24px;
+    }
+
+    .sync-rail {
+      position: absolute;
+      top: 24px;
+      bottom: 80px;
+      left: 33px;
+      width: 2px;
+      border-radius: 999px;
+      background: linear-gradient(to bottom, transparent, rgba(21,19,15,0.2) 8%, rgba(21,19,15,0.2) 92%, transparent);
+    }
+
+    .timeline-position {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0 8px;
+      background: linear-gradient(to bottom, rgba(246, 238, 222, 0.98), rgba(246, 238, 222, 0.72));
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--soft-line);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .progress-bar {
+      flex: 1;
+      height: 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.36);
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--ink);
+      border-radius: 999px;
+    }
+
+    .event-card {
+      position: absolute;
+      left: 56px;
+      right: 4px;
+      padding: 13px 14px 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 250, 240, 0.88);
+      box-shadow: 0 10px 26px rgba(38, 31, 23, 0.08);
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, opacity 160ms ease;
+    }
+
+    .event-card::before {
+      content: attr(data-symbol);
+      position: absolute;
+      left: -42px;
+      top: 12px;
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: var(--ink);
+      color: var(--bg);
+      font-family: var(--serif);
+      font-size: 17px;
+    }
+
+    .event-card:hover, .event-card.active {
+      transform: translateX(3px);
+      border-color: rgba(215, 85, 51, 0.55);
+      background: #fffaf0;
+    }
+
+    .event-card.dimmed { opacity: 0.27; }
+
+    .event-card h3 {
+      margin: 0 0 7px;
+      font-family: var(--serif);
+      font-size: 21px;
+      letter-spacing: -0.035em;
+    }
+
+    .event-card p {
+      margin: 0 0 10px;
+      color: #4b4237;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .tag {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 7px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.42);
+    }
+
+    .tag.entity-tag { color: var(--entity); border-color: rgba(111,75,42,0.24); }
+    .tag.thread-tag { color: var(--thread); border-color: rgba(95,89,70,0.24); }
+    .tag.location-tag { color: var(--location); border-color: rgba(57,94,74,0.24); }
+    .tag.uncertain-tag { color: var(--uncertain); border-color: rgba(156,106,47,0.28); background: rgba(156,106,47,0.08); }
+
+    .detail-card {
+      position: sticky;
+      bottom: 14px;
+      margin-left: 50px;
+      margin-right: 4px;
+      z-index: 8;
+      border: 1px solid rgba(21, 19, 15, 0.18);
+      border-radius: 22px;
+      background: rgba(21, 19, 15, 0.92);
+      color: var(--bg);
+      padding: 15px;
+      box-shadow: 0 22px 45px rgba(21, 19, 15, 0.20);
+    }
+
+    .detail-card .eyebrow { color: rgba(245,239,225,0.62); }
+    .detail-card h3 { margin: 0 0 7px; font-family: var(--serif); font-size: 24px; letter-spacing: -0.04em; }
+    .detail-card p { margin: 0 0 12px; color: rgba(245,239,225,0.76); font-size: 13px; line-height: 1.5; }
+    .detail-card .tag { border-color: rgba(245,239,225,0.22); background: rgba(245,239,225,0.08); color: rgba(245,239,225,0.78); }
+
+    .inspector-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .inspector-metric {
+      border: 1px solid rgba(245,239,225,0.16);
+      border-radius: 14px;
+      padding: 9px;
+      background: rgba(245,239,225,0.06);
+    }
+
+    .metric-label { font-family: var(--mono); font-size: 10px; color: rgba(245,239,225,0.56); text-transform: uppercase; }
+    .metric-value { margin-top: 4px; font-family: var(--serif); font-size: 18px; }
+
+    .chat-drawer {
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: rgba(255, 250, 240, 0.82);
+      backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      transition: max-height 180ms ease;
+      max-height: 168px;
+    }
+
+    .chat-drawer.expanded { max-height: 310px; }
+
+    .chat-head {
+      padding: 12px 15px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .chat-head strong {
+      font-family: var(--serif);
+      font-size: 21px;
+      letter-spacing: -0.03em;
+    }
+
+    .chat-head .spacer { flex: 1; }
+
+    .question-box {
+      flex: 1.3;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 260px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 11px;
+      background: rgba(255,255,255,0.43);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .chat-body {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.8fr);
+      gap: 12px;
+      padding: 13px 15px 15px;
+    }
+
+    .answer {
+      font-size: 14px;
+      line-height: 1.5;
+      color: #3f372c;
+    }
+
+    .answer p { margin: 0 0 8px; }
+
+    .citation {
+      border: 1px solid rgba(215, 85, 51, 0.28);
+      background: rgba(215, 85, 51, 0.10);
+      color: #87331f;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .citation:hover { background: rgba(215, 85, 51, 0.18); }
+
+    .chat-side {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .mini-card {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      padding: 10px;
+      background: rgba(255,255,255,0.36);
+    }
+
+    .mini-card .num {
+      font-family: var(--serif);
+      font-size: 28px;
+      letter-spacing: -0.05em;
+      line-height: 1;
+    }
+
+    .mini-card .label {
+      margin-top: 5px;
+      font-family: var(--mono);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.3;
+    }
+
+    .toast {
+      position: fixed;
+      right: 28px;
+      bottom: 210px;
+      z-index: 30;
+      max-width: 310px;
+      transform: translateY(14px);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 180ms ease;
+      border-radius: 18px;
+      padding: 12px 13px;
+      background: rgba(21, 19, 15, 0.92);
+      color: var(--bg);
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 980px) {
+      body { overflow: auto; }
+      .app { height: auto; min-height: 100vh; }
+      .topbar { grid-template-columns: 1fr; }
+      .workspace { grid-template-columns: 1fr; min-height: 1200px; }
+      .panel { min-height: 620px; }
+      .chat-body { grid-template-columns: 1fr; }
+      .chat-side { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 640px) {
+      .app { padding: 10px; }
+      .source-scroll { padding-left: 28px; padding-right: 18px; }
+      .paragraph::before { left: -28px; }
+      .brand { align-items: center; }
+      .brand h1 { white-space: normal; }
+      .frontier-chip, .status-strip { white-space: normal; }
+      .chat-head { flex-wrap: wrap; }
+      .question-box { min-width: 100%; }
+      .chat-side { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app" aria-label="Novel Timeline Workbench prototype">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">✦</div>
+        <div>
+          <h1>Timeline Workbench</h1>
+          <div class="subtitle">Prototype 01 · source-linked narrative structure</div>
+        </div>
+      </div>
+      <div class="frontier-chip" title="The reading companion should avoid analysis beyond this frontier.">
+        <span class="status-dot" aria-hidden="true"></span>
+        Frontier: Chapter 2 · ¶12 · analyzed only so far
+      </div>
+      <div class="mode-switch" aria-label="View mode">
+        <button class="active" data-mode="reading">Reading</button>
+        <button data-mode="thread">Thread</button>
+        <button data-mode="review">Review</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <section class="panel source-panel" aria-label="Book source text panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <p class="eyebrow">Source view</p>
+            <h2>The Clockmaker’s Orchard</h2>
+          </div>
+          <div class="panel-tools">
+            <button class="tool-btn active" data-highlight="all">All marks</button>
+            <button class="tool-btn" data-highlight="entities">Entities</button>
+            <button class="tool-btn" data-highlight="events">Events</button>
+            <button class="tool-btn" data-highlight="clear">Clear</button>
+          </div>
+        </div>
+        <div class="source-scroll" id="sourceScroll">
+          <div class="chapter-kicker">Chapter 2 · The Brass Observatory</div>
+          <h2 class="book-title">A local-first reading surface</h2>
+          <p class="source-note">This excerpt is fake data for UI sketching. The important part is the relationship between text spans, extracted events, entities, open threads, and clickable LLM references.</p>
+
+          <p class="paragraph" id="p1" data-ref="¶01" data-pos="0">
+            The rain had stopped by the time <mark class="entity" data-span="s-mara">Mara Vell</mark> reached the orchard gate, but the brass leaves still chimed as though the storm were passing through them. Beneath the arch, a small plate had been polished clean: <mark class="event" data-span="s-observatory">OBSERVATORY CLOSED UNTIL THE SECOND MOON</mark>.
+          </p>
+          <p class="paragraph" id="p2" data-ref="¶02" data-pos="9">
+            She found <mark class="entity" data-span="s-elian">Elian</mark> crouched beside the western wall, turning a cracked compass in his palm. “It points below,” he said, and for once he did not smile. The needle tugged toward the roots of the oldest tree.
+          </p>
+          <p class="paragraph" id="p3" data-ref="¶03" data-pos="16">
+            In the glasshouse, every clock had stopped at <mark class="event" data-span="s-third-bell">the third bell</mark>. Mara wrote this in the margin of her field notebook, underlining it twice, then added a question: why did the pendulums stop before the bell was rung?
+          </p>
+          <p class="paragraph" id="p4" data-ref="¶04" data-pos="24">
+            A lantern moved on the upper balcony. The figure holding it wore the gray sleeves of the <mark class="entity" data-span="s-archivist">Royal Archivist</mark>, though no archivist was meant to be in the orchard before dawn.
+          </p>
+          <p class="paragraph" id="p5" data-ref="¶05" data-pos="31">
+            “We should leave,” Elian whispered. But Mara had already seen the chalk line across the floor. It circled the central telescope, then broke where someone had dragged a box through it.
+          </p>
+          <p class="paragraph" id="p6" data-ref="¶06" data-pos="38">
+            Inside the box, wrapped in oilcloth, lay <mark class="event" data-span="s-red-needle">the red needle</mark> from the city clock. Its surface was warm. The orchard bells answered it with one clear note, and somewhere below them a lock opened.
+          </p>
+          <p class="paragraph" id="p7" data-ref="¶07" data-pos="46">
+            The Archivist saw them then. “Do not touch the mechanism,” she called down. Her voice echoed from too many directions, as if she had spoken from the balcony and from the stairwell and from the roots at once.
+          </p>
+          <p class="paragraph" id="p8" data-ref="¶08" data-pos="54">
+            Mara lifted both hands. Elian did not. He slipped the compass into his coat and stepped backward until his heel found the hidden seam in the floorboards.
+          </p>
+          <p class="paragraph" id="p9" data-ref="¶09" data-pos="62">
+            The seam widened. Cold air rose through it, smelling of iron, apples, and extinguished candles. Below the glasshouse was a stairway that had not appeared on any map of <mark class="location" data-span="s-lyr">Lyr</mark>.
+          </p>
+          <p class="paragraph" id="p10" data-ref="¶10" data-pos="71">
+            “Your father knew about this,” the Archivist said. Mara stopped moving. Elian looked at her with the expression he used when he had been keeping a secret for too long.
+          </p>
+          <p class="paragraph" id="p11" data-ref="¶11" data-pos="82">
+            The bells rang a second time, but this time only Mara seemed to hear them. The red needle turned by itself toward the dark stair. In her notebook, the ink from the third-bell question spread into a black circle.
+          </p>
+          <p class="paragraph" id="p12" data-ref="¶12" data-pos="94">
+            She stepped through the seam first. Behind her, the glasshouse clocks began again—not together, but one after another, as if each had remembered a different version of the hour.
+          </p>
+        </div>
+      </section>
+
+      <aside class="panel timeline-panel" aria-label="Timeline and narrative structure panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <p class="eyebrow">Derived view</p>
+            <h2>Reading-synced timeline</h2>
+          </div>
+          <div class="panel-tools">
+            <button class="tool-btn" data-filter="all">All</button>
+            <button class="tool-btn" data-filter="mara">Mara</button>
+            <button class="tool-btn" data-filter="archivist">Archivist</button>
+            <button class="tool-btn" data-filter="uncertain">Uncertain</button>
+          </div>
+        </div>
+        <div class="timeline-scroll" id="timelineScroll">
+          <div class="timeline-position">
+            <span>source sync</span>
+            <div class="progress-bar" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+            <span id="progressLabel">¶01</span>
+          </div>
+          <div class="timeline-stage" id="timelineStage">
+            <div class="sync-rail" aria-hidden="true"></div>
+
+            <article class="event-card" data-event="e1" data-pos="4" data-symbol="☽" data-entities="mara" data-spans="s-observatory">
+              <h3>Observatory closure noticed</h3>
+              <p>Mara reaches the orchard gate and reads a closure notice keyed to “the second moon.”</p>
+              <div class="meta-row">
+                <button class="tag entity-tag" data-entity="mara">Mara</button>
+                <span class="tag location-tag">Orchard gate</span>
+                <span class="tag uncertain-tag">temporal cue</span>
+              </div>
+            </article>
+
+            <article class="event-card" data-event="e2" data-pos="17" data-symbol="③" data-entities="mara elian" data-spans="s-third-bell">
+              <h3>All clocks stop at third bell</h3>
+              <p>The clocks agree on a time, but the note questions whether the bell followed the event rather than caused it.</p>
+              <div class="meta-row">
+                <button class="tag entity-tag" data-entity="mara">Mara</button>
+                <button class="tag entity-tag" data-entity="elian">Elian</button>
+                <button class="tag thread-tag" data-thread="t-bell">Open thread: third bell</button>
+                <span class="tag uncertain-tag">cause unknown</span>
+              </div>
+            </article>
+
+            <article class="event-card" data-event="e3" data-pos="25" data-symbol="✎" data-entities="archivist" data-spans="s-archivist">
+              <h3>Archivist appears before dawn</h3>
+              <p>A person in Royal Archivist sleeves is seen on the balcony, creating a possible identity and access question.</p>
+              <div class="meta-row">
+                <button class="tag entity-tag" data-entity="archivist">Archivist</button>
+                <span class="tag location-tag">Balcony</span>
+                <span class="tag uncertain-tag">identity weak</span>
+              </div>
+            </article>
+
+            <article class="event-card" data-event="e4" data-pos="39" data-symbol="↯" data-entities="mara elian" data-spans="s-red-needle">
+              <h3>Red needle opens a lock</h3>
+              <p>The city clock’s red needle is found warm in a box; bells answer it and a hidden lock opens below.</p>
+              <div class="meta-row">
+                <button class="tag entity-tag" data-entity="mara">Mara</button>
+                <button class="tag entity-tag" data-entity="elian">Elian</button>
+                <button class="tag thread-tag" data-thread="t-needle">Open thread: red needle</button>
+                <span class="tag uncertain-tag">mechanism unknown</span>
+              </div>
+            </article>
+
+            <article class="event-card" data-event="e5" data-pos="63" data-symbol="▾" data-entities="mara elian archivist" data-spans="s-lyr">
+              <h3>Hidden stair below glasshouse</h3>
+              <p>A seam opens into a stairway absent from maps of Lyr, connecting the orchard to an unmapped underground space.</p>
+              <div class="meta-row">
+                <button class="tag entity-tag" data-entity="mara">Mara</button>
+                <button class="tag entity-tag" data-entity="elian">Elian</button>
+                <span class="tag location-tag">Below glasshouse</span>
+              </div>
+            </article>
+
+            <article class="event-card" data-event="e6" data-pos="73" data-symbol="?" data-entities="mara archivist elian" data-spans="s-mara s-archivist s-elian">
+              <h3>Father connection implied</h3>
+              <p>The Archivist claims Mara’s father knew about the stair, while Elian’s reaction suggests withheld knowledge.</p>
+              <div class="meta-row">
+                <button class="tag entity-tag" data-entity="mara">Mara</button>
+                <button class="tag entity-tag" data-entity="elian">Elian</button>
+                <button class="tag thread-tag" data-thread="t-father">Open thread: father knew</button>
+                <span class="tag uncertain-tag">unverified claim</span>
+              </div>
+            </article>
+
+            <article class="event-card" data-event="e7" data-pos="95" data-symbol="↺" data-entities="mara" data-spans="s-third-bell s-red-needle">
+              <h3>Clocks resume out of order</h3>
+              <p>After Mara enters the stair, the clocks restart one by one, suggesting multiple inconsistent temporal states.</p>
+              <div class="meta-row">
+                <button class="tag entity-tag" data-entity="mara">Mara</button>
+                <button class="tag thread-tag" data-thread="t-bell">Open thread: third bell</button>
+                <span class="tag uncertain-tag">possible contradiction</span>
+              </div>
+            </article>
+          </div>
+          <div class="detail-card" id="detailCard" aria-live="polite">
+            <p class="eyebrow">Selected structure</p>
+            <h3>Click an event, entity, thread, or citation</h3>
+            <p>The prototype will scroll both panes, highlight source evidence, and show a small inspection summary here.</p>
+            <div class="meta-row">
+              <span class="tag">source spans</span>
+              <span class="tag">confidence</span>
+              <span class="tag">correction ops</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="chat-drawer expanded" id="chatDrawer" aria-label="LLM dialogue panel">
+      <div class="chat-head">
+        <strong>Ask the book</strong>
+        <div class="question-box" role="textbox" aria-label="Example question">What changed when the red needle appeared?</div>
+        <button class="ghost-btn" id="sampleAsk">Run sample answer</button>
+        <button class="ghost-btn" id="toggleChat">Collapse</button>
+      </div>
+      <div class="chat-body">
+        <div class="answer" id="answerBox">
+          <p><strong>Sample answer.</strong> The red needle links the city clock to the orchard mechanism. Its discovery causes the bells to answer and a lower lock to open <button class="citation" data-jump="e4">Event E4</button>. That connects to the later hidden stair discovery <button class="citation" data-jump="e5">Event E5</button> and keeps the “third bell” problem unresolved <button class="citation" data-jump="t-bell">Thread T-bell</button>.</p>
+          <p>The answer should not claim more than the visible frontier supports; it should navigate to evidence rather than resolve the mystery prematurely.</p>
+        </div>
+        <div class="chat-side" aria-label="Current model state summary">
+          <div class="mini-card"><div class="num">7</div><div class="label">canonical event candidates</div></div>
+          <div class="mini-card"><div class="num">4</div><div class="label">open narrative threads</div></div>
+          <div class="mini-card"><div class="num">3</div><div class="label">items needing review</div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const sourceScroll = document.getElementById('sourceScroll');
+    const timelineScroll = document.getElementById('timelineScroll');
+    const progressFill = document.getElementById('progressFill');
+    const progressLabel = document.getElementById('progressLabel');
+    const detailCard = document.getElementById('detailCard');
+    const toast = document.getElementById('toast');
+    const chatDrawer = document.getElementById('chatDrawer');
+    const toggleChat = document.getElementById('toggleChat');
+
+    const eventModel = {
+      e1: { title: 'Observatory closure noticed', spans: ['s-observatory'], confidence: '0.86', order: 'reading order', review: 'Temporal phrase “second moon” needs normalization.' },
+      e2: { title: 'All clocks stop at third bell', spans: ['s-third-bell'], confidence: '0.74', order: 'cause unclear', review: 'Potential contradiction: clocks stop before bell is rung.' },
+      e3: { title: 'Archivist appears before dawn', spans: ['s-archivist'], confidence: '0.61', order: 'reading order', review: 'Identity is inferred from sleeves; requires confirmation.' },
+      e4: { title: 'Red needle opens a lock', spans: ['s-red-needle'], confidence: '0.82', order: 'mechanistic relation', review: 'Mechanism is unknown; do not infer causality too strongly.' },
+      e5: { title: 'Hidden stair below glasshouse', spans: ['s-lyr'], confidence: '0.90', order: 'reading order', review: 'Location canonicalization needed: below glasshouse vs orchard roots.' },
+      e6: { title: 'Father connection implied', spans: ['s-mara', 's-archivist', 's-elian'], confidence: '0.58', order: 'unverified claim', review: 'Claim source is the Archivist; not yet corroborated.' },
+      e7: { title: 'Clocks resume out of order', spans: ['s-third-bell', 's-red-needle'], confidence: '0.69', order: 'possible contradiction', review: 'Multiple temporal states; may need partial-order representation.' }
+    };
+
+    const threadModel = {
+      't-bell': { title: 'Open thread: third bell', events: ['e2', 'e7'], spans: ['s-third-bell'], review: 'The bell appears both as timestamp and possible causal mechanism.' },
+      't-needle': { title: 'Open thread: red needle', events: ['e4', 'e7'], spans: ['s-red-needle'], review: 'The needle links city clock, bells, and hidden lock.' },
+      't-father': { title: 'Open thread: father knew', events: ['e6'], spans: ['s-mara', 's-archivist', 's-elian'], review: 'One character asserts prior knowledge; not yet confirmed.' }
+    };
+
+    const entityModel = {
+      mara: { title: 'Mara Vell', spans: ['s-mara'], review: 'Primary focal character in current frontier.' },
+      elian: { title: 'Elian', spans: ['s-elian'], review: 'Possible secret-keeper; reaction carries evidence.' },
+      archivist: { title: 'Royal Archivist', spans: ['s-archivist'], review: 'Identity is weakly inferred from clothing.' }
+    };
+
+    function maxScroll(el) {
+      return Math.max(1, el.scrollHeight - el.clientHeight);
+    }
+
+    let syncLock = false;
+    function sync(from, to) {
+      if (syncLock) return;
+      syncLock = true;
+      const ratio = from.scrollTop / maxScroll(from);
+      to.scrollTop = ratio * maxScroll(to);
+      setProgress(ratio);
+      requestAnimationFrame(() => { syncLock = false; });
+    }
+
+    sourceScroll.addEventListener('scroll', () => {
+      sync(sourceScroll, timelineScroll);
+      updateCurrentParagraph();
+    });
+    timelineScroll.addEventListener('scroll', () => sync(timelineScroll, sourceScroll));
+
+    function setProgress(ratio) {
+      const clamped = Math.max(0, Math.min(1, ratio));
+      progressFill.style.width = `${Math.round(clamped * 100)}%`;
+      const paragraph = [...document.querySelectorAll('.paragraph')].reduce((best, p) => {
+        const top = Math.abs(p.getBoundingClientRect().top - sourceScroll.getBoundingClientRect().top - 120);
+        return !best || top < best.top ? { p, top } : best;
+      }, null)?.p;
+      if (paragraph) progressLabel.textContent = paragraph.dataset.ref;
+    }
+
+    function updateCurrentParagraph() {
+      const paragraphs = [...document.querySelectorAll('.paragraph')];
+      let closest = null;
+      for (const p of paragraphs) {
+        const delta = Math.abs(p.getBoundingClientRect().top - sourceScroll.getBoundingClientRect().top - 180);
+        if (!closest || delta < closest.delta) closest = { p, delta };
+      }
+      paragraphs.forEach(p => p.classList.toggle('current', closest && p === closest.p));
+    }
+
+    function clearActive() {
+      document.querySelectorAll('.active-span').forEach(el => el.classList.remove('active-span'));
+      document.querySelectorAll('.event-card.active').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.event-card.dimmed').forEach(el => el.classList.remove('dimmed'));
+    }
+
+    function highlightSpans(spans) {
+      document.querySelectorAll('mark').forEach(el => el.classList.remove('active-span'));
+      const targets = spans.flatMap(span => [...document.querySelectorAll(`[data-span="${span}"]`)]);
+      targets.forEach(el => el.classList.add('active-span'));
+      if (targets[0]) targets[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function focusEvent(id) {
+      const model = eventModel[id];
+      const card = document.querySelector(`[data-event="${id}"]`);
+      if (!model || !card) return;
+      clearActive();
+      card.classList.add('active');
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      highlightSpans(model.spans);
+      detailCard.innerHTML = `
+        <p class="eyebrow">Canonical event candidate</p>
+        <h3>${model.title}</h3>
+        <p>${model.review}</p>
+        <div class="meta-row">
+          <span class="tag">confidence ${model.confidence}</span>
+          <span class="tag">${model.order}</span>
+          <span class="tag">${model.spans.length} evidence span${model.spans.length > 1 ? 's' : ''}</span>
+        </div>
+        <div class="inspector-grid">
+          <div class="inspector-metric"><div class="metric-label">Correction op</div><div class="metric-value">edit / split</div></div>
+          <div class="inspector-metric"><div class="metric-label">Derived views</div><div class="metric-value">timeline</div></div>
+        </div>`;
+      showToast(`Selected ${model.title}. Source evidence is highlighted in the book panel.`);
+    }
+
+    function focusThread(id) {
+      const model = threadModel[id];
+      if (!model) return;
+      clearActive();
+      document.querySelectorAll('.event-card').forEach(card => {
+        const active = model.events.includes(card.dataset.event);
+        card.classList.toggle('active', active);
+        card.classList.toggle('dimmed', !active);
+      });
+      highlightSpans(model.spans);
+      detailCard.innerHTML = `
+        <p class="eyebrow">Open narrative thread</p>
+        <h3>${model.title}</h3>
+        <p>${model.review}</p>
+        <div class="meta-row">
+          <span class="tag">${model.events.length} linked events</span>
+          <span class="tag">unresolved</span>
+          <span class="tag">frontier-safe</span>
+        </div>`;
+      const firstCard = document.querySelector(`[data-event="${model.events[0]}"]`);
+      if (firstCard) firstCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showToast(`Focused ${model.title}. Only linked events remain prominent.`);
+    }
+
+    function focusEntity(id) {
+      const model = entityModel[id];
+      if (!model) return;
+      clearActive();
+      const relatedCards = [...document.querySelectorAll('.event-card')].filter(card => (card.dataset.entities || '').split(' ').includes(id));
+      document.querySelectorAll('.event-card').forEach(card => card.classList.toggle('dimmed', !relatedCards.includes(card)));
+      relatedCards.forEach(card => card.classList.add('active'));
+      highlightSpans(model.spans);
+      detailCard.innerHTML = `
+        <p class="eyebrow">Canonical entity</p>
+        <h3>${model.title}</h3>
+        <p>${model.review}</p>
+        <div class="meta-row">
+          <span class="tag">${relatedCards.length} linked event candidates</span>
+          <span class="tag">mentions highlighted</span>
+          <span class="tag">merge / split ready</span>
+        </div>`;
+      if (relatedCards[0]) relatedCards[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showToast(`Focused entity ${model.title}. Timeline is filtered by participation.`);
+    }
+
+    document.querySelectorAll('.event-card').forEach(card => {
+      const pos = Number(card.dataset.pos);
+      card.style.top = `${72 + pos * 15.2}px`;
+      card.addEventListener('click', (event) => {
+        const entityButton = event.target.closest('[data-entity]');
+        const threadButton = event.target.closest('[data-thread]');
+        if (entityButton) return focusEntity(entityButton.dataset.entity);
+        if (threadButton) return focusThread(threadButton.dataset.thread);
+        focusEvent(card.dataset.event);
+      });
+    });
+
+    document.querySelectorAll('[data-filter]').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+        button.classList.add('active');
+        const filter = button.dataset.filter;
+        clearActive();
+        if (filter === 'all') return showToast('Showing all event candidates in reading order.');
+        if (filter === 'uncertain') {
+          document.querySelectorAll('.event-card').forEach(card => {
+            const uncertain = card.querySelector('.uncertain-tag');
+            card.classList.toggle('dimmed', !uncertain);
+            card.classList.toggle('active', !!uncertain);
+          });
+          return showToast('Filtered to items with uncertainty or review needs.');
+        }
+        focusEntity(filter);
+      });
+    });
+
+    document.querySelectorAll('[data-highlight]').forEach(button => {
+      button.addEventListener('click', () => {
+        const mode = button.dataset.highlight;
+        document.querySelectorAll('[data-highlight]').forEach(b => b.classList.remove('active'));
+        button.classList.add('active');
+        document.querySelectorAll('mark').forEach(mark => {
+          mark.style.background = '';
+          mark.style.boxShadow = '';
+          mark.hidden = false;
+          if (mode === 'clear') {
+            mark.style.background = 'transparent';
+            mark.style.boxShadow = 'none';
+          }
+          if (mode === 'entities' && !mark.classList.contains('entity')) {
+            mark.style.background = 'transparent';
+            mark.style.boxShadow = 'none';
+          }
+          if (mode === 'events' && !mark.classList.contains('event')) {
+            mark.style.background = 'transparent';
+            mark.style.boxShadow = 'none';
+          }
+        });
+      });
+    });
+
+    document.querySelectorAll('[data-mode]').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
+        button.classList.add('active');
+        const mode = button.dataset.mode;
+        if (mode === 'thread') {
+          focusThread('t-bell');
+          showToast('Thread mode prototype: the third-bell thread is opened as an example.');
+        } else if (mode === 'review') {
+          clearActive();
+          ['e2', 'e3', 'e6', 'e7'].forEach(id => document.querySelector(`[data-event="${id}"]`)?.classList.add('active'));
+          document.querySelectorAll('.event-card').forEach(card => {
+            if (!card.classList.contains('active')) card.classList.add('dimmed');
+          });
+          detailCard.innerHTML = `
+            <p class="eyebrow">Review queue sketch</p>
+            <h3>Uncertain and consequential items</h3>
+            <p>This mode would collect weak identities, unsupported causal claims, contradictions, and order issues before writing durable correction operations.</p>
+            <div class="meta-row"><span class="tag">identity weak</span><span class="tag">cause unknown</span><span class="tag">possible contradiction</span></div>`;
+          showToast('Review mode prototype: uncertainty-heavy cards are emphasized.');
+        } else {
+          clearActive();
+          detailCard.innerHTML = `
+            <p class="eyebrow">Reading mode</p>
+            <h3>Timeline aligned to source position</h3>
+            <p>Scroll either panel. Event cards stay mapped to where the evidence appears in the book.</p>
+            <div class="meta-row"><span class="tag">source synced</span><span class="tag">frontier-safe</span><span class="tag">click evidence</span></div>`;
+          showToast('Reading mode restored. Timeline cards are aligned to source paragraphs.');
+        }
+      });
+    });
+
+    document.querySelectorAll('.citation').forEach(button => {
+      button.addEventListener('click', () => {
+        const target = button.dataset.jump;
+        if (eventModel[target]) focusEvent(target);
+        else if (threadModel[target]) focusThread(target);
+      });
+    });
+
+    document.getElementById('sampleAsk').addEventListener('click', () => {
+      chatDrawer.classList.add('expanded');
+      toggleChat.textContent = 'Collapse';
+      focusEvent('e4');
+    });
+
+    toggleChat.addEventListener('click', () => {
+      const expanded = chatDrawer.classList.toggle('expanded');
+      toggleChat.textContent = expanded ? 'Collapse' : 'Expand';
+    });
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    setProgress(0);
+    updateCurrentParagraph();
+  </script>
+</body>
+</html>
