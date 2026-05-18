@@ -120,14 +120,22 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      min-height: 50px;
+    }
+    .source-panel .panel-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .source-header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
     .source-header-tools {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 6px;
       flex-wrap: wrap;
-      justify-content: flex-end;
     }
     .eyebrow {
       margin: 0 0 2px;
@@ -625,11 +633,13 @@
     <section class="workspace">
       <section class="panel source-panel">
         <div class="panel-header">
-          <div class="panel-title">
-            <p class="eyebrow">Source text</p>
+          <div class="source-header-top">
+            <div class="panel-title">
+              <p class="eyebrow">Source text</p>
+            </div>
+            <h2 id="chapterLabel" class="chapter-placeholder">卷一　闺房记乐</h2>
           </div>
           <div class="source-header-tools">
-            <h2 id="chapterLabel" class="chapter-placeholder">—</h2>
             <button class="tool-btn active" data-hl="entity">Entities</button>
             <button class="tool-btn active" data-hl="location">Locations</button>
             <button class="tool-btn active" data-hl="time">Time</button>
