@@ -32,4 +32,6 @@
 - Still untested at true 500MB scale.
 - Unit repair pass implemented with KV cache prefix sharing: `repair-unit <finalization_pass_dir>` reuses the finalization system prompt and user payload prefix, adding repair-specific instructions and `repair_targets`. LLM trial on unit-0002 repaired all 3 blocking concerns (missing evidence quotes, missing evidence refs, invalid evidence ref) and reduced unresolved items 8→5.
 - First timeline construction pass implemented: `timeline-unit <repair_pass_dir>` produces partially-ordered timelines with DAG-structured `before_events` edges. Uses only unit-level event refs for compact output. LLM trial on unit-0002 produced 3 timelines (confidence: 1 high, 2 medium), covering 40/43 events. Known gap: 3 contiguous events from segment 4 were omitted by the LLM during enumeration — deterministic validation catches this as a warning.
-- Static reader view work is exploratory. Known UI issues and notes are tracked in `docs/reader_view_notes.md`; timeline canvas drag-to-pan is intentionally parked for now.
+- Static reader view generator is a self-contained HTML demo consuming real extraction data.
+  Usage: `python tools/generate_reader_view.py <unit_package.json> <resolved_segments.json> <book.txt> -o reader_view.html`
+  Template: `tools/reader_view_template.html` (CSS + JS skeleton). Known UI issues and notes in `docs/reader_view_notes.md`.
