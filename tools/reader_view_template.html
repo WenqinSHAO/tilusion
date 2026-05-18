@@ -604,41 +604,108 @@
       margin-bottom: 8px;
     }
 
-    /* ---- stats bar ---- */
-    .stats-bar {
+    /* ---- chat panel ---- */
+    .chat-panel {
       display: flex;
-      gap: 12px;
-      padding: 10px 16px;
+      flex-direction: column;
       border: 1px solid var(--line);
       border-radius: 22px;
       background: rgba(255, 250, 240, 0.76);
       backdrop-filter: blur(16px);
       box-shadow: var(--shadow);
-      overflow-x: auto;
+      overflow: hidden;
+      min-height: 48px;
+      max-height: 280px;
+      transition: min-height 200ms ease;
     }
-    .stat-item {
+    .chat-panel.expanded {
+      min-height: 220px;
+    }
+    .chat-messages {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 16px;
       display: flex;
-      align-items: baseline;
-      gap: 6px;
-      flex-shrink: 0;
+      flex-direction: column;
+      gap: 10px;
     }
-    .stat-num {
-      font-family: var(--serif);
-      font-size: 22px;
-      letter-spacing: -0.04em;
+    .chat-message {
+      max-width: 88%;
+      padding: 8px 12px;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.55;
     }
-    .stat-label {
+    .chat-message.user {
+      align-self: flex-end;
+      background: rgba(25, 22, 16, 0.08);
+      color: var(--ink);
+      border-bottom-right-radius: 4px;
+    }
+    .chat-message.app {
+      align-self: flex-start;
+      background: rgba(255, 245, 235, 0.85);
+      border: 1px solid rgba(215, 85, 51, 0.15);
+      color: var(--ink);
+      border-bottom-left-radius: 4px;
+    }
+    .chat-message .ev-cite {
+      display: inline-block;
       font-family: var(--mono);
       font-size: 10px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+      color: var(--accent);
+      background: rgba(215, 85, 51, 0.10);
+      border-radius: 6px;
+      padding: 1px 6px;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      transition: background 140ms ease;
     }
-    .stat-sep {
-      width: 1px;
-      background: var(--line);
-      align-self: stretch;
-      flex-shrink: 0;
+    .chat-message .ev-cite:hover {
+      background: rgba(215, 85, 51, 0.22);
+    }
+    .chat-input-area {
+      display: flex;
+      gap: 8px;
+      padding: 8px 14px;
+      border-top: 1px solid var(--soft-line);
+      background: rgba(255, 250, 240, 0.45);
+    }
+    .chat-input-area input {
+      flex: 1;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.55);
+      outline: none;
+      transition: border-color 140ms ease;
+    }
+    .chat-input-area input:focus {
+      border-color: rgba(215, 85, 51, 0.40);
+    }
+    .chat-input-area input::placeholder {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .chat-input-area button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 16px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.55);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease;
+    }
+    .chat-input-area button:hover {
+      background: rgba(255,255,255,0.78);
     }
 
     /* ---- responsive ---- */
@@ -714,18 +781,17 @@
       </aside>
     </section>
 
-    <footer class="stats-bar">
-      <div class="stat-item"><span class="stat-num">{{ENTITY_COUNT}}</span><span class="stat-label">entities</span></div>
-      <div class="stat-sep"></div>
-      <div class="stat-item"><span class="stat-num">{{LOCATION_COUNT}}</span><span class="stat-label">locations</span></div>
-      <div class="stat-sep"></div>
-      <div class="stat-item"><span class="stat-num">{{EVENT_COUNT}}</span><span class="stat-label">events</span></div>
-      <div class="stat-sep"></div>
-      <div class="stat-item"><span class="stat-num">{{TIMELINE_COUNT}}</span><span class="stat-label">timelines</span></div>
-      <div class="stat-sep"></div>
-      <div class="stat-item"><span class="stat-num">{{THREAD_COUNT}}</span><span class="stat-label">threads</span></div>
-      <div class="stat-sep"></div>
-      <div class="stat-item"><span class="stat-num">{{UNRESOLVED_COUNT}}</span><span class="stat-label">unresolved</span></div>
+    <footer class="chat-panel" id="chatPanel">
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-message app">
+          欢迎！你可以用自然语言询问关于《浮生六记》的事件、人物和时间线。<br>
+          例如：<i>"记得芸娘和作者父母慢慢闹了矛盾，有张力，主要有哪些线索？"</i>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <input type="text" id="chatInput" placeholder="询问关于事件、人物、时间线..." />
+        <button id="chatSendBtn">发送</button>
+      </div>
     </footer>
   </main>
   <div class="popover" id="popover"></div>
@@ -1569,6 +1635,75 @@
     // Delay init to let layout settle
     requestAnimationFrame(() => {
       requestAnimationFrame(init);
+    });
+
+    // ── Chat ──
+    const chatPanel = document.getElementById('chatPanel');
+    const chatMessages = document.getElementById('chatMessages');
+    const chatInput = document.getElementById('chatInput');
+    const chatSendBtn = document.getElementById('chatSendBtn');
+
+    const MOCK_RESPONSE = `
+      关于芸娘与沈复父母之间的紧张关系，主要线索如下：<br><br>
+      <b>1. 代笔书信事件</b><br>
+      芸娘为沈复父亲代笔写给沈复的信件，但因措辞不当引起父亲不满。
+      相关事件：<span class="ev-cite" data-event="unit-event-0016">unit-event-0016</span>、<span class="ev-cite" data-event="unit-event-0017">unit-event-0017</span><br><br>
+      <b>2. 借贷与金钱矛盾</b><br>
+      芸娘因娘家经济困难私自借贷，被沈复父母知晓后认为其行为不端。
+      相关事件：<span class="ev-cite" data-event="unit-event-0020">unit-event-0020</span><br><br>
+      <b>3. 婆媳日常摩擦</b><br>
+      芸娘与婆婆在日常家务安排上产生分歧，沈复父亲偏袒母亲，导致芸娘处境艰难。
+      相关事件：<span class="ev-cite" data-event="unit-event-0024">unit-event-0024</span>、<span class="ev-cite" data-event="unit-event-0030">unit-event-0030</span><br><br>
+      <b>4. 逐出家门</b><br>
+      矛盾激化后，沈复父母要求沈复将芸娘送回娘家，芸娘被迫离开沈家。
+      相关事件：<span class="ev-cite" data-event="unit-event-0033">unit-event-0033</span><br><br>
+      以上线索横跨多个时间线，你可点击事件编号查看详情及原文出处。
+    `;
+
+    function addMessage(text, role) {
+      const div = document.createElement('div');
+      div.className = `chat-message ${role}`;
+      div.innerHTML = text;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      chatPanel.classList.add('expanded');
+
+      // Wire up event citations
+      div.querySelectorAll('.ev-cite').forEach(cite => {
+        cite.addEventListener('click', () => {
+          const evId = cite.dataset.event;
+          if (currentView === 'thread' && threadViewMode === 'cards') {
+            // Switch back to graph to show the event
+            document.getElementById('threadToggleBtn').click();
+          }
+          if (currentView !== 'timeline' && currentView !== 'thread') {
+            showTimelineView();
+          }
+          // Find event's timeline and select it
+          for (const tl of TIMELINES) {
+            if (tl.ordered_events.some(oe => oe.event_id === evId)) {
+              selectTimeline(tl.timeline_id);
+              break;
+            }
+          }
+          activateEvent(evId);
+          scrollGraphEventIntoView(evId);
+        });
+      });
+    }
+
+    function sendMessage() {
+      const text = chatInput.value.trim();
+      if (!text) return;
+      addMessage(text, 'user');
+      chatInput.value = '';
+      // Simulate brief delay then mock response
+      setTimeout(() => { addMessage(MOCK_RESPONSE, 'app'); }, 500);
+    }
+
+    chatSendBtn.addEventListener('click', sendMessage);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMessage();
     });
   </script>
 </body>
