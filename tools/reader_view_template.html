@@ -442,6 +442,10 @@
       fill: var(--accent);
       font-weight: 600;
     }
+    .tl-graph .graph-event-node.highlighted .event-label-box {
+      fill: rgba(230, 215, 180, 0.88);
+      stroke: rgba(180, 160, 110, 0.40);
+    }
     .tl-graph .timeline-title {
       font-family: var(--mono);
       font-size: 10px;
@@ -950,6 +954,7 @@
     function clearActiveSource() {
       document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('active-dot'));
       document.querySelectorAll('.event-card').forEach(c => c.classList.remove('active'));
+      document.querySelectorAll('.graph-event-node.highlighted').forEach(n => n.classList.remove('highlighted'));
       document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
     }
 
@@ -999,8 +1004,7 @@
       if (currentView !== 'timeline') showTimelineView();
       clearActiveSource();
       matches.forEach(ev => {
-        document.querySelectorAll(`.event-dot[data-event="${ev.event_id}"]`).forEach(d => d.classList.add('active-dot'));
-        document.querySelectorAll(`.event-card[data-event="${ev.event_id}"]`).forEach(c => c.classList.add('active'));
+        document.querySelectorAll(`.graph-event-node[data-event="${ev.event_id}"]`).forEach(n => n.classList.add('highlighted'));
       });
       scrollGraphEventIntoView(matches[0].event_id);
     }
@@ -1236,6 +1240,8 @@
       panSurface.addEventListener('click', (e) => {
         if (suppressGraphClick) return;
         document.querySelectorAll('.graph-event-node.selected').forEach(n => n.classList.remove('selected'));
+        document.querySelectorAll('.graph-event-node.highlighted').forEach(n => n.classList.remove('highlighted'));
+        clearActiveSource();
       });
       svg.appendChild(panSurface);
 
@@ -1306,12 +1312,17 @@
             e.stopPropagation();
             if (suppressGraphClick) return;
             const wasSelected = node.classList.contains('selected');
-            // Deselect all event nodes
+            // Deselect all event nodes and clear highlights
             document.querySelectorAll('.graph-event-node.selected').forEach(n => n.classList.remove('selected'));
+            document.querySelectorAll('.graph-event-node.highlighted').forEach(n => n.classList.remove('highlighted'));
             // Toggle this node
-            if (!wasSelected) node.classList.add('selected');
-            selectTimeline(tl.timeline_id);
-            activateEvent(oe.event_id);
+            if (!wasSelected) {
+              node.classList.add('selected');
+              selectTimeline(tl.timeline_id);
+              activateEvent(oe.event_id);
+            } else {
+              clearActiveSource();
+            }
           });
 
           const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
