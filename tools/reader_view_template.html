@@ -120,24 +120,14 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
+      min-height: 50px;
     }
-    .source-panel .panel-header {
-      align-items: stretch;
-      flex-direction: column;
-    }
-    .source-title-row {
+    .source-header-tools {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      min-width: 0;
-    }
-    .source-marker-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      gap: 12px;
       flex-wrap: wrap;
-      padding-top: 8px;
+      justify-content: flex-end;
     }
     .eyebrow {
       margin: 0 0 2px;
@@ -635,13 +625,11 @@
     <section class="workspace">
       <section class="panel source-panel">
         <div class="panel-header">
-          <div class="source-title-row">
-            <div class="panel-title">
-              <p class="eyebrow">Source text</p>
-              <h2 id="chapterLabel" class="chapter-placeholder">—</h2>
-            </div>
+          <div class="panel-title">
+            <p class="eyebrow">Source text</p>
           </div>
-          <div class="source-marker-row">
+          <div class="source-header-tools">
+            <h2 id="chapterLabel" class="chapter-placeholder">—</h2>
             <button class="tool-btn active" data-hl="entity">Entities</button>
             <button class="tool-btn active" data-hl="location">Locations</button>
             <button class="tool-btn active" data-hl="time">Time</button>
