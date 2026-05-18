@@ -75,18 +75,6 @@
       gap: 10px;
       min-width: 0;
     }
-    .brand-mark {
-      display: inline-grid;
-      place-items: center;
-      width: 36px; height: 36px;
-      border-radius: 14px;
-      background: var(--ink);
-      color: var(--bg);
-      font-family: var(--serif);
-      font-size: 22px;
-      transform: rotate(-3deg);
-      flex-shrink: 0;
-    }
     .brand h1 {
       margin: 0;
       font-family: var(--serif);
@@ -104,29 +92,6 @@
       text-overflow: ellipsis;
     }
     .spacer { flex: 1; }
-
-    .mode-switch {
-      display: inline-flex;
-      gap: 4px;
-      padding: 4px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.33);
-    }
-    .mode-switch button {
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      border-radius: 999px;
-      padding: 6px 12px;
-      font-family: var(--mono);
-      font-size: 11px;
-      cursor: pointer;
-    }
-    .mode-switch button.active {
-      background: var(--ink);
-      color: var(--bg);
-    }
 
     /* ---- workspace ---- */
     .workspace {
@@ -190,6 +155,10 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .chapter-placeholder {
+      color: var(--muted);
+      font-style: italic;
     }
     .panel-tools {
       display: flex;
@@ -657,15 +626,10 @@
   <main class="app">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">✦</div>
-        <h1>Reader View</h1>
-        <span class="subtitle">{{UNIT_ID}} · {{BOOK_TITLE}}</span>
+        <h1>Tilusion</h1>
+        <span class="subtitle">{{BOOK_TITLE}}</span>
       </div>
       <div class="spacer"></div>
-      <div class="mode-switch">
-        <button class="active" data-mode="reading">Reading</button>
-        <button data-mode="review">Review</button>
-      </div>
     </header>
 
     <section class="workspace">
@@ -674,7 +638,7 @@
           <div class="source-title-row">
             <div class="panel-title">
               <p class="eyebrow">Source text</p>
-              <h2>{{BOOK_TITLE}}</h2>
+              <h2 id="chapterLabel" class="chapter-placeholder">—</h2>
             </div>
           </div>
           <div class="source-marker-row">
@@ -928,28 +892,7 @@
       });
     });
 
-    // ── Mode switch ──
-    document.querySelectorAll('[data-mode]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        if (btn.dataset.mode === 'review') {
-          document.querySelectorAll('.event-dot').forEach(dot => {
-            const ev = EVENT_BY_ID[dot.dataset.event];
-            const needsReview = ev && ev.qc_notes && ev.qc_notes.length > 0;
-            dot.classList.toggle('dimmed-dot', !needsReview);
-          });
-          document.querySelectorAll('.event-card').forEach(card => {
-            const ev = EVENT_BY_ID[card.dataset.event];
-            const needsReview = ev && ev.qc_notes && ev.qc_notes.length > 0;
-            card.classList.toggle('dimmed', !needsReview);
-          });
-        } else {
-          document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('dimmed-dot'));
-          document.querySelectorAll('.event-card').forEach(c => c.classList.remove('dimmed'));
-        }
-      });
-    });
+    // ── Mode switch removed ──
 
     function clearActiveSource() {
       document.querySelectorAll('.event-dot').forEach(d => d.classList.remove('active-dot'));
