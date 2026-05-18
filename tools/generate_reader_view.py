@@ -463,11 +463,12 @@ def generate(
         "<!-- THREAD_NAV -->": thread_nav_html,
         "<!-- TIMELINE_HTML -->": (
             '<div id="timelineContent" class="tl-content">'
-            '<svg id="timelineGraph" class="tl-graph"></svg>'
-            '<div id="threadView" class="thread-view" style="display:none">'
-            '<div class="thread-view-header" id="threadViewHeader"></div>'
-            '<div class="thread-card-stack" id="threadCardStack"></div>'
+            '<div class="thread-view-header" id="threadViewHeader" style="display:none">'
+            '<div class="thread-view-header-info" id="threadViewHeaderInfo"></div>'
+            '<button class="thread-toggle-btn" id="threadToggleBtn">Cards</button>'
             '</div>'
+            '<svg id="timelineGraph" class="tl-graph"></svg>'
+            '<div id="threadCardStack" class="thread-card-stack" style="display:none"></div>'
             '</div>'
         ),
         "<!-- DATA_SCRIPT -->": js_constants,

@@ -451,30 +451,55 @@
     }
 
     /* ---- thread view ---- */
-    .thread-view {
-      padding: 0 16px 120px;
-    }
     .thread-view-header {
       position: sticky;
       top: 0;
       z-index: 5;
-      padding: 14px 0 10px;
+      padding: 10px 20px;
       background: linear-gradient(to bottom, rgba(246, 238, 222, 0.98), rgba(246, 238, 222, 0.82));
       backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--soft-line);
-      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
     }
-    .thread-view-header h3 {
+    .thread-view-header-info h3 {
       margin: 0;
       font-family: var(--serif);
-      font-size: 24px;
+      font-size: 20px;
       letter-spacing: -0.03em;
     }
-    .thread-view-header .thread-meta {
+    .thread-view-header-info .thread-meta {
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .thread-toggle-btn {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 12px;
       font-family: var(--mono);
       font-size: 10px;
       color: var(--muted);
-      margin-top: 4px;
+      background: rgba(255,255,255,0.42);
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 140ms ease, border-color 140ms ease;
+    }
+    .thread-toggle-btn:hover {
+      background: rgba(255,255,255,0.68);
+      border-color: rgba(21,19,15,0.28);
+    }
+    .thread-toggle-btn.active {
+      background: var(--ink);
+      color: var(--bg);
+      border-color: var(--ink);
+    }
+    .thread-card-stack {
+      padding: 0 16px 120px;
     }
 
     .event-card {
@@ -1320,25 +1345,14 @@
 
     // ── Thread view rendering ──
 
-    function renderThreadView(threadId) {
+    let threadViewMode = 'graph'; // 'graph' | 'cards'
+
+    function buildThreadCards(threadId) {
       const thread = THREAD_BY_ID[threadId];
       if (!thread) return;
-
-      document.getElementById('timelineGraph').style.display = 'none';
-      const threadView = document.getElementById('threadView');
-      threadView.style.display = 'block';
-
-      const header = document.getElementById('threadViewHeader');
-      const eventCount = threadEventIds(thread).size;
-      header.innerHTML = `
-        <h3>${thread.summary || thread.thread_id}</h3>
-        <div class="thread-meta">${thread.thread_id} · ${eventCount} events · ${thread.status || 'active'}</div>
-      `;
-
       const stack = document.getElementById('threadCardStack');
       const ids = threadEventIds(thread);
 
-      // Sort events by source_order_hint
       const threadEvents = EVENTS
         .filter(ev => ids.has(ev.event_id))
         .sort((a, b) => (a.source_order_hint || 0) - (b.source_order_hint || 0));
@@ -1357,7 +1371,6 @@
         if (ev.qc_notes && ev.qc_notes.length > 0) {
           tags.push('<span class="tag" style="color:#9a4a3f">needs review</span>');
         }
-        // Show time refs if any
         (ev.time_refs || []).forEach(tr => {
           const s = tr.surface || tr.normalized_hint || '';
           if (s) tags.push(`<span class="tag" style="color:var(--muted)">${s}</span>`);
@@ -1374,10 +1387,8 @@
 
       stack.innerHTML = cards.join('\n');
 
-      // Wire up card click → source highlight + timeline selection
       stack.querySelectorAll('.event-card').forEach(card => {
         card.addEventListener('click', () => {
-          // Find the event's timeline and select it
           const evId = card.dataset.event;
           for (const tl of TIMELINES) {
             if (tl.ordered_events.some(oe => oe.event_id === evId)) {
@@ -1388,28 +1399,83 @@
           activateEvent(evId);
         });
       });
+    }
 
-      // Wire up entity/location tag hover → popover
-      stack.querySelectorAll('.tag.entity-tag').forEach(tag => {
-        tag.addEventListener('mouseenter', (e) => {
-          const eid = ENTITY_BY_ID[tag.textContent.trim()] ? Object.entries(ENTITY_BY_ID).find(([_, v]) => v.canonical_name === tag.textContent.trim())?.[0] : null;
-          if (eid) showPopover(entityPopoverHtml(ENTITY_BY_ID[eid]), e.clientX, e.clientY);
-        });
-        tag.addEventListener('mousemove', (e) => {
-          if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
-        });
-        tag.addEventListener('mouseleave', hidePopover);
+    function activateThread(tid) {
+      const thread = THREAD_BY_ID[tid];
+      if (!thread) return;
+
+      currentView = 'thread';
+      activeThreadId = tid;
+      threadViewMode = 'graph';
+
+      // Show thread header
+      const header = document.getElementById('threadViewHeader');
+      header.style.display = 'flex';
+      const eventCount = threadEventIds(thread).size;
+      document.getElementById('threadViewHeaderInfo').innerHTML = `
+        <h3>${thread.summary || thread.thread_id}</h3>
+        <div class="thread-meta">${thread.thread_id} · ${eventCount} events · ${thread.status || 'active'}</div>
+      `;
+
+      // Update toggle button
+      const toggleBtn = document.getElementById('threadToggleBtn');
+      toggleBtn.textContent = 'Cards';
+      toggleBtn.classList.remove('active');
+
+      // Highlight thread events on graph
+      document.querySelectorAll('.graph-event-node.highlighted').forEach(n => n.classList.remove('highlighted'));
+      document.querySelectorAll('.graph-event-node.selected').forEach(n => n.classList.remove('selected'));
+      clearActiveSource();
+      const ids = threadEventIds(thread);
+      ids.forEach(eid => {
+        document.querySelectorAll(`.graph-event-node[data-event="${eid}"]`).forEach(n => n.classList.add('highlighted'));
       });
+
+      // Show graph, hide cards
+      document.getElementById('timelineGraph').style.display = 'block';
+      document.getElementById('threadCardStack').style.display = 'none';
+
+      // Update nav
+      document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('#threadNavList .nav-item').forEach(n => {
+        n.classList.toggle('active', n.dataset.thread === tid);
+      });
+
+      timelineScroll.scrollTop = 0;
     }
 
     function showTimelineView() {
       currentView = 'timeline';
       activeThreadId = null;
-      document.getElementById('threadView').style.display = 'none';
+      threadViewMode = 'graph';
+      document.getElementById('threadViewHeader').style.display = 'none';
+      document.getElementById('threadCardStack').style.display = 'none';
       document.getElementById('timelineGraph').style.display = 'block';
+      document.querySelectorAll('.graph-event-node.highlighted').forEach(n => n.classList.remove('highlighted'));
       document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
+      document.getElementById('threadToggleBtn').classList.remove('active');
       renderTimelineGraph();
     }
+
+    // ── Thread toggle button ──
+    document.getElementById('threadToggleBtn').addEventListener('click', () => {
+      const toggleBtn = document.getElementById('threadToggleBtn');
+      if (threadViewMode === 'graph') {
+        threadViewMode = 'cards';
+        toggleBtn.textContent = 'Graph';
+        toggleBtn.classList.add('active');
+        document.getElementById('timelineGraph').style.display = 'none';
+        document.getElementById('threadCardStack').style.display = 'block';
+        buildThreadCards(activeThreadId);
+      } else {
+        threadViewMode = 'graph';
+        toggleBtn.textContent = 'Cards';
+        toggleBtn.classList.remove('active');
+        document.getElementById('threadCardStack').style.display = 'none';
+        document.getElementById('timelineGraph').style.display = 'block';
+      }
+    });
 
     function selectTimeline(tid) {
       activeTimelineId = tid;
@@ -1469,13 +1535,7 @@
     // ── Thread nav items ──
     document.querySelectorAll('#threadNavList .nav-item').forEach(item => {
       item.addEventListener('click', () => {
-        currentView = 'thread';
-        activeThreadId = item.dataset.thread;
-        document.querySelectorAll('#timelineNavList .nav-item').forEach(n => n.classList.remove('active'));
-        document.querySelectorAll('#threadNavList .nav-item').forEach(n => n.classList.remove('active'));
-        item.classList.add('active');
-        renderThreadView(activeThreadId);
-        timelineScroll.scrollTop = 0;
+        activateThread(item.dataset.thread);
       });
     });
 
@@ -1486,9 +1546,16 @@
 
       // Observe resize to re-render graph
       const ro = new ResizeObserver(() => {
-        if (currentView === 'timeline') {
+        if (currentView === 'timeline' || (currentView === 'thread' && threadViewMode === 'graph')) {
           _graphLayout = null;
           renderTimelineGraph();
+          // Re-apply thread highlights after re-render
+          if (currentView === 'thread' && activeThreadId) {
+            const ids = threadEventIds(THREAD_BY_ID[activeThreadId]);
+            ids.forEach(eid => {
+              document.querySelectorAll(`.graph-event-node[data-event="${eid}"]`).forEach(n => n.classList.add('highlighted'));
+            });
+          }
         }
       });
       ro.observe(timelineScroll);
