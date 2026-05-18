@@ -670,11 +670,13 @@
       gap: 6px;
     }
     .chat-message {
-      max-width: 88%;
+      max-width: 80%;
+      width: fit-content;
       padding: 5px 10px;
       border-radius: 12px;
-      font-size: 12px;
-      line-height: 1.45;
+      font-family: var(--serif);
+      font-size: 20px;
+      line-height: 1.6;
     }
     .chat-message.user {
       align-self: flex-end;
@@ -692,7 +694,7 @@
     .chat-message .ev-cite {
       display: inline-block;
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 14px;
       color: var(--accent);
       background: rgba(215, 85, 51, 0.10);
       border-radius: 6px;
@@ -716,9 +718,9 @@
       flex: 1;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 5px 12px;
+      padding: 6px 14px;
       font-family: var(--sans);
-      font-size: 12px;
+      font-size: 14px;
       color: var(--ink);
       background: rgba(255, 255, 255, 0.55);
       outline: none;
@@ -727,9 +729,9 @@
     .chat-input-area button {
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 5px 12px;
-      font-family: var(--mono);
-      font-size: 10px;
+      padding: 6px 16px;
+      font-family: var(--sans);
+      font-size: 13px;
       color: var(--ink);
       background: rgba(255, 255, 255, 0.55);
       cursor: pointer;
@@ -828,8 +830,8 @@
         </div>
       </div>
       <div class="chat-input-area">
-        <input type="text" id="chatInput" placeholder="询问关于事件、人物、时间线..." />
-        <button id="chatSendBtn">发送</button>
+        <input type="text" id="chatInput" placeholder="Ask about events, characters, timelines..." />
+        <button id="chatSendBtn">Send</button>
       </div>
     </footer>
   </main>
