@@ -69,3 +69,34 @@ def test_write_passive_context_artifacts(tmp_path: Path) -> None:
     assert context_pack["source_length"] == {"chars": 10}
     assert report["context_pack_hash"] == context_pack["context_pack_hash"]
     assert latest["snapshot_hash"] == context_pack["book_state_snapshot"]["snapshot_hash"]
+
+
+def test_run_all_writes_passive_book_context_artifacts(tmp_path: Path) -> None:
+    from tilusion.extraction import MockExtractionBackend
+    from tilusion.extraction_pipeline import run_all_passes
+
+    book = tmp_path / "book.txt"
+    book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
+    record = run_all_passes(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=tmp_path / "cache",
+    )
+
+    package = json.loads(Path(record.unit_package_path).read_text(encoding="utf-8"))
+    book_context = package["book_context"]
+
+    assert book_context["enabled"] is True
+    assert book_context["prompt_injection"]["enabled"] is False
+    assert book_context["context_pack_id"].startswith("context-pack-")
+    assert book_context["selection_policy"] == "passive-context-v0.1"
+    for path in book_context["artifact_paths"].values():
+        assert Path(path).exists()
+
+    context_pack = json.loads(
+        Path(book_context["artifact_paths"]["context_pack"]).read_text(encoding="utf-8")
+    )
+    assert context_pack["target_unit_id"] == "unit-0001"
+    assert context_pack["context_pack_hash"] == book_context["context_pack_hash"]
+    assert context_pack["source_length"]["chars"] == len("Chapter 1\nAlice left home.\n")

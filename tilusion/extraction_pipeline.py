@@ -7,6 +7,7 @@ import sys
 import time
 from typing import Any
 
+from .book_context import write_passive_context_artifacts
 from .book_reader import build_book_index, extract_unit_text
 from .extraction import (
     DEFAULT_MAX_TOKENS,
@@ -2070,6 +2071,12 @@ def run_all_passes(
         skip_repair=skip_repair,
     )
     validation_summary = _validation_summary(final_data, pass_validation)
+    context_artifacts = write_passive_context_artifacts(
+        book_path=book_path,
+        unit_id=unit_id,
+        cache_root=root,
+        source_length=chain_record.source_length,
+    )
 
     # Write unit package
     package_path = write_unit_package(
@@ -2080,6 +2087,7 @@ def run_all_passes(
         validation=validation_summary,
         cache_root=root,
         source_length=chain_record.source_length,
+        context_artifacts=context_artifacts,
     )
 
     return RunAllRecord(
@@ -2101,6 +2109,7 @@ def write_unit_package(
     validation: dict[str, Any],
     cache_root: Path,
     source_length: dict[str, int] | None = None,
+    context_artifacts: dict[str, str] | None = None,
 ) -> str:
     package_dir = cache_root / "units" / unit_id
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -2113,6 +2122,7 @@ def write_unit_package(
             "chars": sl.get("chars"),
             "lines": sl.get("lines"),
         },
+        "book_context": build_unit_package_context_metadata(context_artifacts),
         "passes": passes,
         "data": data,
         "validation": validation,
@@ -2122,6 +2132,29 @@ def write_unit_package(
         encoding="utf-8",
     )
     return str(package_path)
+
+
+def build_unit_package_context_metadata(
+    context_artifacts: dict[str, str] | None,
+) -> dict[str, Any]:
+    if not context_artifacts:
+        return {
+            "enabled": False,
+            "prompt_injection": {"enabled": False},
+            "artifact_paths": {},
+        }
+    context_pack_path = Path(context_artifacts["context_pack"])
+    context_pack = json.loads(context_pack_path.read_text(encoding="utf-8"))
+    return {
+        "enabled": True,
+        "book_id": context_pack.get("book_id"),
+        "context_pack_id": context_pack.get("context_pack_id"),
+        "context_pack_hash": context_pack.get("context_pack_hash"),
+        "selection_policy": context_pack.get("selection_policy"),
+        "book_state_snapshot": context_pack.get("book_state_snapshot", {}),
+        "prompt_injection": context_pack.get("prompt_injection", {"enabled": False}),
+        "artifact_paths": context_artifacts,
+    }
 
 
 def _elapsed_ms(since: float) -> int:
