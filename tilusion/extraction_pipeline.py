@@ -514,6 +514,7 @@ def run_unit_finalization_pass(
     *,
     backend: LLMBackend | None = None,
     use_cache: bool = True,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> UnitFinalizationRecord:
     root_dir = Path(chain_dir)
     manifest_path = root_dir / "chain_manifest.json"
@@ -521,7 +522,7 @@ def run_unit_finalization_pass(
         raise ValueError(f"missing chain manifest: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     llm = backend or MockExtractionBackend()
-    prompt = build_unit_finalization_composition()
+    prompt = build_unit_finalization_composition(book_context_prompt_parts(book_context_pack))
     payload = build_unit_finalization_payload(manifest)
     check_extraction_budget(
         prompt.content,
@@ -533,6 +534,7 @@ def run_unit_finalization_pass(
         prompt=prompt,
         user_payload=payload,
         model_identity=llm.model_identity,
+        cache_context=book_context_cache_metadata(book_context_pack),
     )
     pass_dir = root_dir / "unit_finalization" / cache_key
     paths = unit_finalization_artifact_paths(pass_dir)
@@ -574,6 +576,7 @@ def run_unit_repair_pass(
     *,
     backend: LLMBackend | None = None,
     use_cache: bool = True,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> UnitFinalizationRecord:
     pass_dir = Path(finalization_pass_dir)
     result_path = pass_dir / "result.json"
@@ -586,7 +589,7 @@ def run_unit_repair_pass(
         raise ValueError(f"missing chain manifest: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     llm = backend or MockExtractionBackend()
-    prompt = build_unit_repair_composition()
+    prompt = build_unit_repair_composition(book_context_prompt_parts(book_context_pack))
     payload = build_unit_repair_payload(manifest, finalization_data)
     check_extraction_budget(
         prompt.content,
@@ -598,6 +601,7 @@ def run_unit_repair_pass(
         prompt=prompt,
         user_payload=payload,
         model_identity=llm.model_identity,
+        cache_context=book_context_cache_metadata(book_context_pack),
     )
     repair_pass_dir = chain_dir / "unit_repair" / cache_key
     paths = unit_repair_artifact_paths(repair_pass_dir)
@@ -641,6 +645,7 @@ def run_unit_timeline_pass(
     *,
     backend: LLMBackend | None = None,
     use_cache: bool = True,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> UnitTimelineRecord:
     pass_dir = Path(repair_pass_dir)
     result_path = pass_dir / "result.json"
@@ -653,7 +658,7 @@ def run_unit_timeline_pass(
         raise ValueError(f"missing chain manifest: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     llm = backend or MockExtractionBackend()
-    prompt = build_unit_timeline_composition()
+    prompt = build_unit_timeline_composition(book_context_prompt_parts(book_context_pack))
     payload = build_unit_timeline_payload(manifest, repaired_data)
     check_extraction_budget(
         prompt.content,
@@ -665,6 +670,7 @@ def run_unit_timeline_pass(
         prompt=prompt,
         user_payload=payload,
         model_identity=llm.model_identity,
+        cache_context=book_context_cache_metadata(book_context_pack),
     )
     timeline_pass_dir = chain_dir / "unit_timeline" / cache_key
     paths = unit_timeline_artifact_paths(timeline_pass_dir)
@@ -709,6 +715,7 @@ def run_unit_timeline_repair_pass(
     *,
     backend: LLMBackend | None = None,
     use_cache: bool = True,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> UnitTimelineRecord:
     pass_dir = Path(timeline_pass_dir)
     result_path = pass_dir / "result.json"
@@ -735,7 +742,7 @@ def run_unit_timeline_repair_pass(
     timeline_data["_missing_events"] = list(dict.fromkeys(missing_events))
 
     llm = backend or MockExtractionBackend()
-    prompt = build_unit_timeline_repair_composition()
+    prompt = build_unit_timeline_repair_composition(book_context_prompt_parts(book_context_pack))
     payload = build_unit_timeline_repair_payload(manifest, timeline_data)
     check_extraction_budget(
         prompt.content,
@@ -747,6 +754,7 @@ def run_unit_timeline_repair_pass(
         prompt=prompt,
         user_payload=payload,
         model_identity=llm.model_identity,
+        cache_context=book_context_cache_metadata(book_context_pack),
     )
     repair_pass_dir = chain_dir / "unit_timeline_repair" / cache_key
     paths = unit_timeline_repair_artifact_paths(repair_pass_dir)
@@ -1983,6 +1991,7 @@ def run_all_passes(
     cache_dir: str | Path = ".tilusion_cache",
     use_cache: bool = True,
     skip_repair: bool = False,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> RunAllRecord:
     llm = backend or MockExtractionBackend()
     root = Path(cache_dir)
@@ -2001,6 +2010,7 @@ def run_all_passes(
         chain_record = run_chained_extraction(
             book_path, unit_id, backend=llm,
             cache_dir=root / "extraction_chains", use_cache=use_cache,
+            book_context_pack=book_context_pack,
         )
     except Exception:
         _log_progress(1, 5, "overview+segments", "FAILED", _elapsed_ms(t0))
@@ -2026,6 +2036,7 @@ def run_all_passes(
     try:
         finalization_record = run_unit_finalization_pass(
             chain_dir, backend=llm, use_cache=use_cache,
+            book_context_pack=book_context_pack,
         )
     except Exception:
         _log_progress(2, 5, "unit finalization", "FAILED", _elapsed_ms(t0))
@@ -2057,6 +2068,7 @@ def run_all_passes(
         try:
             repair_record = run_unit_repair_pass(
                 finalization_dir, backend=llm, use_cache=use_cache,
+                book_context_pack=book_context_pack,
             )
         except Exception:
             _log_progress(3, 5, "unit repair", "FAILED (continuing)", _elapsed_ms(t0))
@@ -2088,6 +2100,7 @@ def run_all_passes(
     try:
         timeline_record = run_unit_timeline_pass(
             timeline_input_dir, backend=llm, use_cache=use_cache,
+            book_context_pack=book_context_pack,
         )
     except Exception:
         _log_progress(4, 5, "timeline construction", "FAILED", _elapsed_ms(t0))
@@ -2115,6 +2128,7 @@ def run_all_passes(
         try:
             tl_repair_record = run_unit_timeline_repair_pass(
                 timeline_dir, backend=llm, use_cache=use_cache,
+                book_context_pack=book_context_pack,
             )
         except Exception:
             _log_progress(5, 5, "timeline repair", "FAILED (continuing)", _elapsed_ms(t0))

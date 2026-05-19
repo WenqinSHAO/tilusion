@@ -116,7 +116,9 @@ def build_unit_finalization_composition(
     return PromptComposition(composition_id=UNIT_FINALIZATION_PROMPT_VERSION, parts=parts)
 
 
-def build_unit_repair_composition() -> PromptComposition:
+def build_unit_repair_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
     parts = [
         load_static_prompt_part(
             "unit-finalization-contract",
@@ -131,10 +133,13 @@ def build_unit_repair_composition() -> PromptComposition:
             metadata={"prompt_version": UNIT_REPAIR_PROMPT_VERSION},
         ),
     ]
+    parts.extend(generated_prompt_parts or [])
     return PromptComposition(composition_id=UNIT_REPAIR_PROMPT_VERSION, parts=parts)
 
 
-def build_unit_timeline_composition() -> PromptComposition:
+def build_unit_timeline_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
     parts = [
         load_static_prompt_part(
             "unit-finalization-contract",
@@ -155,10 +160,13 @@ def build_unit_timeline_composition() -> PromptComposition:
             metadata={"prompt_version": UNIT_TIMELINE_PROMPT_VERSION},
         ),
     ]
+    parts.extend(generated_prompt_parts or [])
     return PromptComposition(composition_id=UNIT_TIMELINE_PROMPT_VERSION, parts=parts)
 
 
-def build_unit_timeline_repair_composition() -> PromptComposition:
+def build_unit_timeline_repair_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
     parts = [
         load_static_prompt_part(
             "unit-finalization-contract",
@@ -185,6 +193,7 @@ def build_unit_timeline_repair_composition() -> PromptComposition:
             metadata={"prompt_version": UNIT_TIMELINE_REPAIR_PROMPT_VERSION},
         ),
     ]
+    parts.extend(generated_prompt_parts or [])
     return PromptComposition(composition_id=UNIT_TIMELINE_REPAIR_PROMPT_VERSION, parts=parts)
 
 

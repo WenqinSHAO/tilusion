@@ -671,6 +671,44 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
         assert Path(path).exists()
 
 
+def test_unit_finalization_cache_is_book_context_aware(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
+    cache_dir = tmp_path / "chain-cache"
+    pack = _context_pack(True, "context-pack-one")
+    record = run_chained_extraction(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=cache_dir,
+        book_context_pack=pack,
+    )
+
+    first = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+        book_context_pack=pack,
+    )
+    second = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+        book_context_pack=pack,
+    )
+    third = run_unit_finalization_pass(
+        record.cache_dir,
+        backend=MockExtractionBackend(),
+        book_context_pack=_context_pack(True, "context-pack-two"),
+    )
+
+    assert second.cache_hit is True
+    assert third.cache_hit is False
+    assert first.cache_key != third.cache_key
+    prompt_composition = json.loads(
+        Path(first.artifact_paths["prompt_composition"]).read_text(encoding="utf-8")
+    )
+    assert prompt_composition["parts"][-1]["part_id"] == "book-scope-context"
+
+
 def test_extraction_budget_rejects_oversized_input() -> None:
     with pytest.raises(ExtractionBudgetError, match="likely to exceed model context"):
         check_extraction_budget(
