@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tilusion.book_context import (
     BOOK_CONTEXT_SCHEMA_VERSION,
+    build_book_state_snapshot,
     build_compact_context_from_scan,
     build_empty_book_state_snapshot,
     build_passive_context_pack,
@@ -175,8 +176,76 @@ def test_build_registry_from_unit_package(tmp_path: Path) -> None:
     assert len(registry["threads"]) == 1
     assert len(registry["events"]) == 1
     assert len(registry["timelines"]) == 1
-    assert registry["entities"]["unit-entity-0001"]["canonical_name"] == "沈复"
-    assert "沈三白" in registry["entities"]["unit-entity-0001"]["surfaces"]
+    scoped_entity_id = "unit-0002:unit-entity-0001"
+    assert registry["entities"][scoped_entity_id]["canonical_name"] == "沈复"
+    assert registry["entities"][scoped_entity_id]["source_record_id"] == "unit-entity-0001"
+    assert registry["entities"][scoped_entity_id]["source_unit"] == "unit-0002"
+    assert "沈三白" in registry["entities"][scoped_entity_id]["surfaces"]
+
+
+
+
+def test_build_registry_scopes_unit_local_ids_across_packages(tmp_path: Path) -> None:
+    def write_package(path: Path, unit_id: str, name: str) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "unit_id": unit_id,
+                    "data": {
+                        "entity_records": [
+                            {
+                                "entity_id": "unit-entity-0001",
+                                "canonical_name": name,
+                                "surfaces": [name],
+                                "kind": "person",
+                            }
+                        ],
+                        "location_records": [],
+                        "thread_records": [],
+                        "event_records": [],
+                        "timelines": [],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    first = tmp_path / "u1.json"
+    second = tmp_path / "u2.json"
+    write_package(first, "unit-0001", "甲")
+    write_package(second, "unit-0002", "乙")
+
+    registry = build_registry_from_packages([first, second])
+
+    assert set(registry["entities"]) == {
+        "unit-0001:unit-entity-0001",
+        "unit-0002:unit-entity-0001",
+    }
+    assert registry["entities"]["unit-0001:unit-entity-0001"]["canonical_name"] == "甲"
+    assert registry["entities"]["unit-0002:unit-entity-0001"]["canonical_name"] == "乙"
+
+
+def test_populated_book_state_snapshot_hashes_registry_content(tmp_path: Path) -> None:
+    book = tmp_path / "book.txt"
+    registry = {
+        "entities": {
+            "unit-0001:unit-entity-0001": {
+                "entity_id": "unit-0001:unit-entity-0001",
+                "canonical_name": "沈复",
+            }
+        },
+        "locations": {},
+        "threads": {},
+        "events": {},
+        "timelines": {},
+    }
+    snapshot = build_book_state_snapshot(book, registry)
+    base = {k: v for k, v in snapshot.items() if k not in {"snapshot_id", "snapshot_hash"}}
+
+    assert snapshot["registry"]["entities"] == list(registry["entities"].values())
+    assert snapshot["snapshot_hash"] == sha256_json(base)
+    assert snapshot["snapshot_id"] == f"snapshot-{snapshot['snapshot_hash'][:16]}"
 
 
 # ── surface scanner ──
@@ -249,16 +318,23 @@ def test_scan_marks_short_surfaces_as_ambiguous() -> None:
     assert matched["match_count"] >= 1
 
 
-def test_scan_resolves_overlapping_matches() -> None:
+def test_scan_resolves_overlapping_matches_by_preferring_longer_surface() -> None:
     registry = {
         "entities": {
-            "unit-entity-0001": {
-                "entity_id": "unit-entity-0001",
+            "short": {
+                "entity_id": "short",
+                "canonical_name": "浪亭",
+                "surfaces": ["浪亭"],
+                "kind": "physical",
+                "summary": "short alias",
+            },
+            "long": {
+                "entity_id": "long",
                 "canonical_name": "沧浪亭",
                 "surfaces": ["沧浪亭"],
                 "kind": "physical",
                 "summary": "园亭",
-            }
+            },
         },
         "locations": {},
         "threads": {},
@@ -267,8 +343,8 @@ def test_scan_resolves_overlapping_matches() -> None:
     }
     text = "间壁之沧浪亭中"
     scan = scan_unit_text_for_surfaces(text, registry)
-    # 沧浪亭 (3 chars) should be found
-    assert scan["total_matches"] >= 1
+    assert scan["total_matches"] == 1
+    assert scan["matched_records"][0]["record_id"] == "long"
 
 
 def test_scan_reports_unmatched_surfaces() -> None:

@@ -9,12 +9,19 @@ from .extraction import sha256_json, sha256_text
 # ── registry building ──────────────────────────────────────────────────
 
 
+def scoped_record_id(unit_id: str, local_id: str) -> str:
+    """Return a stable book-scope id for a unit-local extraction record."""
+    return f"{unit_id}:{local_id}"
+
+
 def build_registry_from_packages(
     package_paths: list[str | Path],
 ) -> dict[str, Any]:
-    """Merge entity, location, thread, event, timeline records from unit packages into a book registry.
+    """Merge unit-package records into a book registry with collision-safe IDs.
 
-    Returns a registry dict keyed by type with canonical records.
+    Unit extraction IDs are local to one package, so the passive registry scopes
+    each ID as ``<unit_id>:<local_id>`` until a later canonicalization pass can
+    assign true book-global IDs.
     """
     registry: dict[str, Any] = {
         "entities": {},
@@ -25,87 +32,143 @@ def build_registry_from_packages(
     }
     for pp in package_paths:
         pkg = json.loads(Path(pp).read_text(encoding="utf-8"))
+        unit_id = str(pkg.get("unit_id") or Path(pp).stem)
         data = pkg.get("data", {})
-        _merge_entity_records(registry, data.get("entity_records", []))
-        _merge_location_records(registry, data.get("location_records", []))
-        _merge_thread_records(registry, data.get("thread_records", []))
-        _merge_event_records(registry, data.get("event_records", []))
-        _merge_timeline_records(registry, data.get("timelines", []))
+        _merge_entity_records(registry, data.get("entity_records", []), unit_id=unit_id)
+        _merge_location_records(registry, data.get("location_records", []), unit_id=unit_id)
+        _merge_thread_records(registry, data.get("thread_records", []), unit_id=unit_id)
+        _merge_event_records(registry, data.get("event_records", []), unit_id=unit_id)
+        _merge_timeline_records(registry, data.get("timelines", []), unit_id=unit_id)
     return registry
 
 
-def _merge_entity_records(registry: dict[str, Any], records: list[dict[str, Any]]) -> None:
+def _merge_entity_records(
+    registry: dict[str, Any], records: list[dict[str, Any]], *, unit_id: str
+) -> None:
     for rec in records:
-        eid = rec["entity_id"]
+        local_id = rec.get("entity_id")
+        if not isinstance(local_id, str) or not local_id:
+            continue
+        eid = scoped_record_id(unit_id, local_id)
         if eid not in registry["entities"]:
             registry["entities"][eid] = {
                 "entity_id": eid,
+                "source_record_id": local_id,
+                "source_unit": unit_id,
                 "canonical_name": rec.get("canonical_name", ""),
                 "surfaces": list(rec.get("surfaces", [])),
                 "aliases": rec.get("aliases", []),
                 "kind": rec.get("kind", ""),
                 "summary": rec.get("summary", ""),
-                "first_seen_unit": rec.get("_source_unit"),
+                "first_seen_unit": unit_id,
             }
 
 
-def _merge_location_records(registry: dict[str, Any], records: list[dict[str, Any]]) -> None:
+def _merge_location_records(
+    registry: dict[str, Any], records: list[dict[str, Any]], *, unit_id: str
+) -> None:
     for rec in records:
-        lid = rec["location_id"]
+        local_id = rec.get("location_id")
+        if not isinstance(local_id, str) or not local_id:
+            continue
+        lid = scoped_record_id(unit_id, local_id)
         if lid not in registry["locations"]:
             registry["locations"][lid] = {
                 "location_id": lid,
+                "source_record_id": local_id,
+                "source_unit": unit_id,
                 "canonical_name": rec.get("canonical_name", ""),
                 "surfaces": list(rec.get("surfaces", [])),
                 "aliases": rec.get("aliases", []),
                 "kind": rec.get("kind", ""),
                 "summary": rec.get("summary", ""),
-                "first_seen_unit": rec.get("_source_unit"),
+                "first_seen_unit": unit_id,
             }
 
 
-def _merge_thread_records(registry: dict[str, Any], records: list[dict[str, Any]]) -> None:
+def _scoped_refs(unit_id: str, refs: list[Any]) -> list[str]:
+    return [scoped_record_id(unit_id, ref) for ref in refs if isinstance(ref, str) and ref]
+
+
+def _merge_thread_records(
+    registry: dict[str, Any], records: list[dict[str, Any]], *, unit_id: str
+) -> None:
     for rec in records:
-        tid = rec["thread_id"]
+        local_id = rec.get("thread_id")
+        if not isinstance(local_id, str) or not local_id:
+            continue
+        tid = scoped_record_id(unit_id, local_id)
         if tid not in registry["threads"]:
             registry["threads"][tid] = {
                 "thread_id": tid,
+                "source_record_id": local_id,
+                "source_unit": unit_id,
                 "summary": rec.get("summary", ""),
                 "status": rec.get("status", ""),
-                "related_entity_ids": list(rec.get("related_entity_ids", [])),
-                "event_ids": list(rec.get("event_ids", [])),
-                "first_seen_unit": rec.get("_source_unit"),
+                "related_entity_ids": _scoped_refs(unit_id, list(rec.get("related_entity_ids", []))),
+                "event_ids": _scoped_refs(unit_id, list(rec.get("event_ids", []))),
+                "first_seen_unit": unit_id,
             }
 
 
-def _merge_event_records(registry: dict[str, Any], records: list[dict[str, Any]]) -> None:
+def _merge_event_records(
+    registry: dict[str, Any], records: list[dict[str, Any]], *, unit_id: str
+) -> None:
     for rec in records:
-        eid = rec["event_id"]
+        local_id = rec.get("event_id")
+        if not isinstance(local_id, str) or not local_id:
+            continue
+        eid = scoped_record_id(unit_id, local_id)
         if eid not in registry["events"]:
+            thread_id = rec.get("thread_id")
+            timeline_id = rec.get("timeline_id")
             registry["events"][eid] = {
                 "event_id": eid,
+                "source_record_id": local_id,
+                "source_unit": unit_id,
                 "summary": rec.get("summary", ""),
-                "participant_entity_ids": list(rec.get("participant_entity_ids", [])),
-                "location_ids": list(rec.get("location_ids", [])),
-                "thread_id": rec.get("thread_id"),
-                "timeline_id": rec.get("timeline_id"),
+                "participant_entity_ids": _scoped_refs(
+                    unit_id, list(rec.get("participant_entity_ids", []))
+                ),
+                "location_ids": _scoped_refs(unit_id, list(rec.get("location_ids", []))),
+                "thread_id": scoped_record_id(unit_id, thread_id) if isinstance(thread_id, str) else None,
+                "timeline_id": scoped_record_id(unit_id, timeline_id) if isinstance(timeline_id, str) else None,
                 "source_order_hint": rec.get("source_order_hint"),
                 "confidence": rec.get("confidence"),
-                "first_seen_unit": rec.get("_source_unit"),
+                "first_seen_unit": unit_id,
             }
 
 
-def _merge_timeline_records(registry: dict[str, Any], records: list[dict[str, Any]]) -> None:
+def _merge_timeline_records(
+    registry: dict[str, Any], records: list[dict[str, Any]], *, unit_id: str
+) -> None:
     for rec in records:
-        tid = rec["timeline_id"]
+        local_id = rec.get("timeline_id")
+        if not isinstance(local_id, str) or not local_id:
+            continue
+        tid = scoped_record_id(unit_id, local_id)
         if tid not in registry["timelines"]:
+            ordered_events = []
+            for entry in rec.get("ordered_events", []):
+                if not isinstance(entry, dict):
+                    continue
+                event_id = entry.get("event_id")
+                scoped_entry = dict(entry)
+                if isinstance(event_id, str):
+                    scoped_entry["event_id"] = scoped_record_id(unit_id, event_id)
+                scoped_entry["before_events"] = _scoped_refs(
+                    unit_id, list(entry.get("before_events", []))
+                )
+                ordered_events.append(scoped_entry)
             registry["timelines"][tid] = {
                 "timeline_id": tid,
+                "source_record_id": local_id,
+                "source_unit": unit_id,
                 "summary": rec.get("summary", ""),
                 "confidence": rec.get("confidence"),
-                "ordered_events": list(rec.get("ordered_events", [])),
+                "ordered_events": ordered_events,
                 "time_anchors": list(rec.get("time_anchors", [])),
-                "first_seen_unit": rec.get("_source_unit"),
+                "first_seen_unit": unit_id,
             }
 
 
@@ -159,8 +222,8 @@ def scan_unit_text_for_surfaces(
             )
             start = pos + 1
 
-    # Sort by position, then by length descending
-    raw_matches.sort(key=lambda m: (m["start_char"], -m["surface_length"]))
+    # Resolve overlaps by considering longer matches first, then restore source order.
+    raw_matches.sort(key=lambda m: (-m["surface_length"], m["start_char"], m["record_type"], m["record_id"]))
 
     # Resolve overlaps: keep longer match, discard shorter that overlap
     resolved: list[dict[str, Any]] = []
@@ -173,6 +236,8 @@ def scan_unit_text_for_surfaces(
                 break
         if not overlap:
             resolved.append(m)
+
+    resolved.sort(key=lambda m: (m["start_char"], -m["surface_length"], m["record_type"], m["record_id"]))
 
     # Group by record_id
     by_record: dict[str, dict[str, Any]] = {}
@@ -200,7 +265,7 @@ def scan_unit_text_for_surfaces(
             by_record[rid]["ambiguous_short_count"] += 1
 
     # Identify known surfaces not found in this unit
-    all_scanned: set[str] = set()
+    all_scanned: set[tuple[str, str]] = set()
     for _, record_id, rec_type, _ in needles:
         all_scanned.add((rec_type, record_id))
     matched_ids: set[tuple[str, str]] = set()
@@ -237,6 +302,8 @@ def scan_unit_text_for_surfaces(
 def build_compact_context_from_scan(
     scan_report: dict[str, Any],
     registry: dict[str, Any],
+    *,
+    max_threads: int = 20,
 ) -> dict[str, Any]:
     """Build the compact 'context' block from a surface scan report and registry."""
     matched = scan_report.get("matched_records", [])
@@ -269,7 +336,11 @@ def build_compact_context_from_scan(
             )
 
     thread_summaries = []
-    for tid, t in registry.get("threads", {}).items():
+    sorted_threads = sorted(
+        registry.get("threads", {}).items(),
+        key=lambda item: (item[1].get("status") == "resolved", item[0]),
+    )
+    for tid, t in sorted_threads[:max_threads]:
         thread_summaries.append(
             {
                 "thread_id": t["thread_id"],
@@ -313,7 +384,15 @@ def context_pack_dir(cache_root: str | Path, book_id: str, unit_id: str) -> Path
 
 
 def build_empty_book_state_snapshot(book_path: str | Path) -> dict[str, Any]:
+    return build_book_state_snapshot(book_path)
+
+
+def build_book_state_snapshot(
+    book_path: str | Path,
+    registry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     book_id = stable_book_id(book_path)
+    registry = registry or {}
     base: dict[str, Any] = {
         "schema_version": BOOK_CONTEXT_SCHEMA_VERSION,
         "book_id": book_id,
@@ -322,12 +401,14 @@ def build_empty_book_state_snapshot(book_path: str | Path) -> dict[str, Any]:
             "identity_strategy": "local_resolved_path_v0",
         },
         "registry": {
-            "entities": [],
-            "locations": [],
-            "threads": [],
-            "events": [],
-            "time_anchors": [],
-            "timelines": [],
+            "entities": list(registry.get("entities", {}).values()),
+            "locations": list(registry.get("locations", {}).values()),
+            "threads": list(registry.get("threads", {}).values()),
+            "events": list(registry.get("events", {}).values()),
+            "time_anchors": list(registry.get("time_anchors", {}).values())
+            if isinstance(registry.get("time_anchors"), dict)
+            else list(registry.get("time_anchors", [])),
+            "timelines": list(registry.get("timelines", {}).values()),
         },
         "indices": {
             "surfaces": {},
@@ -404,16 +485,7 @@ def build_context_pack_from_registry(
     min_surface_length: int = 2,
 ) -> dict[str, Any]:
     """Build a context pack using the deterministic surface scanner over a populated registry."""
-    snapshot = build_empty_book_state_snapshot(book_path)
-    # Populate registry into snapshot
-    snapshot["registry"] = {
-        "entities": list(registry.get("entities", {}).values()),
-        "locations": list(registry.get("locations", {}).values()),
-        "threads": list(registry.get("threads", {}).values()),
-        "events": list(registry.get("events", {}).values()),
-        "time_anchors": [],
-        "timelines": list(registry.get("timelines", {}).values()),
-    }
+    snapshot = build_book_state_snapshot(book_path, registry)
 
     scan = scan_unit_text_for_surfaces(unit_text, registry, min_surface_length=min_surface_length)
     compact_context = build_compact_context_from_scan(scan, registry)
@@ -462,7 +534,7 @@ def build_context_pack_from_registry(
         },
         "selection_reasons": [
             f"Surface scan found {matched_entities} entities and {matched_locations} locations in target unit text.",
-            f"All {len(compact_context['active_threads'])} known threads included as compact summaries.",
+            f"Included {len(compact_context['active_threads'])} thread summaries under the context budget.",
             f"{not_matched_entities} entities and {not_matched_locations} locations from registry had no surface hits in target unit.",
         ],
     }
