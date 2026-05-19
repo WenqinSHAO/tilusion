@@ -47,7 +47,7 @@ def test_passive_context_pack_is_not_prompt_injected(tmp_path: Path) -> None:
 
     assert pack["context_pack_id"] == f"context-pack-{pack_hash[:16]}"
     assert pack_hash == sha256_json(base)
-    assert pack["prompt_injection"]["enabled"] is False
+    assert pack["context_injection"]["enabled"] is False
     assert pack["context"]["entities"] == []
     assert pack["selection_summary"]["known_surface_hits"] == 0
 
@@ -92,7 +92,7 @@ def test_run_all_writes_passive_book_context_artifacts(tmp_path: Path) -> None:
     book_context = package["book_context"]
 
     assert book_context["enabled"] is True
-    assert book_context["prompt_injection"]["enabled"] is False
+    assert book_context["context_injection"]["enabled"] is False
     assert book_context["context_pack_id"].startswith("context-pack-")
     assert book_context["selection_policy"] == "passive-context-v0.1"
     for path in book_context["artifact_paths"].values():
@@ -489,7 +489,7 @@ def test_run_all_builds_prompt_context_from_prior_unit_package(tmp_path: Path) -
     )
 
     assert book_context["selection_policy"] == "cross-unit-context-v0.1"
-    assert book_context["prompt_injection"]["enabled"] is True
+    assert book_context["context_injection"]["enabled"] is True
     assert context_pack["selection_summary"]["known_surface_hits"] == 1
     assert context_pack["context"]["entities"][0]["canonical_name"] == "Alice"
     assert context_pack["context"]["active_threads"][0]["summary"] == "Alice's movement"

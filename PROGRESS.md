@@ -42,8 +42,9 @@
 **Cross-unit readiness scaffold**
 - Cross-unit/context planning doc (`743827f`, `566d166`): `docs/cross_unit_extraction_plan.md`.
 - No-behavior extraction refactor split prompt composition, payload builders, and unit validation from the pipeline orchestrator (`8f25370`, `5aa6c4f`, `2bb59ca`, `e494dfe`).
-- Passive book-context scaffold and `run-all` artifact wiring: empty book-state snapshot, `context_pack.json`, `context_selection_report.json`, and unit-package metadata with prompt injection disabled (`fb7f969`, `ab44208`).
-- Deterministic cross-unit context selection and cache-aware extraction plumbing: scoped registry IDs, surface scan context packs, optional prompt injection isolated by context-pack hash, and CLI `run-all --prior-unit-package` (`cec43ca`, `1b90a89`, `4f0631d`, `9ac1abc`, `905c1d9`).
+- Passive book-context scaffold and `run-all` artifact wiring: empty book-state snapshot, `context_pack.json`, `context_selection_report.json`, and unit-package metadata with context injection disabled (`fb7f969`, `ab44208`).
+- Deterministic cross-unit context selection and cache-aware extraction plumbing: scoped registry IDs, surface scan context packs, optional context injection isolated by context-pack hash, and CLI `run-all --prior-unit-package` (`cec43ca`, `1b90a89`, `4f0631d`, `9ac1abc`, `905c1d9`).
+- Renamed `prompt_injection` → `context_injection` across schema, cache metadata, and tests; backward-compat reader handles old cached artifacts.
 
 ## Ongoing
 

@@ -442,7 +442,7 @@ def build_passive_context_pack(
             "snapshot_hash": snapshot["snapshot_hash"],
         },
         "source_length": source_length or {},
-        "prompt_injection": {
+        "context_injection": {
             "enabled": False,
             "reason": "passive scaffold only; not sent to LLM prompts yet",
         },
@@ -483,7 +483,7 @@ def build_context_pack_from_registry(
     *,
     source_length: dict[str, int] | None = None,
     min_surface_length: int = 2,
-    prompt_injection_enabled: bool = False,
+    context_injection_enabled: bool = False,
 ) -> dict[str, Any]:
     """Build a context pack using the deterministic surface scanner over a populated registry."""
     snapshot = build_book_state_snapshot(book_path, registry)
@@ -508,11 +508,11 @@ def build_context_pack_from_registry(
             "snapshot_hash": snapshot["snapshot_hash"],
         },
         "source_length": source_length or {},
-        "prompt_injection": {
-            "enabled": prompt_injection_enabled,
+        "context_injection": {
+            "enabled": context_injection_enabled,
             "reason": (
                 "deterministic surface scanner selected this context for LLM prompts"
-                if prompt_injection_enabled
+                if context_injection_enabled
                 else "deterministic surface scanner only; not injected into LLM prompts yet"
             ),
         },
@@ -570,7 +570,7 @@ def build_context_selection_report(context_pack: dict[str, Any]) -> dict[str, An
         "target_unit_id": context_pack.get("target_unit_id"),
         "context_pack_id": context_pack.get("context_pack_id"),
         "context_pack_hash": context_pack.get("context_pack_hash"),
-        "prompt_injection": context_pack.get("prompt_injection", {}),
+        "context_injection": _get_context_injection(context_pack),
         "summary": context_pack.get("selection_summary", {}),
         "selection_reasons": context_pack.get("selection_reasons", []),
         "notes": notes,
@@ -624,7 +624,7 @@ def write_context_artifacts_from_registry(
     registry: dict[str, Any],
     cache_root: str | Path,
     source_length: dict[str, int] | None = None,
-    prompt_injection_enabled: bool = False,
+    context_injection_enabled: bool = False,
 ) -> dict[str, str]:
     snapshot = build_book_state_snapshot(book_path, registry)
     context_pack = build_context_pack_from_registry(
@@ -633,7 +633,7 @@ def write_context_artifacts_from_registry(
         unit_text,
         registry,
         source_length=source_length,
-        prompt_injection_enabled=prompt_injection_enabled,
+        context_injection_enabled=context_injection_enabled,
     )
     selection_report = build_context_selection_report(context_pack)
 
@@ -659,6 +659,16 @@ def write_context_artifacts_from_registry(
         "context_pack": str(context_pack_path),
         "context_selection_report": str(selection_report_path),
     }
+
+
+def _get_context_injection(data: dict[str, Any]) -> dict[str, Any]:
+    """Read context_injection field, falling back to old prompt_injection key for backward compat."""
+    if "context_injection" in data:
+        return data["context_injection"]
+    # Backward compat: read old field name from cached artifacts
+    if "prompt_injection" in data:
+        return data["prompt_injection"]
+    return {}
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:

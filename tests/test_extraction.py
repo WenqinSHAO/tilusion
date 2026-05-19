@@ -523,7 +523,7 @@ def _context_pack(enabled: bool, pack_id: str = "context-pack-test") -> dict:
         "context_pack_id": pack_id,
         "context_pack_hash": pack_id.replace("context-pack-", "hash-"),
         "selection_policy": "cross-unit-context-v0.1",
-        "prompt_injection": {"enabled": enabled},
+        "context_injection": {"enabled": enabled},
         "context": {
             "entities": [
                 {
