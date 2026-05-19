@@ -570,7 +570,7 @@ def build_context_selection_report(context_pack: dict[str, Any]) -> dict[str, An
         "target_unit_id": context_pack.get("target_unit_id"),
         "context_pack_id": context_pack.get("context_pack_id"),
         "context_pack_hash": context_pack.get("context_pack_hash"),
-        "context_injection": _get_context_injection(context_pack),
+        "context_injection": context_pack.get("context_injection", {}),
         "summary": context_pack.get("selection_summary", {}),
         "selection_reasons": context_pack.get("selection_reasons", []),
         "notes": notes,
@@ -659,16 +659,6 @@ def write_context_artifacts_from_registry(
         "context_pack": str(context_pack_path),
         "context_selection_report": str(selection_report_path),
     }
-
-
-def _get_context_injection(data: dict[str, Any]) -> dict[str, Any]:
-    """Read context_injection field, falling back to old prompt_injection key for backward compat."""
-    if "context_injection" in data:
-        return data["context_injection"]
-    # Backward compat: read old field name from cached artifacts
-    if "prompt_injection" in data:
-        return data["prompt_injection"]
-    return {}
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:

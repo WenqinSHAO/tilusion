@@ -1043,16 +1043,11 @@ def ensure_cached_pass_artifact_paths(paths: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _ctx_injection_enabled(data: dict[str, Any]) -> bool:
-    """True if context_injection.enabled (or legacy prompt_injection.enabled) is set."""
-    ctx_inj = data.get("context_injection") or data.get("prompt_injection") or {}
-    return ctx_inj.get("enabled") is True
-
-
 def book_context_cache_metadata(book_context_pack: dict[str, Any] | None) -> dict[str, Any]:
     if not book_context_pack:
         return {}
-    if not _ctx_injection_enabled(book_context_pack):
+    ctx_inj = book_context_pack.get("context_injection", {})
+    if ctx_inj.get("enabled") is not True:
         return {}
     return {
         "book_id": book_context_pack.get("book_id"),
@@ -1066,7 +1061,8 @@ def book_context_cache_metadata(book_context_pack: dict[str, Any] | None) -> dic
 def book_context_prompt_parts(book_context_pack: dict[str, Any] | None) -> list[PromptPart]:
     if not book_context_pack:
         return []
-    if not _ctx_injection_enabled(book_context_pack):
+    ctx_inj = book_context_pack.get("context_injection", {})
+    if ctx_inj.get("enabled") is not True:
         return []
     payload = {
         "book_id": book_context_pack.get("book_id"),
@@ -2285,7 +2281,6 @@ def build_unit_package_context_metadata(
         }
     context_pack_path = Path(context_artifacts["context_pack"])
     context_pack = json.loads(context_pack_path.read_text(encoding="utf-8"))
-    ctx_inj = context_pack.get("context_injection") or context_pack.get("prompt_injection") or {}
     return {
         "enabled": True,
         "book_id": context_pack.get("book_id"),
@@ -2293,7 +2288,7 @@ def build_unit_package_context_metadata(
         "context_pack_hash": context_pack.get("context_pack_hash"),
         "selection_policy": context_pack.get("selection_policy"),
         "book_state_snapshot": context_pack.get("book_state_snapshot", {}),
-        "context_injection": ctx_inj,
+        "context_injection": context_pack.get("context_injection", {}),
         "artifact_paths": context_artifacts,
     }
 
