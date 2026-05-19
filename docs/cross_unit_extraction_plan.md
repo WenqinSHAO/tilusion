@@ -222,6 +222,40 @@ Quality metrics to track over time:
 - Context-pack size and selected-record count.
 - Cache hit rate by pass and by context-pack hash.
 
+## Immediate Multi-Commit Sequence
+
+The next work should remain verifiable and avoid LLM-backed reruns until passive scaffolding is inspectable. Planned commits:
+
+1. Passive schema and artifact scaffolding.
+
+- Add a small book-context module with stable `book_id`, book cache paths, empty/default `BookStateSnapshot`, and `ContextPack` builders.
+- Write context-pack artifacts beside unit packages or under `.tilusion_cache/books/<book_id>/context_packs/<unit_id>/`.
+- Do not pass the context pack into prompts yet.
+
+2. Pipeline wiring without prompt behavior changes.
+
+- Let `run-all` build and persist the passive context pack.
+- Add context-pack metadata to `unit_package.json` for inspection.
+- Keep existing extraction pass cache keys unchanged until context affects prompts.
+
+3. Cache-key readiness.
+
+- Add context-pack hash fields and helper functions.
+- Document where future prompt-affecting passes must include the context-pack hash.
+- Do not invalidate current LLM caches until the context pack is actually injected into request payloads.
+
+4. Deterministic context selector.
+
+- Start with simple JSON state and lexical surface matching.
+- Produce `context_selection_report.json` explaining included and excluded context.
+- Still avoid LLM calls unless a mock/cached test needs to verify artifact shape.
+
+5. Prompt integration after review.
+
+- Add a generated prompt part for selected context.
+- Include context-pack hash in affected cache keys at the same time.
+- Then run LLM-backed extraction on the next unit, using `unit-0002` as prior state, instead of spending tokens only rerunning `unit-0002`.
+
 ## Implementation Milestones
 
 Milestone 1: Schema and artifacts only.
