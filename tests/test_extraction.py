@@ -68,7 +68,7 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     model_payload = envelope.to_model_payload()
 
     assert envelope.task == "local_bundle_extraction"
-    assert envelope.prompt_version == "segment-extraction-v0.5"
+    assert envelope.prompt_version == "segment-extraction-v0.6"
     assert envelope.schema_version == "segment-extraction-v0.3"
     assert envelope.unit["id"] == "unit-0001"
     assert envelope.unit["source_range"]["kind"] == "txt-span"
@@ -85,7 +85,7 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     assert DEFAULT_MAX_TOKENS == 32768
     assert DEEPSEEK_CONTEXT_TOKENS == 1_000_000
     assert DEEPSEEK_MAX_OUTPUT_TOKENS == 384_000
-    assert PROMPT_VERSION == "segment-extraction-v0.5"
+    assert PROMPT_VERSION == "segment-extraction-v0.6"
     assert SCHEMA_VERSION == "segment-extraction-v0.3"
 
 
@@ -95,7 +95,7 @@ def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() ->
     assert "You extract grounded narrative structure from one provided text segment" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "The larger tool helps humans" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "Minimum JSON shape" in LOCAL_BUNDLE_SYSTEM_PROMPT
-    assert "New entities and locations may appear in this segment" in LOCAL_BUNDLE_SYSTEM_PROMPT
+    assert "New entities, locations, and threads may appear that have no prior record" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "alias_candidate_of" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "IDs are temporary and response-local only" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "Evidence quotes must be exact substrings" in LOCAL_BUNDLE_SYSTEM_PROMPT
@@ -162,7 +162,7 @@ def test_overview_composition_tracks_static_prompt_contract() -> None:
 def test_unit_finalization_composition_tracks_static_prompt_contract() -> None:
     prompt = build_unit_finalization_composition()
 
-    assert prompt.composition_id == "unit-finalization-v0.1"
+    assert prompt.composition_id == "unit-finalization-v0.2"
     assert prompt.parts[0].part_id == "unit-finalization-contract"
     assert "You finalize source-grounded extraction" in prompt.content
     assert "entity_records" in prompt.content

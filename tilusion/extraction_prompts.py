@@ -15,8 +15,8 @@ from .extraction import (
 
 OVERVIEW_PROMPT_VERSION = "overview-segmentation-v0.1"
 OVERVIEW_PROMPT_RESOURCE = "overview_segmentation_v0.1.md"
-UNIT_FINALIZATION_PROMPT_VERSION = "unit-finalization-v0.1"
-UNIT_FINALIZATION_PROMPT_RESOURCE = "unit_finalization_v0.1.md"
+UNIT_FINALIZATION_PROMPT_VERSION = "unit-finalization-v0.2"
+UNIT_FINALIZATION_PROMPT_RESOURCE = "unit_finalization_v0.2.md"
 UNIT_REPAIR_PROMPT_VERSION = "unit-repair-v0.1"
 UNIT_REPAIR_PROMPT_RESOURCE = "unit_repair_v0.1.md"
 UNIT_TIMELINE_PROMPT_VERSION = "unit-timeline-v0.3"

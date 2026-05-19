@@ -18,13 +18,13 @@ from .extraction_quality import (
 )
 
 
-PROMPT_VERSION = "segment-extraction-v0.5"
+PROMPT_VERSION = "segment-extraction-v0.6"
 SCHEMA_VERSION = "segment-extraction-v0.3"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_MAX_TOKENS = 32768
 DEEPSEEK_CONTEXT_TOKENS = 1_000_000
 DEEPSEEK_MAX_OUTPUT_TOKENS = 384_000
-PROMPT_RESOURCE = "segment_extraction_v0.5.md"
+PROMPT_RESOURCE = "segment_extraction_v0.6.md"
 
 
 class ExtractionError(RuntimeError):
