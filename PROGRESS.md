@@ -39,11 +39,16 @@
 **Regression coverage**
 - Tests for reader behavior and extraction pipeline (`pytest tests/test_extraction.py -x -q`).
 
+**Cross-unit readiness scaffold**
+- Cross-unit/context planning doc (`743827f`, `566d166`): `docs/cross_unit_extraction_plan.md`.
+- No-behavior extraction refactor split prompt composition, payload builders, and unit validation from the pipeline orchestrator (`8f25370`, `5aa6c4f`, `2bb59ca`, `e494dfe`).
+- Passive book-context scaffold and `run-all` artifact wiring: empty book-state snapshot, `context_pack.json`, `context_selection_report.json`, and unit-package metadata with prompt injection disabled (`fb7f969`, `ab44208`).
+
 ## Ongoing
 
 - Extraction pipeline is roughly stitched end-to-end but needs polishing: prompt quality, edge cases, and tighter validation.
 - Prompt design toward composable versioned parts (extraction guides, context, validation feedback, repair, segmentation, QC).
-- Current goal: no-behavior extraction refactor toward cross-unit readiness; planning doc: `docs/cross_unit_extraction_plan.md`.
+- Current goal: deterministic cross-unit context selector over passive book-state artifacts; planning doc: `docs/cross_unit_extraction_plan.md`.
 - Extraction adjustment based on user input prompts.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
