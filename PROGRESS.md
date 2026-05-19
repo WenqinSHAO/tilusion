@@ -44,13 +44,14 @@
 - No-behavior extraction refactor split prompt composition, payload builders, and unit validation from the pipeline orchestrator (`8f25370`, `5aa6c4f`, `2bb59ca`, `e494dfe`).
 - Passive book-context scaffold and `run-all` artifact wiring: empty book-state snapshot, `context_pack.json`, `context_selection_report.json`, and unit-package metadata with context injection disabled (`fb7f969`, `ab44208`).
 - Deterministic cross-unit context selection and cache-aware extraction plumbing: scoped registry IDs, surface scan context packs, optional context injection isolated by context-pack hash, and CLI `run-all --prior-unit-package` (`cec43ca`, `1b90a89`, `4f0631d`, `9ac1abc`, `905c1d9`).
-- Renamed `prompt_injection` → `context_injection` across schema, cache metadata, and tests; backward-compat reader handles old cached artifacts.
+- Renamed `prompt_injection` → `context_injection` across schema, cache metadata, and tests; dropped backward-compat shims as premature for single-chapter state.
+- Verified cross-unit plumbing on unit-0002 → unit-0003 mock runs: all unit-0002 caches hit (zero regression), `book-scope-context` prompt part injected into segment extraction and finalization with surface scanner output (matched entities/locations, thread summaries, guidance block), cache isolation confirmed between context-aware and unaware runs.
 
 ## Ongoing
 
 - Extraction pipeline is roughly stitched end-to-end but needs polishing: prompt quality, edge cases, and tighter validation.
 - Prompt design toward composable versioned parts (extraction guides, context, validation feedback, repair, segmentation, QC).
-- Current goal: inspect mock/cached cross-unit context artifacts, then test LLM-backed extraction on a following unit using `--prior-unit-package`; planning doc: `docs/cross_unit_extraction_plan.md`.
+- Current goal: evolve extraction prompts with prior-context contract (guidance-not-evidence, alias/continuity hints, local evidence requirement), then run LLM-backed unit-0003 extraction with `--prior-unit-package`; planning doc: `docs/cross_unit_extraction_plan.md`.
 - Extraction adjustment based on user input prompts.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
