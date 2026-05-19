@@ -43,7 +43,7 @@
 
 - Extraction pipeline is roughly stitched end-to-end but needs polishing: prompt quality, edge cases, and tighter validation.
 - Prompt design toward composable versioned parts (extraction guides, context, validation feedback, repair, segmentation, QC).
-- Next phase: incremental extraction and unification across text units.
+- Next phase: incremental extraction and unification across text units. Planning doc: `docs/cross_unit_extraction_plan.md`.
 - Extraction adjustment based on user input prompts.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
