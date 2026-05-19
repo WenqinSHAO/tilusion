@@ -43,12 +43,13 @@
 - Cross-unit/context planning doc (`743827f`, `566d166`): `docs/cross_unit_extraction_plan.md`.
 - No-behavior extraction refactor split prompt composition, payload builders, and unit validation from the pipeline orchestrator (`8f25370`, `5aa6c4f`, `2bb59ca`, `e494dfe`).
 - Passive book-context scaffold and `run-all` artifact wiring: empty book-state snapshot, `context_pack.json`, `context_selection_report.json`, and unit-package metadata with prompt injection disabled (`fb7f969`, `ab44208`).
+- Deterministic cross-unit context selection and cache-aware extraction plumbing: scoped registry IDs, surface scan context packs, optional prompt injection isolated by context-pack hash, and CLI `run-all --prior-unit-package` (`cec43ca`, `1b90a89`, `4f0631d`, `9ac1abc`, `905c1d9`).
 
 ## Ongoing
 
 - Extraction pipeline is roughly stitched end-to-end but needs polishing: prompt quality, edge cases, and tighter validation.
 - Prompt design toward composable versioned parts (extraction guides, context, validation feedback, repair, segmentation, QC).
-- Current goal: deterministic cross-unit context selector (surface scanner + compact context builder) and tool scaffolding for agentic extraction (`detail_thread`, `detail_timeline`, `resolve_entity`, `search_prior_events`). Planning doc: `docs/cross_unit_extraction_plan.md`.
+- Current goal: inspect mock/cached cross-unit context artifacts, then test LLM-backed extraction on a following unit using `--prior-unit-package`; planning doc: `docs/cross_unit_extraction_plan.md`.
 - Extraction adjustment based on user input prompts.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
