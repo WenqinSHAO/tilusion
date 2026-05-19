@@ -255,6 +255,7 @@ def run_segment_extraction_pass(
     cache_dir: str | Path = ".tilusion_cache/extraction_passes",
     use_cache: bool = True,
     generated_prompt_parts: list[PromptPart] | None = None,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> ExtractionPassRecord:
     index = build_book_index(book_path)
     unit = index.unit_map().get(unit_id)
@@ -264,7 +265,8 @@ def run_segment_extraction_pass(
     extraction_context = context or ExtractionContext(frontier=unit_id)
     llm = backend or MockExtractionBackend()
     envelope = build_local_bundle_prompt(unit, text, extraction_context)
-    prompt = build_segment_extraction_composition(generated_prompt_parts or [])
+    prompt_parts = [*(generated_prompt_parts or []), *book_context_prompt_parts(book_context_pack)]
+    prompt = build_segment_extraction_composition(prompt_parts)
     payload = envelope.to_model_payload()
     check_extraction_budget(
         prompt.content,
@@ -277,6 +279,7 @@ def run_segment_extraction_pass(
         prompt=prompt,
         user_payload=payload,
         model_identity=llm.model_identity,
+        cache_context=book_context_cache_metadata(book_context_pack),
     )
     pass_dir = Path(cache_dir) / cache_key
     paths = pass_artifact_paths(pass_dir)
@@ -295,7 +298,7 @@ def run_segment_extraction_pass(
             schema_version=SCHEMA_VERSION,
             unit_id=unit.id,
             source_text_hash=sha256_text(text),
-            context_hash=sha256_json(extraction_context.to_dict()),
+            context_hash=extraction_context_hash(extraction_context, book_context_pack),
             model=llm.model_identity,
             raw_response=raw_response,
             data=data,
@@ -355,6 +358,7 @@ def run_chained_extraction(
     backend: LLMBackend | None = None,
     cache_dir: str | Path = ".tilusion_cache/extraction_chains",
     use_cache: bool = True,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> ChainedExtractionRecord:
     index = build_book_index(book_path)
     unit = index.unit_map().get(unit_id)
@@ -362,7 +366,16 @@ def run_chained_extraction(
         raise ValueError(f"unknown unit_id: {unit_id}")
     text = extract_unit_text(book_path, unit)
     llm = backend or MockExtractionBackend()
-    root_dir = Path(cache_dir) / chain_cache_key(unit_id=unit_id, text=text, model_identity=llm.model_identity)
+    root_dir = Path(cache_dir) / chain_cache_key(
+        unit_id=unit_id,
+        text=text,
+        model_identity=llm.model_identity,
+        context_pack_hash=(
+            book_context_pack.get("context_pack_hash")
+            if book_context_cache_metadata(book_context_pack).get("prompt_injection_enabled")
+            else None
+        ),
+    )
     overview = run_overview_segmentation_pass(
         unit=unit,
         text=text,
@@ -374,7 +387,11 @@ def run_chained_extraction(
         overview.data, text, anchor_locations=overview.anchor_locations
     )
     segments_dir = root_dir / "segments"
-    cache_map = _build_segment_cache_map(segments_dir) if use_cache else {}
+    cache_map = (
+        {}
+        if should_disable_text_hash_cache(book_context_pack)
+        else (_build_segment_cache_map(segments_dir) if use_cache else {})
+    )
     segment_passes = []
     for segment in resolved_segments:
         segment_context = ExtractionContext(
@@ -420,6 +437,7 @@ def run_chained_extraction(
                 use_cache=use_cache,
                 generated_prompt_parts=generated_parts,
                 cached_result=cached_result,
+                book_context_pack=book_context_pack,
             )
         )
     validation_report = build_chain_validation_report(
@@ -880,6 +898,7 @@ def run_text_segment_extraction_pass(
     use_cache: bool,
     generated_prompt_parts: list[PromptPart],
     cached_result: LocalBundleResult | None = None,
+    book_context_pack: dict[str, Any] | None = None,
 ) -> ExtractionPassRecord:
     segment_unit = {
         "id": segment.segment_id,
@@ -900,7 +919,9 @@ def run_text_segment_extraction_pass(
         "prior_context": context.to_dict(),
         "text": segment.text,
     }
-    prompt = build_segment_extraction_composition(generated_prompt_parts)
+    prompt = build_segment_extraction_composition(
+        [*generated_prompt_parts, *book_context_prompt_parts(book_context_pack)]
+    )
     if cached_result is None:
         check_extraction_budget(
             prompt.content,
@@ -912,6 +933,7 @@ def run_text_segment_extraction_pass(
         prompt=prompt,
         user_payload=payload,
         model_identity=backend.model_identity,
+        cache_context=book_context_cache_metadata(book_context_pack),
     )
     pass_dir = cache_dir / segment.segment_id / cache_key
     paths = pass_artifact_paths(pass_dir)
@@ -934,7 +956,7 @@ def run_text_segment_extraction_pass(
             schema_version=SCHEMA_VERSION,
             unit_id=segment.segment_id,
             source_text_hash=sha256_text(segment.text),
-            context_hash=sha256_json(context.to_dict()),
+            context_hash=extraction_context_hash(context, book_context_pack),
             model=backend.model_identity,
             raw_response=raw_response,
             data=data,
@@ -1009,21 +1031,86 @@ def ensure_cached_pass_artifact_paths(paths: dict[str, str]) -> dict[str, str]:
     }
 
 
+def book_context_cache_metadata(book_context_pack: dict[str, Any] | None) -> dict[str, Any]:
+    if not book_context_pack:
+        return {}
+    prompt_injection = book_context_pack.get("prompt_injection", {})
+    if prompt_injection.get("enabled") is not True:
+        return {}
+    return {
+        "book_id": book_context_pack.get("book_id"),
+        "context_pack_id": book_context_pack.get("context_pack_id"),
+        "context_pack_hash": book_context_pack.get("context_pack_hash"),
+        "selection_policy": book_context_pack.get("selection_policy"),
+        "prompt_injection_enabled": True,
+    }
+
+
+def book_context_prompt_parts(book_context_pack: dict[str, Any] | None) -> list[PromptPart]:
+    if not book_context_pack:
+        return []
+    prompt_injection = book_context_pack.get("prompt_injection", {})
+    if prompt_injection.get("enabled") is not True:
+        return []
+    payload = {
+        "book_id": book_context_pack.get("book_id"),
+        "context_pack_id": book_context_pack.get("context_pack_id"),
+        "context_pack_hash": book_context_pack.get("context_pack_hash"),
+        "selection_policy": book_context_pack.get("selection_policy"),
+        "guidance": [
+            "Use this book-scope context only as prior guidance for alias, continuity, and disambiguation.",
+            "Do not treat prior context as evidence for facts not present in the current source text.",
+            "Current source evidence remains authoritative for extracted records.",
+        ],
+        "context": book_context_pack.get("context", {}),
+    }
+    return [
+        generated_prompt_part(
+            "book-scope-context",
+            role="book_scope_context",
+            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            generated_by="book_context",
+            metadata=book_context_cache_metadata(book_context_pack),
+        )
+    ]
+
+
+def extraction_context_hash(
+    context: ExtractionContext,
+    book_context_pack: dict[str, Any] | None = None,
+) -> str:
+    metadata = book_context_cache_metadata(book_context_pack)
+    if not metadata.get("prompt_injection_enabled"):
+        return sha256_json(context.to_dict())
+    return sha256_json(
+        {
+            "prior_context": context.to_dict(),
+            "book_context": metadata,
+        }
+    )
+
+
+def should_disable_text_hash_cache(book_context_pack: dict[str, Any] | None) -> bool:
+    return bool(book_context_cache_metadata(book_context_pack).get("prompt_injection_enabled"))
+
+
 def build_pass_cache_key(
     *,
     pass_name: str,
     prompt: PromptComposition,
     user_payload: dict[str, Any],
     model_identity: str,
+    cache_context: dict[str, Any] | None = None,
 ) -> str:
-    return sha256_json(
-        {
-            "pass_name": pass_name,
-            "prompt_composition": prompt.to_dict(),
-            "user_payload_hash": sha256_json(user_payload),
-            "model_identity": model_identity,
-        }
-    )
+    key_payload = {
+        "pass_name": pass_name,
+        "prompt_composition": prompt.to_dict(),
+        "user_payload_hash": sha256_json(user_payload),
+        "model_identity": model_identity,
+    }
+    if cache_context:
+        key_payload["cache_context"] = cache_context
+    return sha256_json(key_payload)
 
 
 def pass_artifact_paths(pass_dir: Path) -> dict[str, str]:
@@ -1118,17 +1205,24 @@ def unit_timeline_repair_artifact_paths(pass_dir: Path) -> dict[str, str]:
     }
 
 
-def chain_cache_key(*, unit_id: str, text: str, model_identity: str) -> str:
-    return sha256_json(
-        {
-            "pipeline": "overview-plus-segment-extraction-v0.1",
-            "unit_id": unit_id,
-            "source_text_hash": sha256_text(text),
-            "model_identity": model_identity,
-            "overview_prompt_version": OVERVIEW_PROMPT_VERSION,
-            "segment_prompt_version": PROMPT_VERSION,
-        }
-    )
+def chain_cache_key(
+    *,
+    unit_id: str,
+    text: str,
+    model_identity: str,
+    context_pack_hash: str | None = None,
+) -> str:
+    key_payload = {
+        "pipeline": "overview-plus-segment-extraction-v0.1",
+        "unit_id": unit_id,
+        "source_text_hash": sha256_text(text),
+        "model_identity": model_identity,
+        "overview_prompt_version": OVERVIEW_PROMPT_VERSION,
+        "segment_prompt_version": PROMPT_VERSION,
+    }
+    if context_pack_hash:
+        key_payload["context_pack_hash"] = context_pack_hash
+    return sha256_json(key_payload)
 
 
 def validate_overview_result(data: dict[str, Any]) -> None:

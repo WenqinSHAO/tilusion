@@ -34,7 +34,9 @@ from tilusion.extraction_pipeline import (
     _derive_unresolved_detail,
     _detect_timeline_cycles,
     _dominant_issue_codes,
+    book_context_cache_metadata,
     build_overview_composition,
+    build_pass_cache_key,
     build_segment_extraction_composition,
     build_unit_finalization_composition,
     build_unit_repair_composition,
@@ -513,6 +515,99 @@ def test_segment_extraction_pass_caches_intermediate_artifacts(tmp_path: Path) -
     assert first.validation_report.to_dict()["evidence_location_summary"]["exact"] == 1
     validated_result = Path(first.artifact_paths["validated_result"]).read_text(encoding="utf-8")
     assert "source_location" in validated_result
+
+
+def _context_pack(enabled: bool, pack_id: str = "context-pack-test") -> dict:
+    return {
+        "book_id": "book-test",
+        "context_pack_id": pack_id,
+        "context_pack_hash": pack_id.replace("context-pack-", "hash-"),
+        "selection_policy": "cross-unit-context-v0.1",
+        "prompt_injection": {"enabled": enabled},
+        "context": {
+            "entities": [
+                {
+                    "entity_id": "unit-0001:unit-entity-0001",
+                    "canonical_name": "Alice",
+                    "matched_surfaces": [],
+                    "match_count": 1,
+                }
+            ],
+            "locations": [],
+            "active_threads": [],
+            "recent_events": [],
+            "landmark_events": [],
+            "time_anchors": [],
+            "arc_summaries": [],
+        },
+    }
+
+
+def test_pass_cache_key_is_book_context_aware_only_when_prompt_injected() -> None:
+    prompt = build_segment_extraction_composition()
+    payload = {"unit": {"id": "unit-0001"}, "prior_context": {}, "text": "Alice"}
+    base = build_pass_cache_key(
+        pass_name="segment-extraction",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity="mock",
+    )
+    disabled = build_pass_cache_key(
+        pass_name="segment-extraction",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity="mock",
+        cache_context=book_context_cache_metadata(_context_pack(False)),
+    )
+    enabled = build_pass_cache_key(
+        pass_name="segment-extraction",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity="mock",
+        cache_context=book_context_cache_metadata(_context_pack(True)),
+    )
+
+    assert disabled == base
+    assert enabled != base
+
+
+def test_chained_extraction_can_inject_book_context_and_isolate_cache(tmp_path: Path) -> None:
+    book = tmp_path / "sample.txt"
+    book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
+    cache_dir = tmp_path / "chain-cache"
+    pack = _context_pack(True, "context-pack-one")
+
+    first = run_chained_extraction(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=cache_dir,
+        book_context_pack=pack,
+    )
+    second = run_chained_extraction(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=cache_dir,
+        book_context_pack=pack,
+    )
+    third = run_chained_extraction(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=cache_dir,
+        book_context_pack=_context_pack(True, "context-pack-two"),
+    )
+
+    assert first.cache_dir == second.cache_dir
+    assert first.cache_dir != third.cache_dir
+    assert second.segment_passes[0].cache_hit is True
+    assert third.segment_passes[0].cache_hit is False
+    prompt_composition = json.loads(
+        Path(first.segment_passes[0].artifact_paths["prompt_composition"]).read_text(encoding="utf-8")
+    )
+    assert prompt_composition["parts"][-1]["part_id"] == "book-scope-context"
+    assert first.segment_passes[0].result.context_hash != sha256_text("{}")
 
 
 def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) -> None:
