@@ -48,7 +48,7 @@
 
 - Extraction pipeline is roughly stitched end-to-end but needs polishing: prompt quality, edge cases, and tighter validation.
 - Prompt design toward composable versioned parts (extraction guides, context, validation feedback, repair, segmentation, QC).
-- Current goal: deterministic cross-unit context selector over passive book-state artifacts; planning doc: `docs/cross_unit_extraction_plan.md`.
+- Current goal: deterministic cross-unit context selector (surface scanner + compact context builder) and tool scaffolding for agentic extraction (`detail_thread`, `detail_timeline`, `resolve_entity`, `search_prior_events`). Planning doc: `docs/cross_unit_extraction_plan.md`.
 - Extraction adjustment based on user input prompts.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.

@@ -74,7 +74,9 @@ Time anchors:
 
 Before extracting a new unit, build a context pack from the current book-state snapshot and the new unit text.
 
-Suggested shape:
+The pack has two layers: **always-included compact context** and **tool-accessible detail**. The compact context is small enough to include in every extraction prompt. The detail is pulled in only when the LLM signals it needs it via tool calls.
+
+### Compact context (always in prompt)
 
 ```json
 {
@@ -105,7 +107,95 @@ Suggested shape:
 }
 ```
 
-The context pack should be written as an artifact beside the extraction pass. Its hash must become part of downstream cache keys.
+### Tool-accessible detail (on-demand)
+
+These records are NOT included in the prompt by default. They are available through deterministic tool calls the LLM can invoke during extraction:
+
+- **Full thread event lists** — when the extractor detects an event that may continue a known thread
+- **Full timeline structures** — when the extractor needs to place a new event relative to known timeline anchors
+- **Entity/location canonical records with alias lists** — when the extractor encounters a surface that may match a known entity and needs to resolve whether it is the same one
+- **Prior event details** — when the extractor needs to check whether a detected event duplicates or references a prior one
+
+### Deterministic surface scanner
+
+Before building the context pack, run a deterministic lexical scan over the current unit text against all known canonical names, aliases, and surface forms from the book registry.
+
+This scan:
+- Requires zero LLM calls — it is pure string matching against prior extraction records
+- Produces a hit list: "this unit text likely mentions these 15 known entities and 8 known locations"
+- Feeds into the compact context as the `entities` and `locations` arrays, each entry carrying just the canonical record needed for disambiguation
+- Also produces a `surfaces_not_matched` list for the selection report — surfaces that appear in the unit but don't match any known record (these may be new entities or alias variants)
+
+The scan is intentionally low-recall and precision-oriented. False positives are worse than false negatives because they push the LLM toward incorrect continuity. The LLM can always call `resolve_entity` or `resolve_location` if it suspects a match the scanner missed.
+
+The context pack and selection report should be written as artifacts beside the extraction pass. Their hashes must become part of downstream cache keys.
+
+## Agentic Tool-Use During Extraction
+
+Rather than dumping all prior book-scope records into the prompt, the LLM extractor should have access to deterministic tools it can call when it detects a narrative signal that matches or extends prior structure.
+
+### Tool definitions
+
+```
+detail_thread(thread_id) → {
+  thread_id, title, summary, status,
+  last_N_events: [{event_id, summary, participants, locations, confidence}],
+  open_questions: [...],
+  expected_continuation_signals: [...]
+}
+```
+
+```
+detail_timeline(timeline_id) → {
+  timeline_id, summary, confidence,
+  ordered_events: [{event_id, summary, before_edges}],
+  time_anchors: [{expression, approximate_date, linked_events}]
+}
+```
+
+```
+resolve_entity(query: canonical_name | alias | surface_form) → {
+  entity_id, canonical_name, aliases, entity_kind,
+  compact_description, recent_events: [{event_id, summary}],
+  unresolved_alias_candidates: [...]
+}
+```
+
+```
+search_prior_events(query: text) → [{
+  event_id, summary, thread_id, timeline_id, confidence
+}]
+```
+
+### How it works during segment extraction
+
+1. The segment extraction prompt includes compact book-scope context (thread summaries, matched entity/location records, recent timeline anchors).
+2. The LLM detects something that may involve a known thread, entity, or timeline — for example, an event that looks like a continuation of thread-42.
+3. The LLM calls `detail_thread("thread-42")`. The tool returns the full event list and expected continuation signals.
+4. The tool response is injected into the extraction context for the remainder of that segment pass. The LLM uses it to confirm or reject the thread continuation, and to set `thread_id` and `before_edges` correctly on new events.
+5. Each tool call and response is recorded in the pass manifest for audit and reproducibility.
+
+### Cache implications
+
+Tool calls create a dependency chain for caching:
+- A segment extraction pass that calls `detail_thread("thread-3")` must include the snapshotted state of thread-3 in its cache key.
+- The pass manifest records: which tool was called, with which arguments, against which book-state snapshot.
+- On cache hit, verify the referenced snapshots haven't changed. If they have, the cache is invalid.
+- This is a natural extension of the existing KV-cache prefix strategy: the compact context prefix stays stable, tool responses are injected after the prefix, and the full prompt composition hash covers both.
+
+### Why this beats enumeration
+
+- Context stays compact by default — only the 3-5 line thread summaries are always present, not full event histories.
+- Detail is pulled in exactly when there's a *reason* to reference prior structure, not speculatively.
+- The aggregate set of tool calls across segments is itself a useful signal — it tells you which threads and entities the LLM considered relevant to this unit.
+- The LLM learns to use the tools as it reasons about narrative continuity, mirroring how a human annotator would flip to the relevant section of their notes rather than pinning everything on the wall at once.
+- New extractors and models can use the same deterministic tools without retraining — the tool interface is stable even if the prompt evolves.
+
+### Non-goals for tool-use
+
+- No LLM-generated tool calls that mutate book state directly. All mutations go through deterministic validation and transaction logging.
+- No recursive or chained tool calls within a single extraction step. One round of tool calls per segment, then the LLM produces its output.
+- No tools that return raw prior-unit text or prior-pass raw responses. Tools return structured records only.
 
 ## Budget Tiers
 
@@ -145,15 +235,16 @@ Tier 4: Large-window consolidation context.
 For the next chapter after `unit-0002`:
 
 1. Read and index the target unit.
-2. Deterministically pre-scan the unit text for known aliases, location surfaces, time expressions, and thread cue terms from the current book registry.
-3. Build `context_pack.json` using a token-budgeted selector.
+2. Run the deterministic surface scanner over the unit text against the current book registry. Produce a hit list of matched entities, locations, thread cue terms, and time expressions.
+3. Build `context_pack.json` with compact summaries (thread summaries, matched canonical records, recent timeline anchors) using a token-budgeted selector. Write `context_selection_report.json` explaining what was included and excluded.
 4. Run overview segmentation on the target unit. Initially this can stay mostly unit-local, with optional recent arc summary only if needed.
-5. Run per-segment extraction with current segment text, overview hints, and the selected context pack. The prompt should say prior context is guidance for matching and continuity, not evidence for new facts.
-6. Run deterministic validation and repair-hint generation exactly as now for local evidence and record integrity.
-7. Run unit finalization with local segment results plus the context pack. This pass can propose canonical matches, alias candidates, and thread continuations.
-8. Run a cross-unit canonicalization pass that outputs a delta: new canonical records, proposed merges, updated aliases, thread updates, timeline anchor updates, and unresolved ambiguity queue.
-9. Validate the delta deterministically before applying it to book state.
-10. Write a new book-state snapshot and transaction log entry only after validation passes or the user explicitly accepts lower-confidence changes.
+5. Run per-segment extraction with: `[static prompt] + [overview hints for this segment] + [compact book-scope context] + [current segment text]`. The LLM may call detail/resolve/search tools when it detects narrative continuity signals.
+6. Tool responses are injected into the extraction context. Each tool call and response is recorded in the pass manifest.
+7. Run deterministic validation and repair-hint generation exactly as now for local evidence and record integrity.
+8. Run unit finalization with local segment results plus the context pack. This pass can propose canonical matches, alias candidates, and thread continuations.
+9. Run a cross-unit canonicalization pass that outputs a delta: new canonical records, proposed merges, updated aliases, thread updates, timeline anchor updates, and unresolved ambiguity queue.
+10. Validate the delta deterministically before applying it to book state.
+11. Write a new book-state snapshot and transaction log entry only after validation passes or the user explicitly accepts lower-confidence changes.
 
 ## Long-Novel Strategy
 
@@ -224,72 +315,97 @@ Quality metrics to track over time:
 
 ## Immediate Multi-Commit Sequence
 
-The next work should remain verifiable and avoid LLM-backed reruns until passive scaffolding is inspectable. Planned commits:
+The next work should remain verifiable and avoid LLM-backed reruns until passive scaffolding is inspectable. The first two steps are already complete.
 
-1. Passive schema and artifact scaffolding.
+### Completed
 
-- Add a small book-context module with stable `book_id`, book cache paths, empty/default `BookStateSnapshot`, and `ContextPack` builders.
-- Write context-pack artifacts beside unit packages or under `.tilusion_cache/books/<book_id>/context_packs/<unit_id>/`.
-- Do not pass the context pack into prompts yet.
+1. **Passive schema and artifact scaffolding** (done: `fb7f969`).
+   - `tilusion/book_context.py` with stable `book_id`, book cache paths, empty/default `BookStateSnapshot`, and passive `ContextPack` builders.
+   - Writes context-pack artifacts under `.tilusion_cache/books/<book_id>/context_packs/<unit_id>/`.
+   - Prompt injection is disabled: `prompt_injection.enabled = false` everywhere.
 
-2. Pipeline wiring without prompt behavior changes.
+2. **Pipeline wiring without prompt behavior changes** (done: `ab44208`).
+   - `run-all` builds and persists the passive context pack.
+   - `unit_package.json` carries `book_context` metadata for inspection.
+   - Existing extraction pass cache keys unchanged.
 
-- Let `run-all` build and persist the passive context pack.
-- Add context-pack metadata to `unit_package.json` for inspection.
-- Keep existing extraction pass cache keys unchanged until context affects prompts.
+### Planned
 
-3. Cache-key readiness.
+3. **Cache-key readiness.**
+   - Add context-pack hash fields and helper functions.
+   - Document where future prompt-affecting passes must include the context-pack hash and tool-call response hashes.
+   - Do not invalidate current LLM caches until the context pack or tool responses are actually injected into request payloads.
 
-- Add context-pack hash fields and helper functions.
-- Document where future prompt-affecting passes must include the context-pack hash.
-- Do not invalidate current LLM caches until the context pack is actually injected into request payloads.
+4. **Deterministic context selector (surface scanner + compact context builder).**
+   - Lexical surface/alias scan over current unit text against book registry records (entities, locations, thread cue terms, time expressions).
+   - Produce a matched-hit list and a `surfaces_not_matched` list.
+   - Build compact context: thread summaries, matched entity/location canonical records, recent timeline anchors.
+   - Write `context_pack.json` and `context_selection_report.json` with include/exclude reasoning.
+   - Write the surface scan hit list and tool-accessible record indices as separate artifacts.
+   - Zero LLM calls at this step. Build mock registries from `unit-0002` as fixtures.
 
-4. Deterministic context selector.
+5. **Tool scaffolding (deterministic, no LLM calls yet).**
+   - Define tool schemas: `detail_thread`, `detail_timeline`, `resolve_entity`, `search_prior_events`.
+   - Implement each tool as a deterministic function over book-state snapshot JSON.
+   - Add a tool-call record type and include tool-call argument/response hashes in pass manifest.
+   - Test with mock tool calls against a `unit-0002`-derived registry.
+   - Do not wire into LLM prompts yet.
 
-- Start with simple JSON state and lexical surface matching.
-- Produce `context_selection_report.json` explaining included and excluded context.
-- Still avoid LLM calls unless a mock/cached test needs to verify artifact shape.
-
-5. Prompt integration after review.
-
-- Add a generated prompt part for selected context.
-- Include context-pack hash in affected cache keys at the same time.
-- Then run LLM-backed extraction on the next unit, using `unit-0002` as prior state, instead of spending tokens only rerunning `unit-0002`.
+6. **Prompt integration after review.**
+   - Add a generated prompt part for compact selected context.
+   - Wire tool definitions into the extraction prompt so the LLM can invoke them.
+   - Record tool calls in the pass manifest and include their argument/response hashes in cache keys.
+   - Then run LLM-backed extraction on the next unit, using `unit-0002` as prior state.
 
 ## Implementation Milestones
 
-Milestone 1: Schema and artifacts only.
+Milestone 1: Schema and artifacts only. (Done)
 
 - Define `BookStateSnapshot`, `ContextPack`, and `RegistryDelta` JSON shapes.
-- Add docs and sample fixtures from `unit-0002`.
+- Write passive artifacts from `run-all`.
 - No LLM behavior changes.
 
 Milestone 2: Deterministic context selector.
 
-- Build a simple surface/alias scanner over current unit text.
-- Select recent context, matched canonical records, active threads, and nearby timeline anchors.
-- Write `context_pack.json` and `context_selection_report.json`.
-- Include context-pack hash in cache keys, but keep prompts unchanged at first.
+- Implement the lexical surface scanner: scan current unit text against book registry surfaces, aliases, and cue terms.
+- Build compact context with matched records, thread summaries, and recent timeline anchors.
+- Write `context_pack.json` and `context_selection_report.json` with include/exclude reasoning.
+- Zero LLM calls at this milestone. Test with mock registries derived from `unit-0002`.
 
-Milestone 3: Prompt integration.
+Milestone 3: Tool scaffolding.
 
-- Add a generated context prompt part.
+- Implement the four tool functions deterministically over book-state snapshot JSON.
+- Define tool-call record schema and wire into pass manifest.
+- Test tool calls return correct structured records for known entity/thread/timeline IDs.
+- Cache-key readiness: include tool-call argument/response hashes in pass cache keys (but don't inject into prompts yet).
+
+Milestone 4: Prompt integration — compact context.
+
+- Add a generated prompt part for compact selected context (thread summaries, matched records, timeline anchors).
 - Feed compact context to segment extraction and unit finalization.
+- The prompt instructs the LLM that prior context is guidance for matching and continuity, not evidence for new facts.
 - Keep current one-unit pipeline available as baseline.
 
-Milestone 4: Cross-unit canonicalization delta.
+Milestone 5: Prompt integration — tool-use.
+
+- Wire tool definitions into the extraction prompt schema so the LLM can invoke `detail_thread`, `detail_timeline`, `resolve_entity`, `search_prior_events`.
+- Record tool calls and responses in the pass manifest.
+- Include tool-call argument/response hashes in cache keys.
+- Run LLM-backed extraction on a new unit with `unit-0002` as prior state.
+
+Milestone 6: Cross-unit canonicalization delta.
 
 - Add a pass after unit finalization/repair/timeline that proposes registry deltas.
 - Do not mutate registry directly from raw LLM output.
 - Validate delta and write transaction artifacts.
 
-Milestone 5: Book-state snapshot writer.
+Milestone 7: Book-state snapshot writer.
 
 - Apply validated deltas to the latest snapshot.
 - Preserve previous snapshots and transaction logs.
 - Add CLI commands to inspect state, context packs, and unresolved items.
 
-Milestone 6: Periodic consolidation.
+Milestone 8: Periodic consolidation.
 
 - Use the large context window over many unit packages and registry deltas.
 - Produce arc summaries, alias merge recommendations, thread status updates, and timeline conflict repairs.
@@ -297,8 +413,9 @@ Milestone 6: Periodic consolidation.
 
 ## Non-Goals For The Next Step
 
-- No dynamic ontology induction as the primary task.
+- No LLM-backed tool calls until tool scaffolding and the deterministic context selector are tested with mock registries.
 - No vector database until deterministic JSON indices are insufficient.
 - No full-book timeline reconstruction on every chapter.
 - No automatic destructive merges of entities, locations, threads, or timelines.
 - No assumption that prior extraction can serve as evidence for new-unit facts.
+- No recursive or chained tool calls within a single extraction step.
