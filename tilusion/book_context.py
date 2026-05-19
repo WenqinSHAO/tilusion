@@ -272,7 +272,8 @@ def scan_unit_text_for_surfaces(
     for m in resolved:
         matched_ids.add((m["record_type"], m["record_id"]))
     surfaces_not_matched: list[dict[str, Any]] = []
-    for rec_type, record_id in all_scanned - matched_ids:
+    unmatched = sorted(all_scanned - matched_ids, key=lambda x: (x[0], x[1]))
+    for rec_type, record_id in unmatched:
         rec = (
             registry.get("entities", {}).get(record_id)
             or registry.get("locations", {}).get(record_id)

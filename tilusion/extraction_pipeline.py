@@ -397,7 +397,8 @@ def run_chained_extraction(
         else (_build_segment_cache_map(segments_dir) if use_cache else {})
     )
     segment_passes = []
-    for segment in resolved_segments:
+    total_segments = len(resolved_segments)
+    for i, segment in enumerate(resolved_segments, start=1):
         segment_context = ExtractionContext(
             frontier=segment.segment_id,
             confirmed_entities=[
@@ -431,19 +432,25 @@ def run_chained_extraction(
         cached_result = None
         if cached_result_path and cached_result_path.exists():
             cached_result = result_from_json(cached_result_path.read_text(encoding="utf-8"))
-        segment_passes.append(
-            run_text_segment_extraction_pass(
-                parent_unit=unit,
-                segment=segment,
-                context=segment_context,
-                backend=llm,
-                cache_dir=segments_dir,
-                use_cache=use_cache,
-                generated_prompt_parts=generated_parts,
-                cached_result=cached_result,
-                book_context_pack=book_context_pack,
-            )
+        t_seg = time.monotonic()
+        seg_pass = run_text_segment_extraction_pass(
+            parent_unit=unit,
+            segment=segment,
+            context=segment_context,
+            backend=llm,
+            cache_dir=segments_dir,
+            use_cache=use_cache,
+            generated_prompt_parts=generated_parts,
+            cached_result=cached_result,
+            book_context_pack=book_context_pack,
         )
+        seg_elapsed = time.monotonic() - t_seg
+        seg_status = "cache hit" if seg_pass.cache_hit else "LLM call"
+        print(
+            f"  [{i}/{total_segments}] {segment.title}... {seg_status} ({seg_elapsed:.1f}s)",
+            file=sys.stderr,
+        )
+        segment_passes.append(seg_pass)
     validation_report = build_chain_validation_report(
         overview, resolved_segments, segment_passes, overview_repairs=overview_repairs
     )

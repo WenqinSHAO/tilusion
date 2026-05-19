@@ -82,9 +82,9 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     assert "schema_version" not in model_payload
     assert len(key) == 64
     assert DEFAULT_MODEL == "deepseek-v4-flash"
-    assert DEFAULT_MAX_TOKENS == 32768
-    assert DEEPSEEK_CONTEXT_TOKENS == 1_000_000
-    assert DEEPSEEK_MAX_OUTPUT_TOKENS == 384_000
+    assert DEFAULT_MAX_TOKENS == 326_400
+    assert DEEPSEEK_CONTEXT_TOKENS == 850_000
+    assert DEEPSEEK_MAX_OUTPUT_TOKENS == 326_400
     assert PROMPT_VERSION == "segment-extraction-v0.6"
     assert SCHEMA_VERSION == "segment-extraction-v0.3"
 
