@@ -483,6 +483,7 @@ def build_context_pack_from_registry(
     *,
     source_length: dict[str, int] | None = None,
     min_surface_length: int = 2,
+    prompt_injection_enabled: bool = False,
 ) -> dict[str, Any]:
     """Build a context pack using the deterministic surface scanner over a populated registry."""
     snapshot = build_book_state_snapshot(book_path, registry)
@@ -508,8 +509,12 @@ def build_context_pack_from_registry(
         },
         "source_length": source_length or {},
         "prompt_injection": {
-            "enabled": False,
-            "reason": "deterministic surface scanner only; not injected into LLM prompts yet",
+            "enabled": prompt_injection_enabled,
+            "reason": (
+                "deterministic surface scanner selected this context for LLM prompts"
+                if prompt_injection_enabled
+                else "deterministic surface scanner only; not injected into LLM prompts yet"
+            ),
         },
         "selection_summary": {
             "known_surface_hits": scan["total_matches"],
@@ -584,6 +589,51 @@ def write_passive_context_artifacts(
         book_path,
         unit_id,
         source_length=source_length,
+    )
+    selection_report = build_context_selection_report(context_pack)
+
+    root = book_cache_dir(cache_root, snapshot["book_id"])
+    snapshot_dir = root / "registry" / "snapshots"
+    pack_dir = context_pack_dir(cache_root, snapshot["book_id"], unit_id)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    pack_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot_path = snapshot_dir / f"{snapshot['snapshot_id']}.json"
+    latest_path = root / "registry" / "latest.json"
+    context_pack_path = pack_dir / "context_pack.json"
+    selection_report_path = pack_dir / "context_selection_report.json"
+
+    _write_json(snapshot_path, snapshot)
+    _write_json(latest_path, snapshot)
+    _write_json(context_pack_path, context_pack)
+    _write_json(selection_report_path, selection_report)
+
+    return {
+        "book_state_snapshot": str(snapshot_path),
+        "book_state_latest": str(latest_path),
+        "context_pack": str(context_pack_path),
+        "context_selection_report": str(selection_report_path),
+    }
+
+
+def write_context_artifacts_from_registry(
+    *,
+    book_path: str | Path,
+    unit_id: str,
+    unit_text: str,
+    registry: dict[str, Any],
+    cache_root: str | Path,
+    source_length: dict[str, int] | None = None,
+    prompt_injection_enabled: bool = False,
+) -> dict[str, str]:
+    snapshot = build_book_state_snapshot(book_path, registry)
+    context_pack = build_context_pack_from_registry(
+        book_path,
+        unit_id,
+        unit_text,
+        registry,
+        source_length=source_length,
+        prompt_injection_enabled=prompt_injection_enabled,
     )
     selection_report = build_context_selection_report(context_pack)
 

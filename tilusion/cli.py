@@ -115,6 +115,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_all_parser.add_argument("--cache-dir", default=".tilusion_cache")
     run_all_parser.add_argument("--no-cache", action="store_true")
     run_all_parser.add_argument(
+        "--prior-unit-package",
+        action="append",
+        default=[],
+        help="Prior unit_package.json to scan into compact book-scope context; repeatable",
+    )
+    run_all_parser.add_argument(
         "--skip-repair",
         action="store_true",
         help="Skip repair passes even when issues are detected",
@@ -259,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir=args.cache_dir,
                 use_cache=not args.no_cache,
                 skip_repair=args.skip_repair,
+                prior_unit_package_paths=args.prior_unit_package,
             )
         except (ExtractionError, OSError, ValueError, KeyError) as error:
             print(f"run-all failed: {error}", file=sys.stderr)

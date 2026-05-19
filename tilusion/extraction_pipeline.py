@@ -7,7 +7,11 @@ import sys
 import time
 from typing import Any
 
-from .book_context import write_passive_context_artifacts
+from .book_context import (
+    build_registry_from_packages,
+    write_context_artifacts_from_registry,
+    write_passive_context_artifacts,
+)
 from .book_reader import build_book_index, extract_unit_text
 from .extraction import (
     DEFAULT_MAX_TOKENS,
@@ -1992,6 +1996,7 @@ def run_all_passes(
     use_cache: bool = True,
     skip_repair: bool = False,
     book_context_pack: dict[str, Any] | None = None,
+    prior_unit_package_paths: list[str | Path] | None = None,
 ) -> RunAllRecord:
     llm = backend or MockExtractionBackend()
     root = Path(cache_dir)
@@ -2003,6 +2008,28 @@ def run_all_passes(
     finalization_dir: str | None = None
     repair_dir: str | None = None
     timeline_dir: str | None = None
+    context_artifacts: dict[str, str] | None = None
+
+    if book_context_pack is None and prior_unit_package_paths:
+        index = build_book_index(book_path)
+        unit = index.unit_map().get(unit_id)
+        if unit is None:
+            raise ValueError(f"unknown unit_id: {unit_id}")
+        unit_text = extract_unit_text(book_path, unit)
+        source_length = text_length_stats(unit_text)
+        registry = build_registry_from_packages(prior_unit_package_paths)
+        context_artifacts = write_context_artifacts_from_registry(
+            book_path=book_path,
+            unit_id=unit_id,
+            unit_text=unit_text,
+            registry=registry,
+            cache_root=root,
+            source_length=source_length,
+            prompt_injection_enabled=True,
+        )
+        book_context_pack = json.loads(
+            Path(context_artifacts["context_pack"]).read_text(encoding="utf-8")
+        )
 
     # ---- Step 1: Chain (overview + segments) ----
     t0 = time.monotonic()
@@ -2179,12 +2206,13 @@ def run_all_passes(
         skip_repair=skip_repair,
     )
     validation_summary = _validation_summary(final_data, pass_validation)
-    context_artifacts = write_passive_context_artifacts(
-        book_path=book_path,
-        unit_id=unit_id,
-        cache_root=root,
-        source_length=chain_record.source_length,
-    )
+    if context_artifacts is None:
+        context_artifacts = write_passive_context_artifacts(
+            book_path=book_path,
+            unit_id=unit_id,
+            cache_root=root,
+            source_length=chain_record.source_length,
+        )
 
     # Write unit package
     package_path = write_unit_package(

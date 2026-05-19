@@ -436,3 +436,69 @@ def test_build_compact_context_from_scan() -> None:
     assert len(ctx["locations"]) == 1
     assert len(ctx["active_threads"]) == 1
     assert ctx["active_threads"][0]["summary"] == "主线"
+
+
+def test_run_all_builds_prompt_context_from_prior_unit_package(tmp_path: Path) -> None:
+    from tilusion.extraction import MockExtractionBackend
+    from tilusion.extraction_pipeline import run_all_passes
+
+    book = tmp_path / "book.txt"
+    book.write_text("Chapter 1\nAlice left home.\n", encoding="utf-8")
+    prior_package = tmp_path / "prior_unit_package.json"
+    prior_package.write_text(
+        json.dumps(
+            {
+                "unit_id": "unit-0000",
+                "data": {
+                    "entity_records": [
+                        {
+                            "entity_id": "unit-entity-0001",
+                            "canonical_name": "Alice",
+                            "surfaces": ["Alice"],
+                            "kind": "person",
+                            "summary": "Known person from prior unit",
+                        }
+                    ],
+                    "location_records": [],
+                    "thread_records": [
+                        {
+                            "thread_id": "unit-thread-0001",
+                            "summary": "Alice's movement",
+                            "status": "active",
+                        }
+                    ],
+                    "event_records": [],
+                    "timelines": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record = run_all_passes(
+        book,
+        "unit-0001",
+        backend=MockExtractionBackend(),
+        cache_dir=tmp_path / "cache",
+        prior_unit_package_paths=[prior_package],
+    )
+    package = json.loads(Path(record.unit_package_path).read_text(encoding="utf-8"))
+    book_context = package["book_context"]
+    context_pack = json.loads(
+        Path(book_context["artifact_paths"]["context_pack"]).read_text(encoding="utf-8")
+    )
+
+    assert book_context["selection_policy"] == "cross-unit-context-v0.1"
+    assert book_context["prompt_injection"]["enabled"] is True
+    assert context_pack["selection_summary"]["known_surface_hits"] == 1
+    assert context_pack["context"]["entities"][0]["canonical_name"] == "Alice"
+    assert context_pack["context"]["active_threads"][0]["summary"] == "Alice's movement"
+
+    chain_artifacts = package["passes"]["chain"]["artifact_paths"]
+    chain_manifest = json.loads(Path(chain_artifacts["manifest"]).read_text(encoding="utf-8"))
+    segment_prompt = json.loads(
+        Path(chain_manifest["segment_passes"][0]["artifact_paths"]["prompt_composition"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert segment_prompt["parts"][-1]["part_id"] == "book-scope-context"
