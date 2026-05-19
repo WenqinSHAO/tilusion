@@ -46,6 +46,7 @@ from .extraction_prompts import (
     generated_prompt_part,
 )
 from .extraction_unit_validation import (
+    _detect_timeline_cycles,
     validate_unit_finalization_result,
     validate_unit_timeline_result,
 )
