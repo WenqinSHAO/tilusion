@@ -550,7 +550,7 @@ Current implementation entry points:
 
 - CLI: `python -m tilusion.cli finalize-unit <chain_cache_dir>`.
 - Pass runner: `run_unit_finalization_pass()` in `tilusion/extraction_pipeline.py`.
-- Context assembly: `build_unit_finalization_payload()` in `tilusion/extraction_pipeline.py`.
+- Context assembly: `build_unit_finalization_payload()` in `tilusion/extraction_payloads.py`.
 - Segment compaction: `compact_segment_result()` in `tilusion/extraction_pipeline.py`.
 - Static prompt: `tilusion/prompts/unit_finalization_v0.1.md`.
 
