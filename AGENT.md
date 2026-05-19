@@ -5,7 +5,7 @@ overall guidline
 - Take small, auditable steps.
 
 env and toolin:
-- work in virtualenv shredder.
+- work in virtualenv shredder at ~/.virtualenvs/shredder
 - LLM backend DeepSeek v4 flash by default for extraction, with pro available for harder cases.
 - Preferred API key env var is DEEPSEEK_API_KEY; DS_API_KEY is kept as a local fallback.
 
