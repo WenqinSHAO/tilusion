@@ -1964,12 +1964,12 @@ def format_unit_timeline_view(data: dict[str, Any], validation_report: dict[str,
             f"## {timeline.get('timeline_id')}: {timeline.get('summary', '')}",
             f"  confidence: {timeline.get('confidence', 'unknown')}",
             "",
-            "### Event Order",
+            "### Atom Order",
             "",
         ])
-        for entry in timeline.get("ordered_events", []) or []:
-            eid = entry.get("event_id", "?")
-            before = entry.get("before_events") or []
+        for entry in timeline.get("ordered_atoms", []) or []:
+            eid = entry.get("atom_id", "?")
+            before = entry.get("before_atoms") or []
             summary = atom_map.get(eid, "")
             lines.append(f"- **{eid}**: {summary}")
             if before:
@@ -2381,7 +2381,7 @@ def _merge_timelines_into_records(
 
     The LLM only produces the `timelines` array (and for repair passes,
     `quality_notes`, `unresolved_items`, `warnings`). All entity, location,
-    event, and thread records come from the deterministic base.
+    atom, and thread records come from the deterministic base.
     """
     merged: dict[str, Any] = {}
     for key in _RECORD_KEYS:

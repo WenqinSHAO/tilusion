@@ -247,7 +247,7 @@ def test_unit_timeline_composition_extends_repair() -> None:
     repair = build_unit_repair_composition()
     timeline = build_unit_timeline_composition()
 
-    assert timeline.composition_id == "unit-timeline-v0.3"
+    assert timeline.composition_id == "unit-timeline-v0.4"
     assert len(timeline.parts) == 3
     assert timeline.parts[0].part_id == "unit-finalization-contract"
     assert timeline.parts[0].content == repair.parts[0].content
@@ -334,8 +334,8 @@ def test_validate_timeline_result_detects_event_mismatch() -> None:
                 "timeline_id": "unit-timeline-0001",
                 "summary": "Test",
                 "confidence": "high",
-                "ordered_events": [
-                    {"event_id": "unit-atom-0001", "before_events": []}
+                "ordered_atoms": [
+                    {"atom_id": "unit-atom-0001", "before_atoms": []}
                 ],
             }
         ],
@@ -345,9 +345,9 @@ def test_validate_timeline_result_detects_event_mismatch() -> None:
         ],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
-    missing = [i for i in report["issues"] if i["code"] == "events_missing_from_timelines"]
+    missing = [i for i in report["issues"] if i["code"] == "atoms_missing_from_timelines"]
     assert len(missing) == 1
-    assert missing[0]["severity"] == "error"
+    assert missing[0]["severity"] == "warning"
 
 
 def test_validate_timeline_result_detects_self_loop() -> None:
@@ -358,8 +358,8 @@ def test_validate_timeline_result_detects_self_loop() -> None:
                 "timeline_id": "unit-timeline-0001",
                 "summary": "Test",
                 "confidence": "high",
-                "ordered_events": [
-                    {"event_id": "unit-atom-0001", "before_events": ["unit-atom-0001"]}
+                "ordered_atoms": [
+                    {"atom_id": "unit-atom-0001", "before_atoms": ["unit-atom-0001"]}
                 ],
             }
         ],
@@ -377,8 +377,8 @@ def test_validate_timeline_result_detects_phantom_ref() -> None:
                 "timeline_id": "unit-timeline-0001",
                 "summary": "Test",
                 "confidence": "high",
-                "ordered_events": [
-                    {"event_id": "unit-atom-0001", "before_events": ["unit-atom-0999"]}
+                "ordered_atoms": [
+                    {"atom_id": "unit-atom-0001", "before_atoms": ["unit-atom-0999"]}
                 ],
             }
         ],
@@ -396,23 +396,23 @@ def test_validate_timeline_result_allows_shared_events_as_intersection() -> None
                 "timeline_id": "unit-timeline-0001",
                 "summary": "Timeline 1",
                 "confidence": "high",
-                "ordered_events": [
-                    {"event_id": "unit-atom-0001", "before_events": []}
+                "ordered_atoms": [
+                    {"atom_id": "unit-atom-0001", "before_atoms": []}
                 ],
             },
             {
                 "timeline_id": "unit-timeline-0002",
                 "summary": "Timeline 2",
                 "confidence": "medium",
-                "ordered_events": [
-                    {"event_id": "unit-atom-0001", "before_events": []}
+                "ordered_atoms": [
+                    {"atom_id": "unit-atom-0001", "before_atoms": []}
                 ],
             },
         ],
         "atom_records": [{"atom_id": "unit-atom-0001"}],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
-    shared = [i for i in report["issues"] if i["code"] == "timeline_shared_event"]
+    shared = [i for i in report["issues"] if i["code"] == "timeline_shared_atom"]
     assert len(shared) == 1
     assert shared[0]["severity"] == "warning"
 
@@ -420,18 +420,18 @@ def test_validate_timeline_result_allows_shared_events_as_intersection() -> None
 def test_detect_timeline_cycles_finds_cycle() -> None:
     # A -> B -> C -> A (cycle)
     events = [
-        {"event_id": "A", "before_events": ["B"]},
-        {"event_id": "B", "before_events": ["C"]},
-        {"event_id": "C", "before_events": ["A"]},
+        {"atom_id": "A", "before_atoms": ["B"]},
+        {"atom_id": "B", "before_atoms": ["C"]},
+        {"atom_id": "C", "before_atoms": ["A"]},
     ]
     cycles = _detect_timeline_cycles(events)
     assert len(cycles) >= 1
 
     # A -> B, B -> C, A -> C (no cycle)
     events_dag = [
-        {"event_id": "A", "before_events": ["B", "C"]},
-        {"event_id": "B", "before_events": ["C"]},
-        {"event_id": "C"},
+        {"atom_id": "A", "before_atoms": ["B", "C"]},
+        {"atom_id": "B", "before_atoms": ["C"]},
+        {"atom_id": "C"},
     ]
     cycles_dag = _detect_timeline_cycles(events_dag)
     assert len(cycles_dag) == 0

@@ -596,10 +596,10 @@ def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     ordered = []
     for i, event in enumerate(events):
         entry: dict[str, Any] = {
-            "event_id": event["atom_id"],
+            "atom_id": event["atom_id"],
         }
         if i + 1 < len(events):
-            entry["before_events"] = [events[i + 1]["atom_id"]]
+            entry["before_atoms"] = [events[i + 1]["atom_id"]]
             entry["rationale"] = f"source_order_hint {event.get('source_order_hint', i+1)} < {events[i+1].get('source_order_hint', i+2)}"
         ordered.append(entry)
 
@@ -607,7 +607,7 @@ def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
         "timeline_id": "unit-timeline-0001",
         "summary": "Mock timeline: all events in source order",
         "confidence": "medium",
-        "ordered_events": ordered,
+        "ordered_atoms": ordered,
     }
 
     return {
@@ -624,10 +624,10 @@ def mock_unit_timeline_repair_response(user_payload: dict[str, Any]) -> dict[str
     if missing_events and timelines:
         # Attach missing events to the first timeline with no ordering edges
         timeline = timelines[0]
-        ordered = timeline.get("ordered_events", [])
+        ordered = timeline.get("ordered_atoms", [])
         for eid in missing_events:
-            ordered.append({"event_id": eid})
-        timeline["ordered_events"] = ordered
+            ordered.append({"atom_id": eid})
+        timeline["ordered_atoms"] = ordered
 
     return {
         "timelines": timelines,
