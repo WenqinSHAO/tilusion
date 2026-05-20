@@ -45,7 +45,7 @@ def build_unit_timeline_payload(
     payload = build_unit_finalization_payload(manifest)
     event_records = repaired_data.get("event_records", [])
     segment_results = payload.get("segment_results", [])
-    enriched_events = _enrich_event_time_refs(event_records, segment_results)
+    enriched_events = _enrich_atom_time_refs(event_records, segment_results)
     payload["unit_records"] = {
         "entity_records": repaired_data.get("entity_records", []),
         "location_records": repaired_data.get("location_records", []),
@@ -61,15 +61,17 @@ def build_unit_timeline_payload(
     return payload
 
 
-def _enrich_event_time_refs(
+def _enrich_atom_time_refs(
     event_records: list[dict[str, Any]],
     segment_results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Resolve time_refs into inline time expression data on each event record.
+    """Resolve time_refs into inline time expression data on each atom record.
 
     Builds a lookup of (segment_id, time_expression_id) → {surface, normalized_hint}
-    from segment_results, then enriches each event's time_refs inline so the
+    from segment_results, then enriches each atom's time_refs inline so the
     timeline LLM sees the actual temporal content without cross-referencing.
+
+    Atoms with null time_refs (atemporal) pass through unchanged.
     """
     time_expr_lookup: dict[tuple[str, str], dict[str, Any]] = {}
     for seg in segment_results:
@@ -85,8 +87,12 @@ def _enrich_event_time_refs(
     enriched: list[dict[str, Any]] = []
     for ev in event_records:
         ev = dict(ev)
+        time_refs = ev.get("time_refs")
+        if time_refs is None:
+            enriched.append(ev)
+            continue
         resolved = []
-        for tr in ev.get("time_refs", []) or []:
+        for tr in time_refs or []:
             key = (tr.get("segment_id", ""), tr.get("time_expression_id", ""))
             te_data = time_expr_lookup.get(key)
             if te_data:
@@ -160,7 +166,7 @@ def compact_segment_result(record: dict[str, Any]) -> dict[str, Any]:
         "evidence_spans": data.get("evidence_spans", []),
         "entity_mentions": data.get("entity_mentions", []),
         "location_mentions": data.get("location_mentions", []),
-        "event_mentions": data.get("event_mentions", []),
+        "atom_mentions": data.get("atom_mentions", []),
         "time_expressions": data.get("time_expressions", []),
         "thread_candidates": data.get("thread_candidates", []),
         "warnings": data.get("warnings", []),
