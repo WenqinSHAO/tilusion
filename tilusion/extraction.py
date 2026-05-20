@@ -18,13 +18,13 @@ from .extraction_quality import (
 )
 
 
-PROMPT_VERSION = "segment-extraction-v0.6"
-SCHEMA_VERSION = "segment-extraction-v0.3"
+PROMPT_VERSION = "segment-extraction-v0.7"
+SCHEMA_VERSION = "segment-extraction-v0.4"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_MAX_TOKENS = 326_400
 DEEPSEEK_CONTEXT_TOKENS = 850_000
 DEEPSEEK_MAX_OUTPUT_TOKENS = 326_400
-PROMPT_RESOURCE = "segment_extraction_v0.6.md"
+PROMPT_RESOURCE = "segment_extraction_v0.7.md"
 
 
 class ExtractionError(RuntimeError):
@@ -143,13 +143,15 @@ class MockExtractionBackend:
                 if evidence
                 else [],
                 "location_mentions": [],
-                "event_mentions": [
+                "atom_mentions": [
                     {
-                        "event_id": "event-0001",
-                        "summary": "Placeholder event extracted by mock backend.",
+                        "atom_id": "atom-0001",
+                        "atom_kind": "narrative_event",
+                        "summary": "Placeholder atom extracted by mock backend.",
                         "participant_mention_ids": [],
                         "location_mention_ids": [],
                         "time_expression_ids": [],
+                        "thread_ids": [],
                         "evidence_span_ids": ["evidence-0001"] if evidence else [],
                     }
                 ]
@@ -240,11 +242,30 @@ class DeepSeekBackend:
             content = choice.message.content
             if not content:
                 raise RuntimeError("DeepSeek returned empty content for JSON extraction")
+            if finish_reason == "length" and attempt < self.max_retries:
+                print(
+                    f"  length-retry after {2 ** attempt}s (attempt {attempt + 1}/{self.max_retries + 1})",
+                    file=sys.stderr,
+                )
+                time.sleep(2 ** attempt)
+                continue
             if finish_reason == "length":
                 raise ExtractionError(
                     "DeepSeek stopped because generation hit max_tokens or context length; "
                     "retry with a higher --max-tokens value or a smaller input segment."
                 )
+            try:
+                parse_json_response(content)
+            except ExtractionError as parse_error:
+                if attempt < self.max_retries:
+                    delay = 2 ** attempt
+                    print(
+                        f"  parse-retry after {delay}s (attempt {attempt + 1}/{self.max_retries + 1}): {parse_error}",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
             return content
 
         raise last_exception  # type: ignore[misc]
@@ -419,7 +440,7 @@ def validate_local_bundle(data: dict[str, Any]) -> None:
         "evidence_spans": list,
         "entity_mentions": list,
         "location_mentions": list,
-        "event_mentions": list,
+        "atom_mentions": list,
         "time_expressions": list,
         "thread_candidates": list,
         "warnings": list,
@@ -498,22 +519,23 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
                     "alias_confidence": "low",
                 }
             )
-        for event in segment.get("event_mentions", [])[:1]:
+        for atom in segment.get("atom_mentions", [])[:1]:
+            time_expr_ids = atom.get("time_expression_ids") or []
             event_records.append(
                 {
                     "event_id": f"unit-event-{len(event_records) + 1:04d}",
-                    "summary": event.get("summary", "Mock merged event."),
+                    "summary": atom.get("summary", "Mock merged event."),
                     "segment_ids": [segment_id],
                     "source_order_hint": index,
                     "participant_entity_ids": [],
                     "location_ids": [],
                     "time_refs": [
                         {"segment_id": segment_id, "time_expression_id": time_id}
-                        for time_id in event.get("time_expression_ids", [])
+                        for time_id in time_expr_ids
                     ],
                     "evidence_refs": [
                         {"segment_id": segment_id, "evidence_id": evidence_id}
-                        for evidence_id in event.get("evidence_span_ids", [])
+                        for evidence_id in atom.get("evidence_span_ids", [])
                     ],
                     "duplicate_of": None,
                     "qc_notes": ["mock finalization"],

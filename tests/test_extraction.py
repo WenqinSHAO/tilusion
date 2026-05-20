@@ -68,8 +68,8 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     model_payload = envelope.to_model_payload()
 
     assert envelope.task == "local_bundle_extraction"
-    assert envelope.prompt_version == "segment-extraction-v0.6"
-    assert envelope.schema_version == "segment-extraction-v0.3"
+    assert envelope.prompt_version == "segment-extraction-v0.7"
+    assert envelope.schema_version == "segment-extraction-v0.4"
     assert envelope.unit["id"] == "unit-0001"
     assert envelope.unit["source_range"]["kind"] == "txt-span"
     assert model_payload == {
@@ -85,8 +85,8 @@ def test_local_bundle_prompt_has_cache_relevant_structure(tmp_path: Path) -> Non
     assert DEFAULT_MAX_TOKENS == 326_400
     assert DEEPSEEK_CONTEXT_TOKENS == 850_000
     assert DEEPSEEK_MAX_OUTPUT_TOKENS == 326_400
-    assert PROMPT_VERSION == "segment-extraction-v0.6"
-    assert SCHEMA_VERSION == "segment-extraction-v0.3"
+    assert PROMPT_VERSION == "segment-extraction-v0.7"
+    assert SCHEMA_VERSION == "segment-extraction-v0.4"
 
 
 def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() -> None:
@@ -95,7 +95,7 @@ def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() ->
     assert "You extract grounded narrative structure from one provided text segment" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "The larger tool helps humans" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "Minimum JSON shape" in LOCAL_BUNDLE_SYSTEM_PROMPT
-    assert "New entities, locations, and threads may appear that have no prior record" in LOCAL_BUNDLE_SYSTEM_PROMPT
+    assert "New entities, locations, atoms, and threads may appear that have no prior record" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "alias_candidate_of" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "IDs are temporary and response-local only" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "Evidence quotes must be exact substrings" in LOCAL_BUNDLE_SYSTEM_PROMPT
@@ -104,6 +104,8 @@ def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() ->
     assert "Do not cite a paragraph opening as evidence" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "Do not use the entire input segment as one evidence span" in LOCAL_BUNDLE_SYSTEM_PROMPT
     assert "The pipeline will reconstruct original-file locators" in LOCAL_BUNDLE_SYSTEM_PROMPT
+    assert "atom_kind" in LOCAL_BUNDLE_SYSTEM_PROMPT
+    assert "narrative_event" in LOCAL_BUNDLE_SYSTEM_PROMPT
 
 
 def test_local_bundle_extraction_uses_mock_backend_and_cache(tmp_path: Path) -> None:
@@ -768,13 +770,15 @@ def test_extraction_quality_report_passes_clean_result() -> None:
                 "evidence_span_ids": ["evidence-0001"],
             }
         ],
-        "event_mentions": [
+        "atom_mentions": [
             {
-                "event_id": "event-0001",
+                "atom_id": "atom-0001",
+                "atom_kind": "narrative_event",
                 "summary": "Alice met Bob in Paris.",
                 "participant_mention_ids": ["entity-0001"],
                 "location_mention_ids": ["location-0001"],
                 "time_expression_ids": [],
+                "thread_ids": [],
                 "evidence_span_ids": ["evidence-0001"],
             }
         ],
@@ -828,13 +832,15 @@ def test_extraction_quality_report_tracks_relocated_evidence_without_error() -> 
         ],
         "entity_mentions": [],
         "location_mentions": [],
-        "event_mentions": [
+        "atom_mentions": [
             {
-                "event_id": "event-0001",
+                "atom_id": "atom-0001",
+                "atom_kind": "narrative_event",
                 "summary": "少年随母归宁。",
                 "participant_mention_ids": [],
                 "location_mention_ids": [],
                 "time_expression_ids": [],
+                "thread_ids": [],
                 "evidence_span_ids": ["evidence-0001"],
             }
         ],
@@ -882,13 +888,15 @@ def test_surface_grounding_uses_reconstructed_evidence_context() -> None:
                 "evidence_span_ids": ["evidence-0001"],
             }
         ],
-        "event_mentions": [
+        "atom_mentions": [
             {
-                "event_id": "event-0001",
+                "atom_id": "atom-0001",
+                "atom_kind": "narrative_event",
                 "summary": "沈复受业于赵省斋。",
                 "participant_mention_ids": ["entity-0001"],
                 "location_mention_ids": ["location-0001"],
                 "time_expression_ids": [],
+                "thread_ids": [],
                 "evidence_span_ids": ["evidence-0001"],
             }
         ],
@@ -926,7 +934,7 @@ def test_surface_grounding_allows_generic_prefix_suffix_support() -> None:
             }
         ],
         "location_mentions": [],
-        "event_mentions": [],
+        "atom_mentions": [],
         "time_expressions": [],
         "thread_candidates": [],
         "warnings": [],
@@ -961,7 +969,7 @@ def test_surface_grounding_warning_stays_out_of_llm_repair_payload() -> None:
             }
         ],
         "location_mentions": [],
-        "event_mentions": [],
+        "atom_mentions": [],
         "time_expressions": [],
         "thread_candidates": [],
         "warnings": [],
@@ -1021,13 +1029,15 @@ def test_extraction_quality_report_finds_repairable_llm_issues() -> None:
             }
         ],
         "location_mentions": [],
-        "event_mentions": [
+        "atom_mentions": [
             {
-                "event_id": "event-0001",
+                "atom_id": "atom-0001",
+                "atom_kind": "narrative_event",
                 "summary": "Bad references.",
                 "participant_mention_ids": ["entity-missing"],
                 "location_mention_ids": ["location-missing"],
                 "time_expression_ids": ["time-missing"],
+                "thread_ids": [],
                 "evidence_span_ids": [],
             }
         ],
@@ -1222,7 +1232,7 @@ def test_chain_repair_hints_includes_non_actionable_warnings() -> None:
             }
         ],
         "location_mentions": [],
-        "event_mentions": [],
+        "atom_mentions": [],
         "time_expressions": [],
         "thread_candidates": [],
         "warnings": [],
@@ -1282,7 +1292,7 @@ def test_canonical_name_avoids_surface_warning_when_surface_is_attested() -> Non
             }
         ],
         "location_mentions": [],
-        "event_mentions": [],
+        "atom_mentions": [],
         "time_expressions": [],
         "thread_candidates": [],
         "warnings": [],
@@ -1320,7 +1330,7 @@ def test_surface_warning_still_fires_when_surface_absent_regardless_of_canonical
             }
         ],
         "location_mentions": [],
-        "event_mentions": [],
+        "atom_mentions": [],
         "time_expressions": [],
         "thread_candidates": [],
         "warnings": [],
