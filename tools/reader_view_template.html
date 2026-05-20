@@ -845,12 +845,12 @@
 
   <script>
     // ── Data ──
-    const EVENTS = DATA_PLACEHOLDER_EVENTS;
+    const ATOMS = DATA_PLACEHOLDER_ATOMS;
     const ENTITIES = DATA_PLACEHOLDER_ENTITIES;
     const LOCATIONS = DATA_PLACEHOLDER_LOCATIONS;
     const THREADS = DATA_PLACEHOLDER_THREADS;
     const TIMELINES = DATA_PLACEHOLDER_TIMELINES;
-    const EVENT_BY_ID = Object.fromEntries(EVENTS.map(e => [e.event_id, e]));
+    const ATOM_BY_ID = Object.fromEntries(ATOMS.map(a => [a.atom_id, a]));
     const ENTITY_BY_ID = Object.fromEntries(ENTITIES.map(e => [e.entity_id, e]));
     const LOCATION_BY_ID = Object.fromEntries(LOCATIONS.map(l => [l.location_id, l]));
     const THREAD_BY_ID = Object.fromEntries(THREADS.map(t => [t.thread_id, t]));
@@ -977,25 +977,25 @@
       `;
     }
 
-    function eventCardHtml(ev, rationales) {
+    function atomCardHtml(atm, rationales) {
       const tags = [];
-      (ev.participant_entity_ids || []).forEach(eid => {
+      (atm.participant_entity_ids || []).forEach(eid => {
         tags.push(`<span class="tag entity-tag">${entityLabel(eid)}</span>`);
       });
-      (ev.location_ids || []).forEach(lid => {
+      (atm.location_ids || []).forEach(lid => {
         tags.push(`<span class="tag location-tag">${locationLabel(lid)}</span>`);
       });
-      if (ev.confidence) {
-        tags.push(`<span class="tag conf-tag ${ev.confidence}">${ev.confidence}</span>`);
+      if (atm.confidence) {
+        tags.push(`<span class="tag conf-tag ${atm.confidence}">${atm.confidence}</span>`);
       }
-      if (ev.qc_notes && ev.qc_notes.length > 0) {
+      if (atm.qc_notes && atm.qc_notes.length > 0) {
         tags.push('<span class="tag" style="color:#9a4a3f">needs review</span>');
       }
       const rat = rationales && rationales.length ? `<div style="font-size:11px;color:#6b6052;margin-top:4px;font-style:italic">${rationales.join(' · ')}</div>` : '';
       return `
-        <strong>${ev.summary || ev.event_id}</strong>
-        <div class="muted">${ev.event_id}</div>
-        ${ev.time_refs && ev.time_refs.length ? '<div style="margin-bottom:4px">' + ev.time_refs.map(tr => tr.surface || tr.normalized_hint || '').filter(Boolean).join(' · ') + '</div>' : ''}
+        <strong>${atm.summary || atm.atom_id}</strong>
+        <div class="muted">${atm.atom_id}</div>
+        ${atm.time_refs && atm.time_refs.length ? '<div style="margin-bottom:4px">' + atm.time_refs.map(tr => tr.surface || tr.normalized_hint || '').filter(Boolean).join(' · ') + '</div>' : ''}
         ${tags.length ? '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">' + tags.join('') + '</div>' : ''}
         ${rat}
       `;
@@ -1044,36 +1044,36 @@
       document.querySelectorAll('mark').forEach(m => m.classList.remove('active-span'));
     }
 
-    function activateEvent(evId) {
-      const ev = EVENT_BY_ID[evId];
-      if (!ev) return;
+    function activateAtom(atomId) {
+      const atm = ATOM_BY_ID[atomId];
+      if (!atm) return;
       clearActiveSource();
 
       // Activate dot in graph
-      document.querySelectorAll(`.event-dot[data-event="${evId}"]`).forEach(d => d.classList.add('active-dot'));
+      document.querySelectorAll(`.event-dot[data-atom="${atomId}"]`).forEach(d => d.classList.add('active-dot'));
       // Activate card in thread view
-      document.querySelectorAll(`.event-card[data-event="${evId}"]`).forEach(c => c.classList.add('active'));
+      document.querySelectorAll(`.event-card[data-atom="${atomId}"]`).forEach(c => c.classList.add('active'));
 
       // Highlight source evidence
-      const eventMarks = [...document.querySelectorAll('mark[data-events]')].filter(m => csvAttr(m, 'events').includes(evId));
-      eventMarks.forEach(m => m.classList.add('active-span'));
-      if (eventMarks[0]) eventMarks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const atomMarks = [...document.querySelectorAll('mark[data-atoms]')].filter(m => csvAttr(m, 'atoms').includes(atomId));
+      atomMarks.forEach(m => m.classList.add('active-span'));
+      if (atomMarks[0]) atomMarks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-      (ev.participant_entity_ids || []).forEach(eid => {
+      (atm.participant_entity_ids || []).forEach(eid => {
         document.querySelectorAll('mark[data-entities]').forEach(m => {
           if (csvAttr(m, 'entities').includes(eid)) m.classList.add('active-span');
         });
       });
     }
 
-    function eventTimeIds(ev) {
-      return (ev.time_refs || [])
+    function atomTimeIds(atm) {
+      return (atm.time_refs || [])
         .map(tr => `${tr.segment_id}:${tr.time_expression_id}`)
         .filter(Boolean);
     }
 
-    function scrollGraphEventIntoView(evId) {
-      const node = document.querySelector(`.graph-event-node[data-event="${evId}"]`);
+    function scrollGraphAtomIntoView(atomId) {
+      const node = document.querySelector(`.graph-event-node[data-atom="${atomId}"]`);
       if (!node || typeof node.getBBox !== 'function') return;
       const box = node.getBBox();
       timelineScroll.scrollTo({
@@ -1085,19 +1085,18 @@
 
     function activateTimeIds(timeIds) {
       const wanted = new Set(timeIds);
-      const matches = EVENTS.filter(ev => eventTimeIds(ev).some(tid => wanted.has(tid)));
+      const matches = ATOMS.filter(atm => atomTimeIds(atm).some(tid => wanted.has(tid)));
       if (!matches.length) return;
       if (currentView !== 'timeline') showTimelineView();
       clearActiveSource();
-      matches.forEach(ev => {
-        document.querySelectorAll(`.graph-event-node[data-event="${ev.event_id}"]`).forEach(n => n.classList.add('highlighted'));
+      matches.forEach(atm => {
+        document.querySelectorAll(`.graph-event-node[data-atom="${atm.atom_id}"]`).forEach(n => n.classList.add('highlighted'));
       });
-      scrollGraphEventIntoView(matches[0].event_id);
+      scrollGraphAtomIntoView(matches[0].atom_id);
     }
 
-    function threadEventIds(thread) {
-      const segments = new Set(thread.segment_ids || []);
-      return new Set(EVENTS.filter(ev => (ev.segment_ids || []).some(sid => segments.has(sid))).map(ev => ev.event_id));
+    function threadAtomIds(thread) {
+      return new Set(thread.atom_ids || []);
     }
 
     // ── Timeline graph rendering ──
@@ -1105,22 +1104,22 @@
     function computeGraphLayout() {
       if (_graphLayout) return _graphLayout;
 
-      // Build adjacency from all before_edges across all timelines
-      const adj = {};       // event_id -> [child_event_id]
-      const inDegree = {};  // event_id -> count
-      const allEventIds = new Set(EVENTS.map(e => e.event_id));
+      // Build adjacency from all before_atoms across all timelines
+      const adj = {};       // atom_id -> [child_atom_id]
+      const inDegree = {};  // atom_id -> count
+      const allAtomIds = new Set(ATOMS.map(a => a.atom_id));
 
       // Initialize
-      allEventIds.forEach(eid => { adj[eid] = []; inDegree[eid] = 0; });
+      allAtomIds.forEach(aid => { adj[aid] = []; inDegree[aid] = 0; });
 
       TIMELINES.forEach(tl => {
-        tl.ordered_events.forEach(oe => {
-          const eid = oe.event_id;
-          if (!adj[eid]) { adj[eid] = []; inDegree[eid] = 0; }
-          (oe.before_events || []).forEach(beid => {
-            // eid is before beid → edge from eid to beid
-            if (adj[eid]) adj[eid].push(beid);
-            inDegree[beid] = (inDegree[beid] || 0) + 1;
+        tl.ordered_atoms.forEach(oa => {
+          const aid = oa.atom_id;
+          if (!adj[aid]) { adj[aid] = []; inDegree[aid] = 0; }
+          (oa.before_atoms || []).forEach(baid => {
+            // aid is before baid → edge from aid to baid
+            if (adj[aid]) adj[aid].push(baid);
+            inDegree[baid] = (inDegree[baid] || 0) + 1;
           });
         });
       });
@@ -1128,53 +1127,53 @@
       // Topological sort (Kahn's algorithm) with rank = longest path
       const ranks = {};
       const queue = [];
-      for (const [eid, deg] of Object.entries(inDegree)) {
+      for (const [aid, deg] of Object.entries(inDegree)) {
         if (deg === 0) {
-          ranks[eid] = 0;
-          queue.push(eid);
+          ranks[aid] = 0;
+          queue.push(aid);
         }
       }
 
       while (queue.length > 0) {
-        const eid = queue.shift();
-        for (const child of (adj[eid] || [])) {
-          ranks[child] = Math.max(ranks[child] || 0, (ranks[eid] || 0) + 1);
+        const aid = queue.shift();
+        for (const child of (adj[aid] || [])) {
+          ranks[child] = Math.max(ranks[child] || 0, (ranks[aid] || 0) + 1);
           inDegree[child]--;
           if (inDegree[child] === 0) queue.push(child);
         }
       }
 
       // Assign default rank to any remaining
-      allEventIds.forEach(eid => {
-        if (!(eid in ranks)) ranks[eid] = 0;
+      allAtomIds.forEach(aid => {
+        if (!(aid in ranks)) ranks[aid] = 0;
       });
 
-      // Per-timeline ordering: within a timeline, events without before_edges
-      // get ordered by their position in ordered_events. Compute timeline-local order.
+      // Per-timeline ordering: within a timeline, atoms without before_atoms
+      // get ordered by their position in ordered_atoms. Compute timeline-local order.
       const timelineLocalOrder = {};
       TIMELINES.forEach(tl => {
         const localOrder = {};
-        tl.ordered_events.forEach((oe, i) => { localOrder[oe.event_id] = i; });
+        tl.ordered_atoms.forEach((oa, i) => { localOrder[oa.atom_id] = i; });
         timelineLocalOrder[tl.timeline_id] = localOrder;
       });
 
-      // Refine ranks: within each timeline, ensure events are ordered by local position
+      // Refine ranks: within each timeline, ensure atoms are ordered by local position
       // when they have the same topological rank
       // Build rank groups, sort each group by earliest timeline position
       const rankGroups = {};
-      allEventIds.forEach(eid => {
-        const r = ranks[eid] || 0;
+      allAtomIds.forEach(aid => {
+        const r = ranks[aid] || 0;
         if (!rankGroups[r]) rankGroups[r] = [];
-        rankGroups[r].push(eid);
+        rankGroups[r].push(aid);
       });
 
       // Assign visual rows. Topological ranks preserve coarse order, but every
-      // event in a dense rank gets its own row so dots and labels do not pile up.
+      // atom in a dense rank gets its own row so dots and labels do not pile up.
       const subRanks = {};
       let visualRow = 0;
-      Object.entries(rankGroups).sort((a, b) => Number(a[0]) - Number(b[0])).forEach(([, eids]) => {
+      Object.entries(rankGroups).sort((a, b) => Number(a[0]) - Number(b[0])).forEach(([, aids]) => {
         // Sort by first appearance in any timeline
-        eids.sort((a, b) => {
+        aids.sort((a, b) => {
           let aFirst = Infinity, bFirst = Infinity;
           TIMELINES.forEach(tl => {
             const lo = timelineLocalOrder[tl.timeline_id];
@@ -1183,24 +1182,24 @@
           });
           return aFirst - bFirst;
         });
-        eids.forEach((eid) => {
-          subRanks[eid] = visualRow;
+        aids.forEach((aid) => {
+          subRanks[aid] = visualRow;
           visualRow += 1;
         });
         visualRow += 0.35;
       });
 
-      // Map each event to which timelines contain it
-      const eventTimelines = {};
-      const eventRationales = {};
+      // Map each atom to which timelines contain it
+      const atomTimelines = {};
+      const atomRationales = {};
       TIMELINES.forEach(tl => {
-        tl.ordered_events.forEach(oe => {
-          if (!eventTimelines[oe.event_id]) {
-            eventTimelines[oe.event_id] = [];
-            eventRationales[oe.event_id] = [];
+        tl.ordered_atoms.forEach(oa => {
+          if (!atomTimelines[oa.atom_id]) {
+            atomTimelines[oa.atom_id] = [];
+            atomRationales[oa.atom_id] = [];
           }
-          eventTimelines[oe.event_id].push(tl.timeline_id);
-          if (oe.rationale) eventRationales[oe.event_id].push(oe.rationale);
+          atomTimelines[oa.atom_id].push(tl.timeline_id);
+          if (oa.rationale) atomRationales[oa.atom_id].push(oa.rationale);
         });
       });
 
@@ -1210,28 +1209,28 @@
       const addedEdges = new Set();
       TIMELINES.forEach(tl => {
         const tid = tl.timeline_id;
-        tl.ordered_events.forEach(oe => {
-          (oe.before_events || []).forEach(beid => {
-            const key = edgeKey(oe.event_id, beid);
+        tl.ordered_atoms.forEach(oa => {
+          (oa.before_atoms || []).forEach(baid => {
+            const key = edgeKey(oa.atom_id, baid);
             if (!addedEdges.has(key)) {
               addedEdges.add(key);
               edges.push({
-                from: oe.event_id,
-                to: beid,
+                from: oa.atom_id,
+                to: baid,
                 fromTimeline: tid,
-                toTimelines: eventTimelines[beid] || [],
+                toTimelines: atomTimelines[baid] || [],
               });
             }
           });
         });
       });
 
-      // Pick a "primary lane" for each event (first timeline it appears in)
+      // Pick a "primary lane" for each atom (first timeline it appears in)
       const primaryLane = {};
       TIMELINES.forEach(tl => {
-        tl.ordered_events.forEach(oe => {
-          if (!(oe.event_id in primaryLane)) {
-            primaryLane[oe.event_id] = tl.timeline_id;
+        tl.ordered_atoms.forEach(oa => {
+          if (!(oa.atom_id in primaryLane)) {
+            primaryLane[oa.atom_id] = tl.timeline_id;
           }
         });
       });
@@ -1239,8 +1238,8 @@
       _graphLayout = {
         ranks,
         subRanks,
-        eventTimelines,
-        eventRationales,
+        atomTimelines,
+        atomRationales,
         edges,
         primaryLane,
         timelineLocalOrder,
@@ -1250,7 +1249,7 @@
 
     function renderTimelineGraph() {
       const layout = computeGraphLayout();
-      const { eventRationales } = layout;
+      const { atomRationales } = layout;
       const svg = document.getElementById('timelineGraph');
       const containerWidth = timelineScroll.clientWidth;
       const containerHeight = timelineScroll.clientHeight;
@@ -1285,21 +1284,21 @@
         const x = margin.left + i * laneSpacing;
         laneX[tl.timeline_id] = x;
         let y = margin.top;
-        (tl.ordered_events || []).forEach(oe => {
-          const ev = EVENT_BY_ID[oe.event_id];
-          if (!ev) return;
-          const timeText = (ev.time_refs || [])
+        (tl.ordered_atoms || []).forEach(oa => {
+          const atm = ATOM_BY_ID[oa.atom_id];
+          if (!atm) return;
+          const timeText = (atm.time_refs || [])
             .map(tr => tr.surface || tr.normalized_hint || '')
             .filter(Boolean)
             .slice(0, 2)
             .join(' · ');
           const timeLines = timeText ? wrapSummary(timeText, 11, 2) : [];
-          const lines = wrapSummary(ev.summary || ev.event_id);
+          const lines = wrapSummary(atm.summary || atm.atom_id);
           const boxHeight = (lines.length + timeLines.length) * lineHeight + boxPadY * 2 + (timeLines.length ? 3 : 0);
           const dotY = y;
           const boxY = dotY + dotToBox;
-          positions[`${tl.timeline_id}::${oe.event_id}`] = {
-            x, dotY, boxY, boxHeight, lines, timeLines, eventId: oe.event_id,
+          positions[`${tl.timeline_id}::${oa.atom_id}`] = {
+            x, dotY, boxY, boxHeight, lines, timeLines, atomId: oa.atom_id,
           };
           y = boxY + boxHeight + eventGap;
         });
@@ -1365,11 +1364,11 @@
         line.setAttribute('class', 'lane-line');
         bgGroup.appendChild(line);
 
-        (tl.ordered_events || []).forEach(oe => {
-          const from = positions[`${tl.timeline_id}::${oe.event_id}`];
+        (tl.ordered_atoms || []).forEach(oa => {
+          const from = positions[`${tl.timeline_id}::${oa.atom_id}`];
           if (!from) return;
-          (oe.before_events || []).forEach(beid => {
-            const to = positions[`${tl.timeline_id}::${beid}`];
+          (oa.before_atoms || []).forEach(baid => {
+            const to = positions[`${tl.timeline_id}::${baid}`];
             if (!to) return;
             const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             path.setAttribute('d', `M ${x} ${from.dotY + dotRadius} L ${x} ${to.dotY - dotRadius}`);
@@ -1378,17 +1377,17 @@
           });
         });
 
-        (tl.ordered_events || []).forEach(oe => {
-          const ev = EVENT_BY_ID[oe.event_id];
-          const pos = positions[`${tl.timeline_id}::${oe.event_id}`];
-          if (!ev || !pos) return;
-          const conf = ev.confidence || 'unknown';
+        (tl.ordered_atoms || []).forEach(oa => {
+          const atm = ATOM_BY_ID[oa.atom_id];
+          const pos = positions[`${tl.timeline_id}::${oa.atom_id}`];
+          if (!atm || !pos) return;
+          const conf = atm.confidence || 'unknown';
           const node = document.createElementNS('http://www.w3.org/2000/svg', 'g');
           node.setAttribute('class', 'graph-event-node');
-          node.setAttribute('data-event', oe.event_id);
+          node.setAttribute('data-atom', oa.atom_id);
           node.addEventListener('mouseenter', (e) => {
-            const rationaleList = eventRationales[oe.event_id] || [];
-            showPopover(eventCardHtml(ev, rationaleList), e.clientX, e.clientY);
+            const rationaleList = atomRationales[oa.atom_id] || [];
+            showPopover(atomCardHtml(atm, rationaleList), e.clientX, e.clientY);
           });
           node.addEventListener('mousemove', (e) => {
             if (popover.style.display === 'block') showPopover(popover.innerHTML, e.clientX, e.clientY);
@@ -1405,7 +1404,7 @@
             if (!wasSelected) {
               node.classList.add('selected');
               selectTimeline(tl.timeline_id);
-              activateEvent(oe.event_id);
+              activateAtom(oa.atom_id);
             } else {
               clearActiveSource();
             }
@@ -1416,7 +1415,7 @@
           circle.setAttribute('cy', pos.dotY);
           circle.setAttribute('r', dotRadius);
           circle.setAttribute('class', `event-dot conf-${conf}`);
-          circle.setAttribute('data-event', oe.event_id);
+          circle.setAttribute('data-atom', oa.atom_id);
           circle.setAttribute('stroke', 'var(--graph-dot-stroke)');
           circle.setAttribute('stroke-width', '1.5');
           node.appendChild(circle);
@@ -1467,35 +1466,35 @@
       const thread = THREAD_BY_ID[threadId];
       if (!thread) return;
       const stack = document.getElementById('threadCardStack');
-      const ids = threadEventIds(thread);
+      const ids = threadAtomIds(thread);
 
-      const threadEvents = EVENTS
-        .filter(ev => ids.has(ev.event_id))
+      const threadAtoms = ATOMS
+        .filter(a => ids.has(a.atom_id))
         .sort((a, b) => (a.source_order_hint || 0) - (b.source_order_hint || 0));
 
-      const cards = threadEvents.map(ev => {
+      const cards = threadAtoms.map(a => {
         const tags = [];
-        (ev.participant_entity_ids || []).forEach(eid => {
+        (a.participant_entity_ids || []).forEach(eid => {
           tags.push(`<span class="tag entity-tag">${entityLabel(eid)}</span>`);
         });
-        (ev.location_ids || []).forEach(lid => {
+        (a.location_ids || []).forEach(lid => {
           tags.push(`<span class="tag location-tag">${locationLabel(lid)}</span>`);
         });
-        if (ev.confidence) {
-          tags.push(`<span class="tag conf-tag ${ev.confidence}">${ev.confidence}</span>`);
+        if (a.confidence) {
+          tags.push(`<span class="tag conf-tag ${a.confidence}">${a.confidence}</span>`);
         }
-        if (ev.qc_notes && ev.qc_notes.length > 0) {
+        if (a.qc_notes && a.qc_notes.length > 0) {
           tags.push('<span class="tag" style="color:#9a4a3f">needs review</span>');
         }
-        (ev.time_refs || []).forEach(tr => {
+        (a.time_refs || []).forEach(tr => {
           const s = tr.surface || tr.normalized_hint || '';
           if (s) tags.push(`<span class="tag" style="color:var(--muted)">${s}</span>`);
         });
 
         return `
-          <article class="event-card" data-event="${ev.event_id}">
-            <div class="ev-head"><span class="ev-id">${ev.event_id}</span></div>
-            <div class="ev-summary">${ev.summary || ev.event_id}</div>
+          <article class="event-card" data-atom="${a.atom_id}">
+            <div class="ev-head"><span class="ev-id">${a.atom_id}</span></div>
+            <div class="ev-summary">${a.summary || a.atom_id}</div>
             <div class="meta-row">${tags.join('')}</div>
           </article>
         `;
@@ -1505,14 +1504,14 @@
 
       stack.querySelectorAll('.event-card').forEach(card => {
         card.addEventListener('click', () => {
-          const evId = card.dataset.event;
+          const atomId = card.dataset.atom;
           for (const tl of TIMELINES) {
-            if (tl.ordered_events.some(oe => oe.event_id === evId)) {
+            if (tl.ordered_atoms.some(oa => oa.atom_id === atomId)) {
               selectTimeline(tl.timeline_id);
               break;
             }
           }
-          activateEvent(evId);
+          activateAtom(atomId);
         });
       });
     }
@@ -1528,10 +1527,10 @@
       // Show thread header
       const header = document.getElementById('threadViewHeader');
       header.style.display = 'flex';
-      const eventCount = threadEventIds(thread).size;
+      const atomCount = threadAtomIds(thread).size;
       document.getElementById('threadViewHeaderInfo').innerHTML = `
         <h3>${thread.summary || thread.thread_id}</h3>
-        <div class="thread-meta">${thread.thread_id} · ${eventCount} events · ${thread.status || 'active'}</div>
+        <div class="thread-meta">${thread.thread_id} · ${atomCount} atoms · ${thread.status || 'active'}</div>
       `;
 
       // Update toggle button
@@ -1539,13 +1538,13 @@
       toggleBtn.textContent = 'Cards';
       toggleBtn.classList.remove('active');
 
-      // Highlight thread events on graph
+      // Highlight thread atoms on graph
       document.querySelectorAll('.graph-event-node.highlighted').forEach(n => n.classList.remove('highlighted'));
       document.querySelectorAll('.graph-event-node.selected').forEach(n => n.classList.remove('selected'));
       clearActiveSource();
-      const ids = threadEventIds(thread);
-      ids.forEach(eid => {
-        document.querySelectorAll(`.graph-event-node[data-event="${eid}"]`).forEach(n => n.classList.add('highlighted'));
+      const ids = threadAtomIds(thread);
+      ids.forEach(aid => {
+        document.querySelectorAll(`.graph-event-node[data-atom="${aid}"]`).forEach(n => n.classList.add('highlighted'));
       });
 
       // Show graph, hide cards
@@ -1667,9 +1666,9 @@
           renderTimelineGraph();
           // Re-apply thread highlights after re-render
           if (currentView === 'thread' && activeThreadId) {
-            const ids = threadEventIds(THREAD_BY_ID[activeThreadId]);
-            ids.forEach(eid => {
-              document.querySelectorAll(`.graph-event-node[data-event="${eid}"]`).forEach(n => n.classList.add('highlighted'));
+            const ids = threadAtomIds(THREAD_BY_ID[activeThreadId]);
+            ids.forEach(aid => {
+              document.querySelectorAll(`.graph-event-node[data-atom="${aid}"]`).forEach(n => n.classList.add('highlighted'));
             });
           }
         }
@@ -1692,16 +1691,16 @@
       关于芸娘与沈复父母之间的紧张关系，主要线索如下：<br><br>
       <b>1. 代笔书信事件</b><br>
       芸娘为沈复父亲代笔写给沈复的信件，但因措辞不当引起父亲不满。
-      相关事件：<span class="ev-cite" data-event="unit-event-0016">unit-event-0016</span>、<span class="ev-cite" data-event="unit-event-0017">unit-event-0017</span><br><br>
+      相关事件：<span class="ev-cite" data-atom="unit-atom-0016">unit-atom-0016</span>、<span class="ev-cite" data-atom="unit-atom-0017">unit-atom-0017</span><br><br>
       <b>2. 借贷与金钱矛盾</b><br>
       芸娘因娘家经济困难私自借贷，被沈复父母知晓后认为其行为不端。
-      相关事件：<span class="ev-cite" data-event="unit-event-0020">unit-event-0020</span><br><br>
+      相关事件：<span class="ev-cite" data-atom="unit-atom-0020">unit-atom-0020</span><br><br>
       <b>3. 婆媳日常摩擦</b><br>
       芸娘与婆婆在日常家务安排上产生分歧，沈复父亲偏袒母亲，导致芸娘处境艰难。
-      相关事件：<span class="ev-cite" data-event="unit-event-0024">unit-event-0024</span>、<span class="ev-cite" data-event="unit-event-0030">unit-event-0030</span><br><br>
+      相关事件：<span class="ev-cite" data-atom="unit-atom-0024">unit-atom-0024</span>、<span class="ev-cite" data-atom="unit-atom-0030">unit-atom-0030</span><br><br>
       <b>4. 逐出家门</b><br>
       矛盾激化后，沈复父母要求沈复将芸娘送回娘家，芸娘被迫离开沈家。
-      相关事件：<span class="ev-cite" data-event="unit-event-0033">unit-event-0033</span><br><br>
+      相关事件：<span class="ev-cite" data-atom="unit-atom-0033">unit-atom-0033</span><br><br>
       以上线索横跨多个时间线，你可点击事件编号查看详情及原文出处。
     `;
 
@@ -1718,23 +1717,23 @@
       // Wire up event citations
       div.querySelectorAll('.ev-cite').forEach(cite => {
         cite.addEventListener('click', () => {
-          const evId = cite.dataset.event;
+          const atomId = cite.dataset.atom;
           if (currentView === 'thread' && threadViewMode === 'cards') {
-            // Switch back to graph to show the event
+            // Switch back to graph to show the atom
             document.getElementById('threadToggleBtn').click();
           }
           if (currentView !== 'timeline' && currentView !== 'thread') {
             showTimelineView();
           }
-          // Find event's timeline and select it
+          // Find atom's timeline and select it
           for (const tl of TIMELINES) {
-            if (tl.ordered_events.some(oe => oe.event_id === evId)) {
+            if (tl.ordered_atoms.some(oa => oa.atom_id === atomId)) {
               selectTimeline(tl.timeline_id);
               break;
             }
           }
-          activateEvent(evId);
-          scrollGraphEventIntoView(evId);
+          activateAtom(atomId);
+          scrollGraphAtomIntoView(atomId);
         });
       });
     }
