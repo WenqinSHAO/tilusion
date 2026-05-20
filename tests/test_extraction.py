@@ -164,10 +164,10 @@ def test_overview_composition_tracks_static_prompt_contract() -> None:
 def test_unit_finalization_composition_tracks_static_prompt_contract() -> None:
     prompt = build_unit_finalization_composition()
 
-    assert prompt.composition_id == "unit-finalization-v0.2"
+    assert prompt.composition_id == "unit-finalization-v0.3"
     assert prompt.parts[0].part_id == "unit-finalization-contract"
     assert "You finalize source-grounded extraction" in prompt.content
-    assert "entity_records" in prompt.content
+    assert "atom_records" in prompt.content
     assert "Do not construct a final timeline" in prompt.content
 
 
@@ -269,7 +269,7 @@ def test_unit_timeline_payload_includes_unit_records() -> None:
     repaired = {
         "entity_records": [{"entity_id": "unit-entity-0001"}],
         "location_records": [{"location_id": "unit-location-0001"}],
-        "event_records": [{"event_id": "unit-event-0001"}, {"event_id": "unit-event-0002"}],
+        "atom_records": [{"atom_id": "unit-atom-0001"}, {"atom_id": "unit-atom-0002"}],
         "thread_records": [{"thread_id": "unit-thread-0001"}],
     }
     payload = build_unit_timeline_payload(manifest, repaired)
@@ -277,7 +277,7 @@ def test_unit_timeline_payload_includes_unit_records() -> None:
     assert payload["task"] == "unit_timeline"
     assert payload["unit_id"] == "unit-0001"
     assert "unit_records" in payload
-    assert len(payload["unit_records"]["event_records"]) == 2
+    assert len(payload["unit_records"]["atom_records"]) == 2
     assert len(payload["unit_records"]["entity_records"]) == 1
 
 
@@ -335,13 +335,13 @@ def test_validate_timeline_result_detects_event_mismatch() -> None:
                 "summary": "Test",
                 "confidence": "high",
                 "ordered_events": [
-                    {"event_id": "unit-event-0001", "before_events": []}
+                    {"event_id": "unit-atom-0001", "before_events": []}
                 ],
             }
         ],
-        "event_records": [
-            {"event_id": "unit-event-0001"},
-            {"event_id": "unit-event-0002"},
+        "atom_records": [
+            {"atom_id": "unit-atom-0001"},
+            {"atom_id": "unit-atom-0002"},
         ],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
@@ -359,11 +359,11 @@ def test_validate_timeline_result_detects_self_loop() -> None:
                 "summary": "Test",
                 "confidence": "high",
                 "ordered_events": [
-                    {"event_id": "unit-event-0001", "before_events": ["unit-event-0001"]}
+                    {"event_id": "unit-atom-0001", "before_events": ["unit-atom-0001"]}
                 ],
             }
         ],
-        "event_records": [{"event_id": "unit-event-0001"}],
+        "atom_records": [{"atom_id": "unit-atom-0001"}],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
     assert any(i["code"] == "timeline_self_loop" for i in report["issues"])
@@ -378,11 +378,11 @@ def test_validate_timeline_result_detects_phantom_ref() -> None:
                 "summary": "Test",
                 "confidence": "high",
                 "ordered_events": [
-                    {"event_id": "unit-event-0001", "before_events": ["unit-event-0999"]}
+                    {"event_id": "unit-atom-0001", "before_events": ["unit-atom-0999"]}
                 ],
             }
         ],
-        "event_records": [{"event_id": "unit-event-0001"}],
+        "atom_records": [{"atom_id": "unit-atom-0001"}],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
     assert any(i["code"] == "timeline_phantom_ref" for i in report["issues"])
@@ -397,7 +397,7 @@ def test_validate_timeline_result_allows_shared_events_as_intersection() -> None
                 "summary": "Timeline 1",
                 "confidence": "high",
                 "ordered_events": [
-                    {"event_id": "unit-event-0001", "before_events": []}
+                    {"event_id": "unit-atom-0001", "before_events": []}
                 ],
             },
             {
@@ -405,11 +405,11 @@ def test_validate_timeline_result_allows_shared_events_as_intersection() -> None
                 "summary": "Timeline 2",
                 "confidence": "medium",
                 "ordered_events": [
-                    {"event_id": "unit-event-0001", "before_events": []}
+                    {"event_id": "unit-atom-0001", "before_events": []}
                 ],
             },
         ],
-        "event_records": [{"event_id": "unit-event-0001"}],
+        "atom_records": [{"atom_id": "unit-atom-0001"}],
     }
     report = validate_unit_timeline_result(data, expected_unit_id="unit-0001")
     shared = [i for i in report["issues"] if i["code"] == "timeline_shared_event"]

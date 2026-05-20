@@ -43,13 +43,13 @@ def build_unit_timeline_payload(
     repaired_data: dict[str, Any],
 ) -> dict[str, Any]:
     payload = build_unit_finalization_payload(manifest)
-    event_records = repaired_data.get("event_records", [])
+    atom_records = repaired_data.get("atom_records", [])
     segment_results = payload.get("segment_results", [])
-    enriched_events = _enrich_atom_time_refs(event_records, segment_results)
+    enriched_atoms = _enrich_atom_time_refs(atom_records, segment_results)
     payload["unit_records"] = {
         "entity_records": repaired_data.get("entity_records", []),
         "location_records": repaired_data.get("location_records", []),
-        "event_records": enriched_events,
+        "atom_records": enriched_atoms,
         "thread_records": repaired_data.get("thread_records", []),
     }
     if repaired_data.get("unresolved_items"):
@@ -62,7 +62,7 @@ def build_unit_timeline_payload(
 
 
 def _enrich_atom_time_refs(
-    event_records: list[dict[str, Any]],
+    atom_records: list[dict[str, Any]],
     segment_results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Resolve time_refs into inline time expression data on each atom record.
@@ -85,11 +85,11 @@ def _enrich_atom_time_refs(
                 }
 
     enriched: list[dict[str, Any]] = []
-    for ev in event_records:
-        ev = dict(ev)
-        time_refs = ev.get("time_refs")
+    for atm in atom_records:
+        atm = dict(atm)
+        time_refs = atm.get("time_refs")
         if time_refs is None:
-            enriched.append(ev)
+            enriched.append(atm)
             continue
         resolved = []
         for tr in time_refs or []:
@@ -99,8 +99,8 @@ def _enrich_atom_time_refs(
                 resolved.append({**tr, **te_data})
             else:
                 resolved.append(dict(tr))
-        ev["time_refs"] = resolved
-        enriched.append(ev)
+        atm["time_refs"] = resolved
+        enriched.append(atm)
     return enriched
 
 
@@ -112,7 +112,7 @@ def build_unit_timeline_repair_payload(
     payload["unit_records"] = {
         "entity_records": timeline_data.get("entity_records", []),
         "location_records": timeline_data.get("location_records", []),
-        "event_records": timeline_data.get("event_records", []),
+        "atom_records": timeline_data.get("atom_records", []),
         "thread_records": timeline_data.get("thread_records", []),
     }
     payload["timelines"] = timeline_data.get("timelines", [])

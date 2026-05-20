@@ -1918,7 +1918,7 @@ def format_unit_reader_view(data: dict[str, Any], validation_report: dict[str, A
         f"- validation_passed: {str(validation_report.get('passed')).lower()}",
         f"- entities: {len(data.get('entity_records', []) or [])}",
         f"- locations: {len(data.get('location_records', []) or [])}",
-        f"- events: {len(data.get('event_records', []) or [])}",
+        f"- atoms: {len(data.get('atom_records', []) or [])}",
         f"- threads: {len(data.get('thread_records', []) or [])}",
         f"- unresolved_items: {len(data.get('unresolved_items', []) or [])}",
         "",
@@ -1951,12 +1951,12 @@ def format_unit_timeline_view(data: dict[str, Any], validation_report: dict[str,
         "",
         f"- validation_passed: {str(validation_report.get('passed')).lower()}",
         f"- timelines: {len(data.get('timelines', []) or [])}",
-        f"- events: {len(data.get('event_records', []) or [])}",
+        f"- atoms: {len(data.get('atom_records', []) or [])}",
     ]
-    event_map = {
-        e.get("event_id"): e.get("summary", "")
-        for e in (data.get("event_records") or [])
-        if isinstance(e, dict)
+    atom_map = {
+        a.get("atom_id"): a.get("summary", "")
+        for a in (data.get("atom_records") or [])
+        if isinstance(a, dict)
     }
     for timeline in data.get("timelines", []) or []:
         lines.extend([
@@ -1970,7 +1970,7 @@ def format_unit_timeline_view(data: dict[str, Any], validation_report: dict[str,
         for entry in timeline.get("ordered_events", []) or []:
             eid = entry.get("event_id", "?")
             before = entry.get("before_events") or []
-            summary = event_map.get(eid, "")
+            summary = atom_map.get(eid, "")
             lines.append(f"- **{eid}**: {summary}")
             if before:
                 lines.append(f"  before: {', '.join(before)}")
@@ -2193,12 +2193,12 @@ def run_all_passes(
     qn = final_data.get("quality_notes")
     if isinstance(qn, dict):
         llm_summary = qn.get("summary", "")
-    n_events = len(final_data.get("event_records", []) or [])
+    n_atoms = len(final_data.get("atom_records", []) or [])
     n_timelines = len(final_data.get("timelines", []) or [])
     n_unresolved = len(final_data.get("unresolved_items", []) or [])
     final_data["quality_notes"] = {
         **({} if not isinstance(qn, dict) else {k: v for k, v in qn.items() if k != "summary"}),
-        "summary": f"Final merged result: {n_events} events across {n_timelines} timelines, {n_unresolved} unresolved items.",
+        "summary": f"Final merged result: {n_atoms} atoms across {n_timelines} timelines, {n_unresolved} unresolved items.",
     }
     if llm_summary:
         final_data["quality_notes"]["_llm_summary"] = llm_summary
@@ -2350,13 +2350,13 @@ def _validation_status(vr: Any) -> dict[str, Any]:
 
 
 def _validation_summary(data: dict[str, Any], pass_validation: dict[str, Any]) -> dict[str, Any]:
-    event_count = len(data.get("event_records", []) or [])
+    atom_count = len(data.get("atom_records", []) or [])
     entity_count = len(data.get("entity_records", []) or [])
     location_count = len(data.get("location_records", []) or [])
     thread_count = len(data.get("thread_records", []) or [])
     timeline_count = len(data.get("timelines", []) or [])
     return {
-        "event_count": event_count,
+        "atom_count": atom_count,
         "entity_count": entity_count,
         "location_count": location_count,
         "thread_count": thread_count,
@@ -2368,7 +2368,7 @@ def _validation_summary(data: dict[str, Any], pass_validation: dict[str, Any]) -
 _RECORD_KEYS = (
     "entity_records",
     "location_records",
-    "event_records",
+    "atom_records",
     "thread_records",
 )
 

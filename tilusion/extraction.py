@@ -523,8 +523,9 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
             time_expr_ids = atom.get("time_expression_ids") or []
             event_records.append(
                 {
-                    "event_id": f"unit-event-{len(event_records) + 1:04d}",
-                    "summary": atom.get("summary", "Mock merged event."),
+                    "atom_id": f"unit-atom-{len(event_records) + 1:04d}",
+                    "atom_kind": atom.get("atom_kind", "narrative_event"),
+                    "summary": atom.get("summary", "Mock merged atom."),
                     "segment_ids": [segment_id],
                     "source_order_hint": index,
                     "participant_entity_ids": [],
@@ -537,6 +538,7 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
                         {"segment_id": segment_id, "evidence_id": evidence_id}
                         for evidence_id in atom.get("evidence_span_ids", [])
                     ],
+                    "thread_ids": [],
                     "duplicate_of": None,
                     "qc_notes": ["mock finalization"],
                 }
@@ -545,7 +547,7 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
         "unit_id": unit_id,
         "entity_records": entity_records,
         "location_records": [],
-        "event_records": event_records,
+        "atom_records": event_records,
         "thread_records": [],
         "unresolved_items": [],
         "quality_notes": {
@@ -589,15 +591,15 @@ def mock_unit_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
 
 def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     unit_records = user_payload.get("unit_records", {})
-    events = unit_records.get("event_records", [])
+    events = unit_records.get("atom_records", [])
 
     ordered = []
     for i, event in enumerate(events):
         entry: dict[str, Any] = {
-            "event_id": event["event_id"],
+            "event_id": event["atom_id"],
         }
         if i + 1 < len(events):
-            entry["before_events"] = [events[i + 1]["event_id"]]
+            entry["before_events"] = [events[i + 1]["atom_id"]]
             entry["rationale"] = f"source_order_hint {event.get('source_order_hint', i+1)} < {events[i+1].get('source_order_hint', i+2)}"
         ordered.append(entry)
 
@@ -618,7 +620,7 @@ def mock_unit_timeline_repair_response(user_payload: dict[str, Any]) -> dict[str
     timelines = user_payload.get("timelines", [])
     missing_events = user_payload.get("repair_targets", {}).get("missing_events", [])
 
-    events = unit_records.get("event_records", [])
+    events = unit_records.get("atom_records", [])
     if missing_events and timelines:
         # Attach missing events to the first timeline with no ordering edges
         timeline = timelines[0]

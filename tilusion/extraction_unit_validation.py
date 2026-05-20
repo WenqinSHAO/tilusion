@@ -13,7 +13,7 @@ def validate_unit_finalization_result(
         "unit_id": str,
         "entity_records": list,
         "location_records": list,
-        "event_records": list,
+        "atom_records": list,
         "thread_records": list,
         "unresolved_items": list,
         "quality_notes": dict,
@@ -81,7 +81,7 @@ def validate_unit_timeline_result(
             "issues": issues,
         }
 
-    input_event_ids = {e.get("event_id") for e in data.get("event_records", []) if isinstance(e, dict)}
+    input_event_ids = {a.get("atom_id") for a in data.get("atom_records", []) if isinstance(a, dict)}
     all_event_ids: set[str] = set()
     timeline_event_sets: list[set[str]] = []
     for i, timeline in enumerate(timelines):
