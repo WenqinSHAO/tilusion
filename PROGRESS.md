@@ -40,18 +40,19 @@
 - Tests for reader behavior and extraction pipeline (`pytest tests/test_extraction.py -x -q`).
 
 **Cross-unit readiness scaffold**
-- Cross-unit/context planning doc (`743827f`, `566d166`): `docs/cross_unit_extraction_plan.md`.
 - No-behavior extraction refactor split prompt composition, payload builders, and unit validation from the pipeline orchestrator (`8f25370`, `5aa6c4f`, `2bb59ca`, `e494dfe`).
-- Passive book-context scaffold and `run-all` artifact wiring: empty book-state snapshot, `context_pack.json`, `context_selection_report.json`, and unit-package metadata with context injection disabled (`fb7f969`, `ab44208`).
-- Deterministic cross-unit context selection and cache-aware extraction plumbing: scoped registry IDs, surface scan context packs, optional context injection isolated by context-pack hash, and CLI `run-all --prior-unit-package` (`cec43ca`, `1b90a89`, `4f0631d`, `9ac1abc`, `905c1d9`).
-- Renamed `prompt_injection` → `context_injection` across schema, cache metadata, and tests; dropped backward-compat shims as premature for single-chapter state.
-- Verified cross-unit plumbing on unit-0002 → unit-0003 mock runs: all unit-0002 caches hit (zero regression), `book-scope-context` prompt part injected into segment extraction and finalization with surface scanner output (matched entities/locations, thread summaries, guidance block), cache isolation confirmed between context-aware and unaware runs.
-- Evolved extraction prompts with book-scope context contract (`afb2678`): `segment_extraction_v0.6.md` and `unit_finalization_v0.2.md` — both document `book_scope_context` as guidance-not-evidence, define alias/continuity rules, and add optional `context_alignment_notes` for cross-unit record linking.
+- Passive book-context scaffold and cache-aware context injection: empty snapshots, context packs, deterministic surface scan, context-pack hash cache isolation, and CLI `run-all --prior-unit-package` (`fb7f969` through `905c1d9`).
+- Renamed `prompt_injection` → `context_injection`; dropped backward-compat shims while the API is still unstable.
+- Verified cross-unit plumbing on unit-0002 → unit-0003 mock runs, including `book-scope-context` prompt injection and cache isolation.
+
+**Generalized reading-pipeline direction**
+- Current extraction branch exposed the limit of event/timeline-centered modeling: `event` became `atom`, but the architecture still privileges entity/location/thread/timeline records.
+- New canonical direction: tilusion is a source-grounded reading workspace, with core flow `source text → source blocks → concepts → logical groups → links → derived views → cross-unit registry deltas`.
+- Canonical plan: `docs/source_grounded_reading_pipeline.md`.
 
 ## Ongoing
 
-- Extraction pipeline is roughly stitched end-to-end but needs polishing: prompt quality, edge cases, and tighter validation.
-- Current goal: run LLM-backed unit-0003 extraction with `--prior-unit-package` using the new v0.6/v0.2 prompts; planning doc: `docs/cross_unit_extraction_plan.md`.
-- Extraction adjustment based on user input prompts.
+- Current goal: refactor extraction from event/timeline-centered records to the generalized source-grounded reading model.
+- Immediate next step: add schema constants/dataclasses and deterministic validation for source spans, source blocks, concept mentions, logical groups, links, derived views, and registry deltas before further DeepSeek runs.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
