@@ -50,10 +50,11 @@
 - New canonical direction: tilusion is a source-grounded reading workspace, with core flow `source text → source blocks → concepts → logical groups → links → derived views → cross-unit registry deltas`.
 - Canonical plan: `docs/source_grounded_reading_pipeline.md`.
 - Reading schema scaffold added: `tilusion/reading_schema.py` defines type-open source spans, source blocks, concepts, logical groups, links, derived views, unit packages, document snapshots, registry deltas, ambiguity items, and user correction operations.
+- Reading validation scaffold added: `tilusion/reading_validation.py` validates package shape, IDs, refs, source-grounded links, synthesis links, derived-view non-authority, prior-context evidence misuse, and registry delta safety.
 
 ## Ongoing
 
 - Current goal: refactor extraction from event/timeline-centered records to the generalized source-grounded reading model.
-- Immediate next step: add deterministic validation for source spans, source blocks, concept mentions, logical groups, links, derived views, and registry deltas before further DeepSeek runs.
+- Immediate next step: externalize first reading-pipeline prompts and payload builders around the new schema before further DeepSeek runs.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
