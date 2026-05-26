@@ -51,10 +51,11 @@
 - Canonical plan: `docs/source_grounded_reading_pipeline.md`.
 - Reading schema scaffold added: `tilusion/reading_schema.py` defines type-open source spans, source blocks, concepts, logical groups, links, derived views, unit packages, document snapshots, registry deltas, ambiguity items, and user correction operations.
 - Reading validation scaffold added: `tilusion/reading_validation.py` validates package shape, IDs, refs, source-grounded links, synthesis links, derived-view non-authority, prior-context evidence misuse, and registry delta safety.
+- First reading-pipeline prompt contracts added under `tilusion/prompts/`: source-block/concept, logical-group, link-structure, and unit-reading-finalization.
 
 ## Ongoing
 
 - Current goal: refactor extraction from event/timeline-centered records to the generalized source-grounded reading model.
-- Immediate next step: externalize first reading-pipeline prompts and payload builders around the new schema before further DeepSeek runs.
+- Immediate next step: add reading payload builders and prompt composition helpers around the new schema before further DeepSeek runs.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
