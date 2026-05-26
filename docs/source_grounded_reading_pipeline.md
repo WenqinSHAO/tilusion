@@ -10,169 +10,51 @@ The core pipeline is:
 
 ```text
 source text
-→ source blocks
-→ concepts
-→ logical groups
-→ links
-→ derived views
-→ cross-unit registry deltas
+→ overview / segmentation
+→ per-segment extraction (one pass, source spans + concepts + groups + links together)
+→ cross-segment finalization (dedup, stabilize IDs, emit unit package)
+→ derived views (optional, downstream)
+→ cross-unit registry deltas (future)
 ```
 
 Timelines are useful, but they are one derived view. They are not the source of truth.
 
-The extraction model should be schema-light, type-open, and source-grounded:
+## Design Principles
+
+**Schema-light, type-open, source-grounded:**
 
 - Keep the outer data envelopes stable.
 - Allow `concept_type`, `group_type`, and `link_type` to be extensible strings.
-- Start with recommended type sets, but allow `other` and justified custom strings.
+- Start with short recommended type sets (~8-10 each). The LLM uses these as a starter vocabulary; `other` and justified custom strings are always accepted.
 - Validate IDs, source refs, provenance, confidence, and context use strictly.
 - Do not privilege people, locations, time expressions, events, or timelines as the only extraction model.
 - Do not require every genre to use every type.
 
-Prior document context is guidance for aliasing, continuity, duplicate detection, and retrieval. It is never evidence for facts in the current unit.
+**Prior document context** is guidance for aliasing, continuity, duplicate detection, and retrieval. It is never evidence for facts in the current unit.
 
-## Current State Review
-
-The current `cross-unit-refactor` branch has a usable but still narrative-biased pipeline:
-
-- `run-chain` performs overview segmentation, deterministic segment restoration, per-segment extraction, validation, and repair-hint generation.
-- `finalize-unit` merges segment records into unit-level entities, locations, atoms, threads, unresolved items, and quality notes.
-- `repair-unit` repairs unit-level extraction from deterministic hints.
-- `timeline-unit` builds optional partially ordered timelines from atom records.
-- `repair-timeline` repairs timeline validation failures.
-- `run-all` writes `.tilusion_cache/units/<unit_id>/unit_package.json`.
-
-Strong parts to preserve:
-
-- Explicit prompt composition through `PromptPart` and `PromptComposition`.
-- Inspectable pass artifacts: prompt composition, system prompt, request payload, raw response, parsed result, validation report, validated result, and manifest.
-- Deterministic evidence relocation and source-window reconstruction.
-- Separation between local validation reports and concise LLM repair payloads.
-- Context packs whose hashes are included in cache keys when `context_injection.enabled` is true.
-- Reader/index layer with stable unit IDs and source coordinate extraction.
-
-Current concepts to rename or generalize:
-
-- `evidence_spans` -> `source_spans` and `source_blocks`.
-- `entity_mentions` + `location_mentions` -> `concept_mentions`.
-- `time_expressions` -> concept mentions of type `time_anchor`, plus temporal hints on groups when useful.
-- `atom_mentions` / `atom_records` -> `logical_groups`.
-- `thread_candidates` / `thread_records` -> open-question, theme, continuity, or thread-like derived structures built from groups and links.
-- `timelines` -> `derived_views` of type `timeline`.
-- `book_context` -> document state/context pack with canonical concepts, compact group summaries, links, ambiguity queues, and derived checkpoints.
-
-Current concepts to remove or decenter:
-
-- Timeline construction as a required core pass.
-- Fixed `entity/location/time/event/thread/timeline` top-level schema.
-- Thread as a universal organizing container. It works for narrative books but not for papers, essays, news, or notes.
-- Old `event_records` compatibility shims. The project has no stable API consumers yet, so schema cleanup is preferred over preserving old names.
+**KV cache reuse:** source text is stable across passes. The overview pass loads the full unit text; later passes (finalization, derived views) can reuse that KV cache rather than re-encoding the same text. Per-segment extraction loads one segment at a time — segment text is short, so one pass is the default, with optional repair passes only when validation fails.
 
 ## Generalized Data Model
 
-Recommended confidence values:
+### Confidence values
 
-- `high`
-- `medium`
-- `low`
-- `unknown`
+`high`, `medium`, `low`, `unknown`
 
-Recommended grounding/provenance values:
+### Grounding / provenance values
 
-- `source_grounded`
-- `synthesis`
-- `deterministic`
-- `llm_inferred`
-- `user_corrected`
+`source_grounded`, `synthesis`, `deterministic`, `llm_inferred`, `user_corrected`
 
-Recommended `concept_type` values:
+### Recommended concept_type values (~8)
 
-- `person`
-- `group`
-- `organization`
-- `place`
-- `object`
-- `term`
-- `theory`
-- `method`
-- `motif`
-- `theme`
-- `problem`
-- `hypothesis`
-- `claim_target`
-- `emotion`
-- `social_role`
-- `institution`
-- `symbol`
-- `scene_element`
-- `technical_component`
-- `dataset`
-- `metric`
-- `source`
-- `time_anchor`
-- `other`
+`person`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `other`
 
-Recommended `group_type` values:
+### Recommended group_type values (~8)
 
-- `event`
-- `scene`
-- `action`
-- `observation`
-- `description`
-- `claim`
-- `argument`
-- `evidence`
-- `counterevidence`
-- `hypothesis`
-- `inference`
-- `explanation`
-- `definition`
-- `example`
-- `method`
-- `technique`
-- `result`
-- `limitation`
-- `problem`
-- `question`
-- `unresolved_issue`
-- `motif`
-- `theme_development`
-- `comparison`
-- `contrast`
-- `causal_link`
-- `background`
-- `source_statement`
-- `note`
-- `other`
+`event`, `claim`, `argument`, `observation`, `description`, `explanation`, `question`, `other`
 
-Recommended `link_type` values:
+### Recommended link_type values (~10)
 
-- `mentions`
-- `refers_to`
-- `aliases`
-- `same_as_candidate`
-- `part_of`
-- `elaborates`
-- `supports`
-- `contradicts`
-- `qualifies`
-- `contrasts`
-- `causes`
-- `enables`
-- `explains`
-- `follows_from`
-- `precedes`
-- `continues`
-- `resolves`
-- `raises_question`
-- `answers_question`
-- `exemplifies`
-- `defines`
-- `uses_method`
-- `produces_result`
-- `has_limitation`
-- `related_to`
-- `other`
+`mentions`, `supports`, `contradicts`, `causes`, `precedes`, `elaborates`, `part_of`, `exemplifies`, `related_to`, `other`
 
 ### SourceSpan
 
@@ -216,7 +98,7 @@ Recommended `link_type` values:
 {
   "mention_id": "mention-0001",
   "surface": "exact source surface",
-  "concept_type": "person|place|method|theme|other|custom",
+  "concept_type": "person|place|term|method|theme|other|custom",
   "canonical_name": "optional normalized name",
   "local_summary": "brief source-grounded note",
   "aliases_or_candidates": [],
@@ -253,7 +135,7 @@ Recommended `link_type` values:
 ```json
 {
   "group_id": "group-0001",
-  "group_type": "event|claim|argument|method|description|other|custom",
+  "group_type": "event|claim|argument|observation|description|other|custom",
   "summary": "short source-grounded compression",
   "source_block_refs": ["block-0001", "block-0007"],
   "concept_refs": ["mention-0001", "mention-0002"],
@@ -361,11 +243,11 @@ Delta operation types:
 - `unresolved_ambiguity_item`
 - `user_review_needed`
 
-## Multi-Pass Pipeline
+## Pipeline Stages (Simplified)
 
-### 1. Overview / Source Region Pass
+### Stage 1: Overview / Segmentation
 
-Purpose: understand local structure, identify coarse regions, skip sparse/front-matter/noisy areas, and create extraction windows.
+Purpose: understand unit structure, identify coarse regions, skip sparse/front-matter areas, and create extraction windows (segments).
 
 Input: reader unit text, reader metadata, optional compact context summary.
 
@@ -373,93 +255,47 @@ Output: source regions with anchor quotes and extraction hints.
 
 Backend: LLM-backed, followed by deterministic span restoration.
 
-Why separate: segmentation quality controls all downstream grounding. It should not be mixed with detailed extraction.
-
-Validation: anchor relocation, source order, overlap/gap policy, segment size warnings.
+The full unit text is loaded into context here. Its KV cache can be reused by later stages (finalization, derived views) — they share the same source text prefix.
 
 Cache key: source text hash, overview prompt hash, model identity, optional context pack hash.
 
-### 2. Source Block And Concept Pass
+### Stage 2: Per-Segment Extraction (One Pass)
 
-Purpose: extract source blocks and salient concepts without prematurely building high-level structures.
+Purpose: from one segment's source text, extract source spans, concept mentions, logical groups, and links — all together in a single LLM call.
 
-Input: restored source region text, source coordinates, overview hints, optional context pack.
+Input: restored segment text, source coordinates, overview hints, optional context pack.
 
-Output: `SourceSpan`, `SourceBlock`, `ConceptMention`.
+Output: `SourceSpan`, `SourceBlock`, `ConceptMention`, `LogicalGroup`, `GroupLink`.
 
-Backend: LLM-backed, deterministic grounding validation.
+Backend: LLM-backed, deterministic grounding validation after.
 
-Why separate: concept recognition and source block construction are shared foundations for every later view.
+Why one pass: a segment is short enough that the LLM can make coherent decisions about what concepts exist, how they group, and how groups relate — all from the same reading of the text. Separating these into multiple passes adds latency without improving quality when the text window is small.
 
-Validation: required fields, local IDs, exact/relocatable quotes, source ranges, concept source refs, type string shape, confidence.
+Optional repair: if validation fails, a follow-up repair pass reuses the same segment text (KV cache shared) with repair hints. This is pay-as-you-go — most segments need no repair.
+
+Validation: required fields, local IDs, exact/relocatable quotes, source ranges, concept source refs, type string shape, confidence, source-grounded links must cite evidence blocks.
 
 Cache key: region text hash, prompt hash, model identity, overview result hash, optional context pack hash.
 
-### 3. Logical Group Pass
+### Stage 3: Cross-Segment Finalization
 
-Purpose: compose blocks and concepts into source-grounded meaning units.
+Purpose: deduplicate local records across segments, stabilize unit-level IDs, resolve local aliases, preserve provenance, and emit a unit package.
 
-Input: source blocks, concepts, local text windows.
-
-Output: `LogicalGroup`.
-
-Backend: LLM-backed.
-
-Why separate: grouping requires interpretation, but should operate over stabilized source blocks and concepts.
-
-Validation: group refs exist, cited blocks exist, non-contiguous blocks allowed, group type string accepted, group has grounding unless explicitly synthesis.
-
-Cache key: source-block/concept result hash, prompt hash, model identity.
-
-### 4. Link Pass
-
-Purpose: identify relationships among concepts, blocks, and groups.
-
-Input: source blocks, concepts, logical groups.
-
-Output: `GroupLink`.
-
-Backend: LLM-backed with deterministic ref validation.
-
-Why separate: relation extraction benefits from stabilized groups and should not bloat the group prompt.
-
-Validation: refs exist, link type string accepted, source-grounded links cite evidence blocks, synthesis links are marked.
-
-Cache key: group result hash, prompt hash, model identity.
-
-### 5. Unit Finalization Pass
-
-Purpose: deduplicate local records, stabilize IDs, resolve local aliases, preserve provenance, and emit unresolved items.
-
-Input: all region-level source blocks, concepts, groups, links, validation reports, repair hints.
+Input: all segment-level source blocks, concepts, groups, links, validation reports, repair hints.
 
 Output: `ExtractionUnitPackage`.
 
 Backend: LLM-backed plus deterministic cleanup.
 
-Why separate: finalization is the only pass that should decide unit-level IDs and local merges.
+Can reuse the unit-text KV cache from stage 1 (source text is a shared prefix).
+
+Why separate: finalization is the only stage that should decide unit-level IDs, local merges, and unresolved items.
 
 Validation: unit-level ID uniqueness, ref integrity, duplicate handling, no evidence from prior context, unresolved ambiguity preservation.
 
 Cache key: all prior pass result hashes, finalization prompt hash, model identity, optional context pack hash.
 
-### 6. Deterministic Validation And Repair-Hint Pass
-
-Purpose: produce local user-facing QC and concise LLM-native repair instructions.
-
-Input: unit package and source text.
-
-Output: full validation report, repair payload, enriched source locations.
-
-Backend: deterministic.
-
-Why separate: validation should be reproducible and should not depend on an LLM.
-
-Validation: this is the validation layer.
-
-Cache key: unit package hash, validation policy version, source text hash.
-
-### 7. Optional Derived-View Pass
+### Stage 4: Derived Views (Optional, Downstream)
 
 Purpose: build timeline, discourse graph, claim/evidence map, viewpoint evolution, theme map, or open-thread list from finalized records.
 
@@ -469,64 +305,31 @@ Output: `DerivedStructure` records.
 
 Backend: deterministic where possible, LLM-backed when synthesis is needed.
 
+Can reuse the unit-text KV cache from stage 1.
+
 Why separate: derived views should never mutate core records.
 
 Validation: input refs exist, view states `is_source_of_truth: false`, timeline DAG checks where applicable.
 
 Cache key: unit package hash, view config hash, prompt hash if LLM-backed.
 
-### 8. Cross-Unit Registry Delta Pass
+## Context Assembly and KV Cache Strategy
 
-Purpose: compare the unit package with prior document state and propose canonical concept updates, alias candidates, continuations, cross-unit links, and ambiguity items.
+The unit source text is loaded in stage 1. Stages 3 and 4 can reuse that KV cache — they share the same source text prefix and only differ in the instruction and structured data that follows.
 
-Input: unit package, selected context pack, base document snapshot.
+Per-segment extraction (stage 2) loads one segment at a time. Since segments are short, one pass is the default. When repair is needed, the follow-up call shares the segment text KV cache.
 
-Output: `RegistryDelta`.
+Context packs for cross-unit continuity:
 
-Backend: LLM proposes, deterministic validator gates.
+- Deterministic surface scan over canonical concepts and observed surfaces.
+- Recent/high-salience concept summaries.
+- Active unresolved questions or ambiguity items.
+- Relevant cross-unit links and derived checkpoints.
+- Selection report explaining every inclusion and exclusion category.
 
-Why separate: applying document-level state requires transaction safety and should not be mixed with local unit extraction.
+Large context windows should be used for periodic consolidation, alias merge audits, conflict resolution, rebuilding compact summaries, and long-range synthesis — not for dumping the whole registry into every routine unit extraction.
 
-Validation: base snapshot hash, operation schema, evidence refs, no destructive auto-merge, no prior context as evidence.
-
-Cache key: unit package hash, base snapshot hash, context pack hash, delta prompt hash, model identity.
-
-## Derived Views
-
-Derived views consume concepts, source blocks, logical groups, and links. They do not become source of truth.
-
-Timeline:
-
-- Built from event-like groups, temporal hints, and links such as `precedes`, `continues`, and `causes`.
-- Stored as `DerivedStructure(view_type="timeline")`.
-- May be absent when the unit has no meaningful temporal structure.
-
-Discourse graph:
-
-- Built from claim, argument, evidence, counterevidence, limitation, inference, and explanation groups.
-- Uses links such as `supports`, `contradicts`, `qualifies`, `follows_from`, and `explains`.
-
-Viewpoint evolution around concept X:
-
-- Selects groups linked to a concept and orders them by source order, document structure, or temporal hints.
-- Useful for novels, essays, news, papers, and notes.
-
-Claim/evidence map:
-
-- Connects claim-like groups to evidence, counterevidence, source statements, and limitations.
-- Useful for papers, news, argumentative essays, and research notes.
-
-Theme/concept map:
-
-- Clusters motif, theme, description, example, comparison, and contrast groups.
-- Useful for literary reading and essay analysis.
-
-Unresolved question / open-thread list:
-
-- Built from question, problem, unresolved issue, raises-question, answers-question, and resolves links.
-- Replaces thread as a general downstream view.
-
-## Cross-Unit Update And Registry Delta
+## Cross-Unit Update And Registry Delta (Future)
 
 For each new unit:
 
@@ -547,15 +350,79 @@ Rules:
 - Destructive merges require deterministic safety or user approval.
 - Ambiguity is preserved in the ambiguity queue instead of being hidden in warnings.
 
-Context packs should be selected and cache-keyed:
+This subsystem needs a more detailed plan once unit-level extraction is stable.
 
-- Deterministic surface scan over canonical concepts and observed surfaces.
-- Recent/high-salience concept summaries.
-- Active unresolved questions or ambiguity items.
-- Relevant cross-unit links and derived checkpoints.
-- Selection report explaining every inclusion and exclusion category.
+## Derived Views
 
-Large context windows should be used for periodic consolidation, alias merge audits, conflict resolution, rebuilding compact summaries, and long-range synthesis, not for dumping the whole registry into every routine unit extraction.
+Derived views consume concepts, source blocks, logical groups, and links. They do not become source of truth.
+
+Timeline:
+
+- Built from event-like groups, temporal hints, and links such as `precedes`, `continues`, and `causes`.
+- Stored as `DerivedStructure(view_type="timeline")`.
+- May be absent when the unit has no meaningful temporal structure.
+
+Discourse graph:
+
+- Built from claim, argument, evidence, counterevidence, and explanation groups.
+- Uses links such as `supports`, `contradicts`, `qualifies`, `follows_from`, and `explains`.
+
+Viewpoint evolution around concept X:
+
+- Selects groups linked to a concept and orders them by source order or temporal hints.
+- Useful for novels, essays, news, papers, and notes.
+
+Claim/evidence map:
+
+- Connects claim-like groups to evidence, counterevidence, and source statements.
+- Useful for papers, news, argumentative essays, and research notes.
+
+Theme/concept map:
+
+- Clusters motif, theme, description, example, comparison, and contrast groups.
+- Useful for literary reading and essay analysis.
+
+Unresolved question / open-thread list:
+
+- Built from question, problem, unresolved issue, and related links.
+- Replaces thread as a general downstream view.
+
+## Current State Review
+
+The current `cross-unit-refactor` branch has a usable but narrative-biased pipeline:
+
+- `run-chain` performs overview segmentation, deterministic segment restoration, per-segment extraction, validation, and repair-hint generation.
+- `finalize-unit` merges segment records into unit-level entities, locations, atoms, threads, unresolved items, and quality notes.
+- `repair-unit` repairs unit-level extraction from deterministic hints.
+- `timeline-unit` builds optional partially ordered timelines from atom records.
+- `repair-timeline` repairs timeline validation failures.
+- `run-all` writes `.tilusion_cache/units/<unit_id>/unit_package.json`.
+
+Strong parts to preserve:
+
+- Explicit prompt composition through `PromptPart` and `PromptComposition`.
+- Inspectable pass artifacts: prompt composition, system prompt, request payload, raw response, parsed result, validation report, validated result, and manifest.
+- Deterministic evidence relocation and source-window reconstruction.
+- Separation between local validation reports and concise LLM repair payloads.
+- Context packs whose hashes are included in cache keys when `context_injection.enabled` is true.
+- Reader/index layer with stable unit IDs and source coordinate extraction.
+
+Current concepts to rename or generalize:
+
+- `evidence_spans` → `source_spans` and `source_blocks`.
+- `entity_mentions` + `location_mentions` → `concept_mentions`.
+- `time_expressions` → concept mentions of type `time_anchor`, plus temporal hints on groups when useful.
+- `atom_mentions` / `atom_records` → `logical_groups`.
+- `thread_candidates` / `thread_records` → open-question, theme, continuity, or thread-like derived structures built from groups and links.
+- `timelines` → `derived_views` of type `timeline`.
+- `book_context` → document state/context pack with canonical concepts, compact group summaries, links, ambiguity queues, and derived checkpoints.
+
+Current concepts to remove or decenter:
+
+- Timeline construction as a required core pass.
+- Fixed `entity/location/time/event/thread/timeline` top-level schema.
+- Thread as a universal organizing container.
+- Old `event_records` compatibility shims.
 
 ## Validation And Tests
 
@@ -572,7 +439,6 @@ Required tests:
 - Multiple logical groups can share a source block.
 - Timeline is a derived view, not a core package field.
 - Discourse graph is a derived view, not a core package field.
-- Viewpoint evolution can be built from groups linked to a concept.
 - Registry deltas validate against a base snapshot hash.
 - Prior context cannot appear in evidence refs for current-unit records.
 - Merge proposals do not mutate canonical records unless applied by a validated transaction.
@@ -592,69 +458,65 @@ Likely modules:
 
 ## Implementation Sequence
 
-### Commit 1: Canonical Plan
+### Commit 1: Canonical Plan (done)
 
 - Add this document.
 - Compact `PROGRESS.md` around the new direction.
-- Remove stale extraction planning docs that describe timeline-first architecture.
+- Remove stale extraction planning docs.
 
-### Commit 2: Reading Schema
+### Commit 2: Reading Schema (done)
 
 - Add `tilusion/reading_schema.py`.
-- Define stable outer envelopes, recommended type constants, confidence values, grounding values, and JSON helpers.
+- Define stable outer envelopes, recommended type constants (~8 each), confidence values, grounding values, and JSON helpers.
 - Add tests for type-open schema behavior.
 
-### Commit 3: Generalized Validation
+### Commit 3: Generalized Validation (done)
 
 - Add `tilusion/reading_validation.py`.
 - Validate spans, blocks, concepts, groups, links, derived views, unit packages, and provenance.
 - Add deterministic tests before LLM prompt changes.
 
-### Commit 4: Prompt Resources
+### Commit 4: Prompt Resources (done)
 
-- Add source-block/concept, logical-group, link-structure, and unit-finalization prompts.
+- Add per-segment extraction prompt (source spans + concepts + groups + links, one pass).
+- Add unit finalization prompt.
 - Keep prompts externalized and versioned.
 - Do not run expensive LLM calls yet.
 
-### Commit 5: Payload And Prompt Composition
+### Commit 5: Payload And Prompt Composition (done)
 
 - Add `tilusion/reading_payloads.py` and `tilusion/reading_prompts.py`.
-- Reuse or move `PromptPart` / `PromptComposition`.
-- Add cache-key tests.
+- Reuse `PromptPart` / `PromptComposition`.
 
 ### Commit 6: Mock Backend
 
-- Add mock responses for new reading tasks.
+- Add mock responses for per-segment extraction and unit finalization.
 - Keep tests LLM-free.
 
 ### Commit 7: Reading Pipeline Orchestrator
 
 - Add `tilusion/reading_pipeline.py`.
+- Wire stages 1-3: overview/segmentation (reuse existing), per-segment extraction (one pass), cross-segment finalization.
 - Write artifacts for every pass.
 - Produce `ExtractionUnitPackage`.
 
-### Commit 8: Generalized Document Context
-
-- Replace entity/location/thread/event/timeline registry with canonical concepts, group summaries, links, ambiguity queue, and derived checkpoints.
-- Keep `context_injection.enabled`.
-- Generalize deterministic surface scanner to canonical concepts and observed surfaces.
-
-### Commit 9: Registry Delta And Transactions
-
-- Add registry delta schema, deterministic validation, transaction logs, and snapshot writes.
-- No destructive auto-merge.
-
-### Commit 10: Derived Views
+### Commit 8: Derived Views
 
 - Add timeline, discourse graph, claim/evidence map, theme map, viewpoint evolution, and open-thread list builders.
 - Keep them downstream of unit packages.
 
-### Commit 11: CLI Wiring
+### Commit 9: CLI Wiring
 
 - Add or replace CLI commands for the new reading pipeline.
-- Compatibility with old event/timeline commands is not required unless temporarily useful for comparison.
+- Compatibility with old event/timeline commands is not required.
 
-### Commit 12: LLM Trials
+### Commit 10: LLM Trials
 
 - Run mock first.
 - Then run DeepSeek on unit-0002 and unit-0003 after schema, validation, cache, and artifact layout are stable.
+
+### Later: Document Context + Registry Delta
+
+- Replace entity/location/thread/event/timeline registry with canonical concepts, group summaries, links, ambiguity queue, and derived checkpoints.
+- Add registry delta schema, deterministic validation, transaction logs, and snapshot writes.
+- This needs a more detailed plan once unit-level extraction is stable.
