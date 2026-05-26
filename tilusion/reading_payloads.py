@@ -5,64 +5,20 @@ from typing import Any
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
 
 
-def build_source_block_concept_payload(
+def build_per_segment_extraction_payload(
     *,
-    unit: dict[str, Any],
-    region: dict[str, Any],
+    unit_id: str,
+    segment: dict[str, Any],
     text: str,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "task": "source_block_concept",
+        "task": "per_segment_extraction",
         "schema_version": READING_UNIT_SCHEMA_VERSION,
-        "unit": unit,
-        "region": region,
+        "unit_id": unit_id,
+        "segment": segment,
         "context": context or {},
         "text": text,
-    }
-
-
-def build_logical_group_payload(
-    *,
-    unit_id: str,
-    region_id: str,
-    source_blocks: list[dict[str, Any]],
-    concept_mentions: list[dict[str, Any]],
-    text_window: str | None = None,
-    context: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "task": "logical_group",
-        "schema_version": READING_UNIT_SCHEMA_VERSION,
-        "unit_id": unit_id,
-        "region_id": region_id,
-        "source_blocks": source_blocks,
-        "concept_mentions": concept_mentions,
-        "text_window": text_window,
-        "context": context or {},
-    }
-
-
-def build_link_structure_payload(
-    *,
-    unit_id: str,
-    scope_id: str,
-    source_blocks: list[dict[str, Any]],
-    concept_mentions: list[dict[str, Any]],
-    logical_groups: list[dict[str, Any]],
-    context: dict[str, Any] | None = None,
-    validation_notes: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "task": "link_structure",
-        "schema_version": READING_UNIT_SCHEMA_VERSION,
-        "unit_id": unit_id,
-        "scope_id": scope_id,
-        "source_blocks": source_blocks,
-        "concept_mentions": concept_mentions,
-        "logical_groups": logical_groups,
-        "context": context or {},
-        "validation_notes": validation_notes or {},
     }
 
 
@@ -70,7 +26,7 @@ def build_unit_reading_finalization_payload(
     *,
     unit_id: str,
     source: dict[str, Any],
-    regions: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
     source_spans: list[dict[str, Any]],
     source_blocks: list[dict[str, Any]],
     concept_mentions: list[dict[str, Any]],
@@ -85,7 +41,7 @@ def build_unit_reading_finalization_payload(
         "schema_version": READING_UNIT_SCHEMA_VERSION,
         "unit_id": unit_id,
         "source": source,
-        "regions": regions,
+        "segments": segments,
         "source_spans": source_spans,
         "source_blocks": source_blocks,
         "concept_mentions": concept_mentions,
@@ -116,14 +72,14 @@ def build_unit_reading_finalization_payload(
     }
 
 
-def flatten_region_results(region_results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Flatten region-scoped reading pass results for unit finalization payloads."""
+def flatten_segment_results(segment_results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Flatten per-segment extraction results for unit finalization payloads."""
     source_spans: list[dict[str, Any]] = []
     source_blocks: list[dict[str, Any]] = []
     concept_mentions: list[dict[str, Any]] = []
     logical_groups: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
-    for result in region_results:
+    for result in segment_results:
         source_spans.extend(_list(result.get("source_spans")))
         source_blocks.extend(_list(result.get("source_blocks")))
         concept_mentions.extend(_list(result.get("concept_mentions")))

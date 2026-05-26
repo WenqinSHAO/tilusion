@@ -4,9 +4,7 @@ from importlib import resources
 
 
 READING_PROMPT_RESOURCES = [
-    "prompt_source_block_concept_v0.1.md",
-    "prompt_logical_group_v0.1.md",
-    "prompt_link_structure_v0.1.md",
+    "prompt_per_segment_extraction_v0.1.md",
     "prompt_unit_reading_finalization_v0.1.md",
 ]
 
@@ -28,11 +26,11 @@ def test_reading_prompts_keep_timeline_as_non_core_view() -> None:
     assert "derived_views" in finalization
 
 
-def test_link_prompt_distinguishes_source_grounded_and_synthesis_links() -> None:
+def test_per_segment_extraction_prompt_distinguishes_source_grounded_and_synthesis() -> None:
     content = resources.files("tilusion.prompts").joinpath(
-        "prompt_link_structure_v0.1.md"
+        "prompt_per_segment_extraction_v0.1.md"
     ).read_text(encoding="utf-8")
 
     assert "source_grounded" in content
     assert "synthesis" in content
-    assert "Do not pretend synthesis is direct evidence" in content
+    assert "do not pretend synthesis is direct evidence" in content.lower()
