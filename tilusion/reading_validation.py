@@ -374,8 +374,8 @@ def _validate_temporal_attributes(
         source_block_ref = attr.get("source_block_ref")
         if source_block_ref:
             _validate_single_ref(source_block_ref, block_ids, f"{attr_path}.source_block_ref", issues)
-        elif _ref_uses_prior_context(attr):
-            issues.append(_prior_context_issue(attr_path))
+        elif _ref_uses_prior_context(source_block_ref):
+            issues.append(_prior_context_issue(f"{attr_path}.source_block_ref"))
         _validate_string_list(attr.get("uncertainty", []), f"{attr_path}.uncertainty", issues)
 
 
@@ -598,8 +598,18 @@ def _validate_string_list(value: Any, path: str, issues: list[ReadingValidationI
         issues.append(_issue("error", "wrong_field_type", path, "Field must be a list of strings."))
         return
     for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
         if not isinstance(item, str):
-            issues.append(_issue("error", "wrong_item_type", f"{path}[{index}]", "List item must be a string."))
+            issues.append(_issue("error", "wrong_item_type", item_path, "List item must be a string."))
+        elif not item.strip():
+            issues.append(
+                _issue(
+                    "error",
+                    "empty_string_list_item",
+                    item_path,
+                    "String-list items must be non-empty strings.",
+                )
+            )
 
 
 def _ref_uses_prior_context(value: Any) -> bool:

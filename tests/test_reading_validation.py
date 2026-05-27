@@ -230,6 +230,135 @@ def test_reading_validation_warns_for_uncited_source_blocks() -> None:
     assert report.warning_count == 1
 
 
+def test_reading_validation_rejects_schema_version_mismatch() -> None:
+    data = _valid_package().to_dict()
+    data["schema_version"] = "reading-unit-v0.2"
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "schema_version_mismatch" in _codes(report)
+
+
+def test_reading_validation_rejects_duplicate_object_ids() -> None:
+    data = _valid_package().to_dict()
+    data["concepts"].append(dict(data["concepts"][0]))
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "duplicate_object_id" in _codes(report)
+
+
+def test_reading_validation_rejects_invalid_source_block_range() -> None:
+    data = _valid_package().to_dict()
+    data["source_blocks"][0]["start"] = 5
+    data["source_blocks"][0]["end"] = 3
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "invalid_source_block_range" in _codes(report)
+
+
+def test_reading_validation_rejects_source_block_range_length_mismatch() -> None:
+    data = _valid_package().to_dict()
+    data["source_blocks"][0]["end"] += 1
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "source_block_range_length_mismatch" in _codes(report)
+
+
+def test_reading_validation_rejects_source_block_unit_id_mismatch() -> None:
+    data = _valid_package().to_dict()
+    data["source_blocks"][0]["unit_id"] = "unit-other"
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "unit_id_mismatch" in _codes(report)
+
+
+def test_reading_validation_rejects_invalid_grounding() -> None:
+    data = _valid_package().to_dict()
+    data["logical_groups"][0]["provenance"] = {"grounding": "unsupported"}
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "invalid_grounding" in _codes(report)
+
+
+def test_reading_validation_rejects_invalid_type_string() -> None:
+    data = _valid_package().to_dict()
+    data["atomic_items"][0]["item_type"] = ""
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "invalid_type_string" in _codes(report)
+
+
+def test_reading_validation_warns_for_all_singleton_logical_groups() -> None:
+    data = _valid_package().to_dict()
+    data["logical_groups"] = [
+        {
+            "group_id": "group-0001",
+            "group_type": "theme_set",
+            "summary": "First singleton.",
+            "item_refs": ["item-0001"],
+            "concept_refs": [],
+            "graph": {"nodes": [], "edges": []},
+            "uncertainty": [],
+            "provenance": {"grounding": "synthesis"},
+        },
+        {
+            "group_id": "group-0002",
+            "group_type": "theme_set",
+            "summary": "Second singleton.",
+            "item_refs": ["item-0002"],
+            "concept_refs": [],
+            "graph": {"nodes": [], "edges": []},
+            "uncertainty": [],
+            "provenance": {"grounding": "synthesis"},
+        },
+    ]
+
+    report = validate_extraction_unit_package(data)
+
+    assert report.passed
+    assert "all_singleton_logical_groups" in _codes(report)
+
+
+def test_reading_validation_allows_context_like_temporal_surface_without_source_ref() -> None:
+    data = _valid_package().to_dict()
+    data["atomic_items"][0]["temporal_attributes"] = [
+        {
+            "kind": "implicit",
+            "surface": "context: the 18th century",
+            "normalized_hint": "18th century",
+            "source_block_ref": "",
+            "uncertainty": [],
+        }
+    ]
+
+    report = validate_extraction_unit_package(data)
+
+    assert report.passed
+
+
+def test_reading_validation_rejects_blank_string_list_items() -> None:
+    data = _valid_package().to_dict()
+    data["concepts"][0]["aliases"] = [""]
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "empty_string_list_item" in _codes(report)
+
+
 def test_registry_delta_validation_accepts_safe_proposals() -> None:
     delta = RegistryDelta(
         delta_id="delta-0001",
