@@ -135,12 +135,36 @@ def build_unit_reading_finalization_payload(
 
 
 def flatten_segment_results(segment_results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Flatten per-segment extraction results for unit finalization payloads."""
+    """Flatten per-segment extraction results, scoping local IDs to unit-unique IDs.
+
+    Segment-local ``concept-0001`` becomes ``{segment_id}-concept-0001``,
+    and ``concept_refs`` in atomic items are rewritten to match.
+    """
     concepts: list[dict[str, Any]] = []
     atomic_items: list[dict[str, Any]] = []
+
     for result in segment_results:
-        concepts.extend(_list(result.get("concepts")))
-        atomic_items.extend(_list(result.get("atomic_items")))
+        segment_id = result.get("segment_id", "unknown-segment")
+        concept_id_map: dict[str, str] = {}
+
+        for concept in _list(result.get("concepts")):
+            local_id = concept.get("concept_id", "")
+            scoped_id = f"{segment_id}-{local_id}" if local_id else local_id
+            concept_id_map[local_id] = scoped_id
+            scoped = dict(concept)
+            scoped["concept_id"] = scoped_id
+            concepts.append(scoped)
+
+        for item in _list(result.get("atomic_items")):
+            local_id = item.get("item_id", "")
+            scoped_id = f"{segment_id}-{local_id}" if local_id else local_id
+            scoped = dict(item)
+            scoped["item_id"] = scoped_id
+            scoped["concept_refs"] = [
+                concept_id_map.get(ref, ref) for ref in _list(item.get("concept_refs"))
+            ]
+            atomic_items.append(scoped)
+
     return {
         "concepts": concepts,
         "atomic_items": atomic_items,

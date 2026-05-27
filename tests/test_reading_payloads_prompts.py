@@ -210,13 +210,32 @@ def test_finalization_payload_declares_forbidden_legacy_core_fields() -> None:
     assert "logical_groups" in payload["expected_output"]["core_fields"]
 
 
-def test_flatten_segment_results_collects_reading_records() -> None:
+def test_flatten_segment_results_scopes_ids() -> None:
     flat = flatten_segment_results(
         [
-            {"concepts": [{"concept_id": "c1"}], "atomic_items": [{"item_id": "i1"}]},
-            {"concepts": [{"concept_id": "c2"}], "atomic_items": [{"item_id": "i2"}]},
+            {
+                "segment_id": "seg-0001",
+                "concepts": [{"concept_id": "concept-0001", "surface": "a"}],
+                "atomic_items": [
+                    {"item_id": "item-0001", "concept_refs": ["concept-0001"]}
+                ],
+            },
+            {
+                "segment_id": "seg-0002",
+                "concepts": [{"concept_id": "concept-0001", "surface": "b"}],
+                "atomic_items": [
+                    {"item_id": "item-0001", "concept_refs": ["concept-0001"]}
+                ],
+            },
         ]
     )
 
-    assert flat["concepts"] == [{"concept_id": "c1"}, {"concept_id": "c2"}]
-    assert flat["atomic_items"] == [{"item_id": "i1"}, {"item_id": "i2"}]
+    # Both segments had local concept-0001 — now scoped to unit-unique IDs
+    assert flat["concepts"][0]["concept_id"] == "seg-0001-concept-0001"
+    assert flat["concepts"][1]["concept_id"] == "seg-0002-concept-0001"
+    assert flat["atomic_items"][0]["item_id"] == "seg-0001-item-0001"
+    assert flat["atomic_items"][1]["item_id"] == "seg-0002-item-0001"
+
+    # concept_refs rewritten to match scoped concept IDs
+    assert flat["atomic_items"][0]["concept_refs"] == ["seg-0001-concept-0001"]
+    assert flat["atomic_items"][1]["concept_refs"] == ["seg-0002-concept-0001"]
