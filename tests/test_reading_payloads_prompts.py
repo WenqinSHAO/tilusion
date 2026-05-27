@@ -14,7 +14,6 @@ from tilusion.reading_prompts import (
 )
 
 
-@pytest.mark.xfail(reason="v0.1 per-segment prompt is intentionally stale until commit 5 rewrites it")
 def test_per_segment_extraction_composition_loads_static_contract() -> None:
     generated = generated_prompt_part(
         "context-pack",
@@ -25,11 +24,14 @@ def test_per_segment_extraction_composition_loads_static_contract() -> None:
 
     composition = build_per_segment_extraction_composition([generated])
 
-    assert composition.composition_id == "per-segment-extraction-v0.1"
+    assert composition.composition_id == "per-segment-extraction-v0.2"
     assert composition.parts[0].part_id == "per-segment-extraction-contract"
     assert composition.parts[-1].part_id == "context-pack"
     assert "Return only one JSON object" in composition.content
-    assert composition.to_dict()["parts"][0]["metadata"]["schema_version"] == "reading-unit-v0.1"
+    assert "source_blocks" in composition.content
+    assert "atomic_items" in composition.content
+    assert "Do not create `source_spans`" in composition.content
+    assert composition.to_dict()["parts"][0]["metadata"]["schema_version"] == "reading-unit-v0.3"
 
 
 def test_unit_finalization_composition_has_stable_id() -> None:

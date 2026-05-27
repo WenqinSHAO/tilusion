@@ -4,8 +4,8 @@ from .extraction_prompts import PromptComposition, PromptPart, load_static_promp
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
 
 
-PER_SEGMENT_EXTRACTION_PROMPT_VERSION = "per-segment-extraction-v0.1"
-PER_SEGMENT_EXTRACTION_PROMPT_RESOURCE = "prompt_per_segment_extraction_v0.1.md"
+PER_SEGMENT_EXTRACTION_PROMPT_VERSION = "per-segment-extraction-v0.2"
+PER_SEGMENT_EXTRACTION_PROMPT_RESOURCE = "prompt_per_segment_extraction_v0.2.md"
 UNIT_READING_FINALIZATION_PROMPT_VERSION = "unit-reading-finalization-v0.1"
 UNIT_READING_FINALIZATION_PROMPT_RESOURCE = "prompt_unit_reading_finalization_v0.1.md"
 
