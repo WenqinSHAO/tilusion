@@ -136,6 +136,36 @@ def build_unit_reading_finalization_payload(
     }
 
 
+def build_unit_logical_grouping_payload(
+    *,
+    unit_id: str,
+    unit_text: str,
+    source: dict[str, Any],
+    segments: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+    atomic_items: list[dict[str, Any]],
+    unresolved_items: list[dict[str, Any]],
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the payload for the unit logical grouping + concept delta pass.
+
+    The full *unit_text* is placed early in the payload so that re-runs
+    of this pass share a KV-cache prefix.
+    """
+    return {
+        "task": "unit_logical_grouping",
+        "schema_version": READING_UNIT_SCHEMA_VERSION,
+        "unit_id": unit_id,
+        "unit_text": unit_text,
+        "source": source,
+        "segments": segments,
+        "concepts": concepts,
+        "atomic_items": atomic_items,
+        "unresolved_items": unresolved_items or [],
+        "context": context or {},
+    }
+
+
 def flatten_and_stabilize_segment_results(
     segment_results: list[dict[str, Any]],
     unit_id: str,

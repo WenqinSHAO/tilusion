@@ -23,11 +23,13 @@ from .extraction_pipeline import (
 )
 from .reading_payloads import (
     build_per_segment_extraction_payload,
+    build_unit_logical_grouping_payload,
     build_unit_reading_finalization_payload,
     flatten_and_stabilize_segment_results,
 )
 from .reading_prompts import (
     build_per_segment_extraction_composition,
+    build_unit_logical_grouping_composition,
     build_unit_reading_finalization_composition,
 )
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
@@ -249,6 +251,39 @@ def mock_unit_reading_finalization_response(user_payload: dict[str, Any]) -> dic
     }
 
 
+def mock_unit_logical_grouping_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_id = user_payload.get("unit_id", "unit-0001")
+    concepts = user_payload.get("concepts", [])
+    items = user_payload.get("atomic_items", [])
+    concept_ids = [c["concept_id"] for c in concepts if isinstance(c, dict)]
+    item_ids = [it["item_id"] for it in items if isinstance(it, dict)]
+
+    concept_deltas: list[dict[str, Any]] = []
+    logical_groups: list[dict[str, Any]] = []
+
+    if items:
+        logical_groups.append(
+            {
+                "group_id": "group-0001",
+                "group_type": "other",
+                "summary": "Mock logical group from all items.",
+                "item_refs": item_ids[:],
+                "concept_refs": concept_ids[:],
+                "graph": {},
+                "uncertainty": [],
+                "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+            }
+        )
+
+    return {
+        "unit_id": unit_id,
+        "concept_deltas": concept_deltas,
+        "logical_groups": logical_groups,
+        "unresolved_items": [],
+        "warnings": ["mock unit logical grouping: placeholder records"],
+    }
+
+
 def _id_map(
     source_records: list[dict[str, Any]],
     target_records: list[dict[str, Any]],
@@ -276,6 +311,8 @@ class MockReadingBackend:
             return json.dumps(mock_per_segment_extraction_response(user_payload), ensure_ascii=False)
         if task == "unit_reading_finalization":
             return json.dumps(mock_unit_reading_finalization_response(user_payload), ensure_ascii=False)
+        if task == "unit_logical_grouping":
+            return json.dumps(mock_unit_logical_grouping_response(user_payload), ensure_ascii=False)
 
         raise ValueError(f"MockReadingBackend: unknown task {task!r}")
 
@@ -485,6 +522,212 @@ def run_reading_finalization_pass(
     return record
 
 
+# ── Pass: unit logical grouping ────────────────────────────────────────────────
+
+
+def _apply_concept_deltas(
+    concepts: list[dict[str, Any]],
+    deltas: list[dict[str, Any]],
+    *,
+    unit_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Apply concept deltas to the concept list.
+
+    Returns ``(updated_concepts, remap_dict)`` where *remap_dict* maps
+    old concept IDs to new concept IDs for downstream ref rewriting.
+    """
+    if not deltas:
+        return concepts, {}
+
+    concept_by_id = {c["concept_id"]: c for c in concepts}
+    remap: dict[str, str] = {}
+    next_index = len(concepts)
+
+    for delta in deltas:
+        delta_type = delta.get("delta_type", "")
+        target_refs = delta.get("target_refs", [])
+        changes = delta.get("changes", {})
+
+        if delta_type == "merge":
+            for ref in target_refs:
+                if ref in concept_by_id:
+                    remap[ref] = target_refs[0] if target_refs else ref
+
+        elif delta_type == "split":
+            original_id = target_refs[0] if target_refs else ""
+            split_into = changes.get("split_into", [])
+            if original_id in concept_by_id:
+                del concept_by_id[original_id]
+            for i, new_concept in enumerate(split_into):
+                next_index += 1
+                new_id = f"concept-{next_index:04d}"
+                new_concept["concept_id"] = new_id
+                new_concept.setdefault("provenance", {"grounding": "synthesis", "created_by": "llm_inferred"})
+                concept_by_id[new_id] = new_concept
+                if i == 0 and original_id:
+                    remap[original_id] = new_id
+
+        elif delta_type == "refine":
+            for ref in target_refs:
+                if ref in concept_by_id:
+                    c = concept_by_id[ref]
+                    for field in ("canonical_name", "summary", "aliases", "observed_surfaces", "facets", "uncertainty"):
+                        if field in changes:
+                            c[field] = changes[field]
+
+        elif delta_type == "reclassify":
+            for ref in target_refs:
+                if ref in concept_by_id and "concept_type" in changes:
+                    concept_by_id[ref]["concept_type"] = changes["concept_type"]
+
+    return list(concept_by_id.values()), remap
+
+
+def run_unit_logical_grouping_pass(
+    *,
+    unit_id: str,
+    unit_text: str,
+    source: dict[str, Any],
+    segments: list[ResolvedOverviewSegment],
+    concepts: list[dict[str, Any]],
+    atomic_items: list[dict[str, Any]],
+    unresolved_items: list[dict[str, Any]],
+    backend: LLMBackend,
+    cache_dir: Path,
+    use_cache: bool = True,
+    context: dict[str, Any] | None = None,
+) -> ReadingPassRecord:
+    """Run the unit-level logical grouping + concept delta pass.
+
+    The LLM reviews merged concepts, emits optional corrections as
+    concept deltas, and builds logical groups from atomic items.
+    """
+    prompt = build_unit_logical_grouping_composition()
+    payload = build_unit_logical_grouping_payload(
+        unit_id=unit_id,
+        unit_text=unit_text,
+        source=source,
+        segments=[
+            {
+                "segment_id": s.segment_id,
+                "title": s.title,
+                "summary": s.summary,
+                "source_range": {"start": s.start, "end": s.end},
+            }
+            for s in segments
+        ],
+        concepts=concepts,
+        atomic_items=atomic_items,
+        unresolved_items=unresolved_items,
+        context=context,
+    )
+
+    cache_key = build_pass_cache_key(
+        pass_name="unit-logical-grouping",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=backend.model_identity,
+    )
+    pass_dir = cache_dir / cache_key
+    paths = pass_artifact_paths(pass_dir)
+    result_path = Path(paths["result"])
+    cache_hit = use_cache and result_path.exists()
+
+    if cache_hit:
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+    else:
+        raw_response = backend.complete_json(prompt.content, payload)
+        data = parse_json_response(raw_response)
+
+    # Apply concept deltas, then build validation subject
+    deltas = data.get("concept_deltas", [])
+    updated_concepts, concept_remap = _apply_concept_deltas(
+        concepts, deltas, unit_id=unit_id
+    )
+    groups = data.get("logical_groups", [])
+
+    # Remap item concept_refs for any concept IDs that were merged/renamed
+    updated_items: list[dict[str, Any]] = []
+    for item in atomic_items:
+        updated = dict(item)
+        updated["concept_refs"] = [
+            concept_remap.get(ref, ref) for ref in item.get("concept_refs", [])
+        ]
+        updated_items.append(updated)
+
+    # Remap concept_refs in logical groups
+    updated_groups: list[dict[str, Any]] = []
+    for group in groups:
+        updated = dict(group)
+        updated["concept_refs"] = [
+            concept_remap.get(ref, ref) for ref in group.get("concept_refs", [])
+        ]
+        updated_groups.append(updated)
+
+    # Collect all referenced block IDs for validation (stubs satisfy ref checks)
+    referenced_block_ids: set[str] = set()
+    for concept in updated_concepts:
+        for ref in concept.get("source_block_refs", []):
+            if isinstance(ref, str):
+                referenced_block_ids.add(ref)
+    for item in updated_items:
+        for ref in item.get("source_block_refs", []):
+            if isinstance(ref, str):
+                referenced_block_ids.add(ref)
+
+    validation_subject = {
+        "schema_version": READING_UNIT_SCHEMA_VERSION,
+        "unit_id": unit_id,
+        "source": source,
+        "source_blocks": [
+            {
+                "block_id": bid, "unit_id": unit_id, "segment_id": "",
+                "block_index": 0, "block_type": "unknown", "start": 0, "end": 0,
+                "text": "", "text_hash": "",
+            }
+            for bid in sorted(referenced_block_ids)
+        ],
+        "concepts": updated_concepts,
+        "atomic_items": updated_items,
+        "logical_groups": updated_groups,
+        "unresolved_items": data.get("unresolved_items", []),
+        "validation": {},
+        "context_metadata": {},
+    }
+    validation_report = validate_extraction_unit_package(validation_subject)
+
+    record = ReadingPassRecord(
+        pass_name="unit-logical-grouping",
+        cache_key=cache_key,
+        cache_dir=str(pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data={
+            **data,
+            "concepts": updated_concepts,
+            "atomic_items": updated_items,
+            "logical_groups": updated_groups,
+        },
+        validation_report=validation_report,
+        artifact_paths=paths,
+    )
+
+    if use_cache:
+        _write_reading_pass_artifacts(
+            pass_dir=pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=record.data,
+            validation_report=validation_report,
+            record=record,
+        )
+
+    return record
+
+
 # ── Orchestrator ─────────────────────────────────────────────────────────────
 
 
@@ -497,10 +740,11 @@ def run_reading_pipeline(
     use_cache: bool = True,
     context: dict[str, Any] | None = None,
 ) -> ReadingPipelineRecord:
-    """Run the full reading pipeline: overview → per-segment extraction → finalization.
+    """Run the full reading pipeline: overview → per-segment → logical grouping.
 
-    Reuses the existing overview/segmentation pass, then runs the new
-    reading-model per-segment extraction and unit finalization passes.
+    Reuses the existing overview/segmentation pass, then runs deterministic
+    source block splitting, per-segment concept/item extraction, deterministic
+    concept merging, and unit-level logical grouping with optional concept deltas.
     """
     from .book_reader import build_book_index, extract_unit_text as unit_text
 
@@ -513,7 +757,7 @@ def run_reading_pipeline(
 
     book_path = Path(book_path)
     index = build_book_index(book_path)
-    unit = index.units_by_id[unit_id]
+    unit = index.unit_map()[unit_id]
     text = unit_text(unit, book_path)
     source = {
         "book_path": str(book_path),
@@ -577,35 +821,37 @@ def run_reading_pipeline(
         [r.data for r in segment_records], unit_id=unit_id
     )
 
-    # ── Step 3: Unit reading finalization ──
+    # ── Step 3: Unit logical grouping ──
     step = 3
     t0 = time.monotonic()
     try:
-        finalization_record = run_reading_finalization_pass(
+        grouping_record = run_unit_logical_grouping_pass(
             unit_id=unit_id,
+            unit_text=text,
             source=source,
             segments=segments,
-            segment_records=segment_records,
+            concepts=stabilized["concepts"],
+            atomic_items=stabilized["atomic_items"],
+            unresolved_items=stabilized.get("unresolved_items", []),
             backend=llm,
-            cache_dir=cache_root / "finalization",
+            cache_dir=cache_root / "logical_grouping",
             use_cache=use_cache,
             context=context,
-            stabilized=stabilized,
         )
-        pass_summaries["unit_reading_finalization"] = {
-            "cache_key": finalization_record.cache_key,
-            "cache_dir": finalization_record.cache_dir,
-            "cache_hit": finalization_record.cache_hit,
-            "artifact_paths": finalization_record.artifact_paths,
+        pass_summaries["unit_logical_grouping"] = {
+            "cache_key": grouping_record.cache_key,
+            "cache_dir": grouping_record.cache_dir,
+            "cache_hit": grouping_record.cache_hit,
+            "artifact_paths": grouping_record.artifact_paths,
             "elapsed_ms": _elapsed_ms(t0),
         }
-        _log_progress(step, TOTAL_STEPS, "Unit finalization", "OK", _elapsed_ms(t0))
+        _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "OK", _elapsed_ms(t0))
     except Exception:
-        _log_progress(step, TOTAL_STEPS, "Unit finalization", "FAILED", _elapsed_ms(t0))
+        _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "FAILED", _elapsed_ms(t0))
         raise
 
-    final_data = finalization_record.data
-    final_validation = finalization_record.validation_report.to_dict()
+    final_data = grouping_record.data
+    final_validation = grouping_record.validation_report.to_dict()
 
     # ── Write unit package ──
     package_path = write_reading_unit_package(

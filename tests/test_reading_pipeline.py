@@ -11,10 +11,13 @@ from tilusion.reading_pipeline import (
     MockReadingBackend,
     ReadingPassRecord,
     ReadingPipelineRecord,
+    _apply_concept_deltas,
     mock_per_segment_extraction_response,
+    mock_unit_logical_grouping_response,
     mock_unit_reading_finalization_response,
     run_per_segment_extraction_pass,
     run_reading_finalization_pass,
+    run_unit_logical_grouping_pass,
     write_reading_unit_package,
 )
 from tilusion.reading_schema import READING_UNIT_SCHEMA_VERSION
@@ -372,3 +375,184 @@ def test_reading_pipeline_record_serialization() -> None:
     assert d["unit_id"] == "unit-0001"
     assert d["elapsed_ms"] == 1234
     assert d["passes"]["overview"]["elapsed_ms"] == 100
+
+
+# ── Mock logical grouping response tests ────────────────────────────────────────
+
+
+def test_mock_logical_grouping_response_builds_group_from_items() -> None:
+    result = mock_unit_logical_grouping_response(
+        {
+            "task": "unit_logical_grouping",
+            "unit_id": "unit-0001",
+            "concepts": [
+                {"concept_id": "concept-0001", "surface": "余", "concept_type": "person"}
+            ],
+            "atomic_items": [
+                {"item_id": "item-0001", "item_type": "event", "summary": "An event."},
+                {"item_id": "item-0002", "item_type": "observation", "summary": "A note."},
+            ],
+        }
+    )
+
+    assert result["unit_id"] == "unit-0001"
+    assert result["concept_deltas"] == []
+    assert len(result["logical_groups"]) == 1
+    g = result["logical_groups"][0]
+    assert g["group_id"] == "group-0001"
+    assert g["item_refs"] == ["item-0001", "item-0002"]
+    assert g["concept_refs"] == ["concept-0001"]
+    assert g["group_type"] == "other"
+    assert result["unresolved_items"] == []
+    assert "mock unit logical grouping" in result["warnings"][0]
+
+
+def test_mock_logical_grouping_empty_items() -> None:
+    result = mock_unit_logical_grouping_response(
+        {
+            "task": "unit_logical_grouping",
+            "unit_id": "unit-0001",
+            "concepts": [],
+            "atomic_items": [],
+        }
+    )
+    assert result["logical_groups"] == []
+    assert result["concept_deltas"] == []
+
+
+def test_mock_backend_dispatches_unit_logical_grouping() -> None:
+    backend = MockReadingBackend()
+    payload = {
+        "task": "unit_logical_grouping",
+        "unit_id": "unit-0001",
+        "concepts": [],
+        "atomic_items": [],
+    }
+    raw = backend.complete_json("system prompt", payload)
+    result = json.loads(raw)
+    assert result["unit_id"] == "unit-0001"
+    assert result["logical_groups"] == []
+
+
+# ── Concept delta application tests ─────────────────────────────────────────────
+
+
+def test_apply_concept_deltas_refine() -> None:
+    concepts = [
+        {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+         "canonical_name": "", "summary": "old summary"}
+    ]
+    deltas = [
+        {"delta_type": "refine", "target_refs": ["concept-0001"],
+         "changes": {"canonical_name": "沈复", "summary": "new summary"}}
+    ]
+    updated, remap = _apply_concept_deltas(concepts, deltas, unit_id="unit-0001")
+
+    assert len(updated) == 1
+    assert updated[0]["canonical_name"] == "沈复"
+    assert updated[0]["summary"] == "new summary"
+    assert updated[0]["concept_id"] == "concept-0001"
+    assert remap == {}
+
+
+def test_apply_concept_deltas_reclassify() -> None:
+    concepts = [
+        {"concept_id": "concept-0001", "surface": "芸", "concept_type": "other"}
+    ]
+    deltas = [
+        {"delta_type": "reclassify", "target_refs": ["concept-0001"],
+         "changes": {"concept_type": "person"}}
+    ]
+    updated, remap = _apply_concept_deltas(concepts, deltas, unit_id="unit-0001")
+
+    assert updated[0]["concept_type"] == "person"
+
+
+def test_apply_concept_deltas_merge() -> None:
+    concepts = [
+        {"concept_id": "concept-0001", "surface": "沈复", "concept_type": "person"},
+        {"concept_id": "concept-0002", "surface": "三白", "concept_type": "person"},
+    ]
+    deltas = [
+        {"delta_type": "merge", "target_refs": ["concept-0001", "concept-0002"],
+         "changes": {"canonical_name": "沈复"}}
+    ]
+    updated, remap = _apply_concept_deltas(concepts, deltas, unit_id="unit-0001")
+
+    # Both old IDs remap to concept-0001
+    assert remap["concept-0002"] == "concept-0001"
+    assert remap["concept-0001"] == "concept-0001"
+
+
+def test_apply_concept_deltas_split() -> None:
+    concepts = [
+        {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+         "summary": "merged narrator"}
+    ]
+    deltas = [
+        {"delta_type": "split", "target_refs": ["concept-0001"],
+         "changes": {"split_into": [
+             {"surface": "余", "concept_type": "person", "summary": "narrator ch1"},
+             {"surface": "余", "concept_type": "person", "summary": "narrator ch3"},
+         ]}}
+    ]
+    updated, remap = _apply_concept_deltas(concepts, deltas, unit_id="unit-0001")
+
+    assert len(updated) == 2
+    assert updated[0]["concept_id"] == "concept-0002"
+    assert updated[0]["summary"] == "narrator ch1"
+    assert updated[1]["concept_id"] == "concept-0003"
+    assert updated[1]["summary"] == "narrator ch3"
+    assert remap["concept-0001"] == "concept-0002"
+
+
+def test_apply_concept_deltas_empty_deltas() -> None:
+    concepts = [{"concept_id": "concept-0001"}]
+    updated, remap = _apply_concept_deltas(concepts, [], unit_id="unit-0001")
+    assert updated == concepts
+    assert remap == {}
+
+
+# ── Logical grouping pass tests ─────────────────────────────────────────────────
+
+
+def test_run_unit_logical_grouping_pass_with_mock(tmp_path: Path) -> None:
+    backend = MockReadingBackend()
+    source = {"book_path": "test.txt"}
+    segments = [_make_segment("seg-0001", "Test segment.")]
+
+    concepts = [
+        {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+         "source_block_refs": ["seg-0001-block-0000"]}
+    ]
+    items = [
+        {"item_id": "item-0001", "item_type": "event", "summary": "An event.",
+         "source_block_refs": ["seg-0001-block-0000"],
+         "concept_refs": ["concept-0001"],
+         "temporal_attributes": [], "attributes": {}, "uncertainty": [],
+         "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}}
+    ]
+
+    record = run_unit_logical_grouping_pass(
+        unit_id="unit-0001",
+        unit_text="Test segment.",
+        source=source,
+        segments=segments,
+        concepts=concepts,
+        atomic_items=items,
+        unresolved_items=[],
+        backend=backend,
+        cache_dir=tmp_path / "cache",
+        use_cache=True,
+    )
+
+    assert record.pass_name == "unit-logical-grouping"
+    assert record.cache_hit is False
+    assert record.data["unit_id"] == "unit-0001"
+    assert len(record.data["logical_groups"]) == 1
+    assert record.data["logical_groups"][0]["group_id"] == "group-0001"
+    assert record.validation_report.passed
+
+    assert Path(record.artifact_paths["result"]).exists()
+    assert Path(record.artifact_paths["manifest"]).exists()
+    assert Path(record.artifact_paths["validation_report"]).exists()
