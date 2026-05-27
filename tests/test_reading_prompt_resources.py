@@ -6,6 +6,7 @@ from importlib import resources
 READING_PROMPT_RESOURCES = [
     "prompt_per_segment_extraction_v0.2.md",
     "prompt_unit_reading_finalization_v0.1.md",
+    "prompt_unit_logical_grouping_v0.1.md",
 ]
 
 

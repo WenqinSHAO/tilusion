@@ -13,6 +13,7 @@ from tilusion.reading_payloads import (
 from tilusion.reading_schema import SourceBlock
 from tilusion.reading_prompts import (
     build_per_segment_extraction_composition,
+    build_unit_logical_grouping_composition,
     build_unit_reading_finalization_composition,
 )
 
@@ -39,6 +40,18 @@ def test_per_segment_extraction_composition_loads_static_contract() -> None:
 
 def test_unit_finalization_composition_has_stable_id() -> None:
     assert build_unit_reading_finalization_composition().composition_id == "unit-reading-finalization-v0.1"
+
+
+def test_unit_logical_grouping_composition_loads_static_contract() -> None:
+    composition = build_unit_logical_grouping_composition()
+
+    assert composition.composition_id == "unit-logical-grouping-v0.1"
+    assert composition.parts[0].part_id == "unit-logical-grouping-contract"
+    assert "Return only one JSON object" in composition.content
+    assert "concept_deltas" in composition.content
+    assert "logical_groups" in composition.content
+    assert "merge|split|refine|reclassify" in composition.content
+    assert "unresolved_items" in composition.content
 
 
 def test_per_segment_extraction_payload_includes_source_blocks_and_marked_text() -> None:
