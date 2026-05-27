@@ -33,8 +33,8 @@ def test_per_segment_extraction_prompt_uses_deterministic_source_blocks() -> Non
 
     assert "deterministic source blocks" in content
     assert "Do not invent block IDs" in content
-    assert "Do not create `source_spans`" in content
+    assert "inline block boundary markers" in content
     assert "concepts" in content
     assert "atomic_items" in content
-    assert "logical_groups" in content
+    assert "logical groups" in content
     assert "schema-light" in content

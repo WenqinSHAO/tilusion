@@ -14,8 +14,8 @@ The caller provides JSON with:
 - `schema_version`: `reading-unit-v0.3`.
 - `unit_id`: parent reader unit identifier.
 - `segment`: restored segment metadata, including `segment_id`, optional region classification, summary, and source range.
-- `source_blocks`: deterministic source blocks for this segment. Each block has `block_id`, `block_type`, `start`, `end`, and exact `text`.
-- `text`: exact source text for the segment, provided for reading continuity only.
+- `source_blocks`: deterministic source block metadata for this segment. Each block has `block_id`, `block_type`, `start`, and `end` (unit-level character offsets). Block text is NOT included here — read it from the `text` field via the inline block markers.
+- `text`: exact segment source text with inline block boundary markers. Each block's text is wrapped as `{block_id:block_type}` ... `{/block_id}`. The markers are machine-generated and never appear in the original source. Read the text inside each marker pair as the block's exact content.
 - `context`: optional prior document context for alias and continuity guidance only.
 
 Return only one JSON object. Do not include prose, markdown, or code fences.
@@ -37,11 +37,10 @@ Minimum shape:
     {
       "concept_id": "concept-0001",
       "surface": "exact source surface",
-      "concept_type": "person|place|term|method|theme|time_anchor|other|custom",
-      "canonical_name": null,
+      "concept_type": "person|place|term|method|theme|time_anchor|event_type|object|organization|work|concept|phenomenon|condition|relationship|role|metric|component|format|substance|other|custom",
+      "canonical_name": "",
       "summary": "brief source-grounded note",
       "aliases": [],
-      "alias_candidates": [],
       "observed_surfaces": ["exact source surface"],
       "source_block_refs": ["seg-0001-block-0000"],
       "facets": [],
@@ -65,11 +64,7 @@ Minimum shape:
           "uncertainty": []
         }
       ],
-      "attributes": {
-        "argument_role": null,
-        "narrative_role": null,
-        "salience": "high|medium|low"
-      },
+      "attributes": {},
       "uncertainty": [],
       "provenance": {"grounding": "source_grounded", "created_by": "llm"}
     }
@@ -81,13 +76,13 @@ Minimum shape:
 Rules:
 
 - Current `source_blocks` are the only evidence source for records returned by this pass.
-- Prior context may guide alias candidates, continuity, and duplicate detection, but must not be cited as evidence.
-- Do not create `source_spans`, `source_blocks`, `links`, `derived_views`, `logical_groups`, `timelines`, `entity_records`, `location_records`, `atom_records`, or `thread_records`.
+- Read each block's text from the inline `{block_id:block_type}...{/block_id}` markers in the `text` field. The block text between markers is the exact source content for that block.
+- Prior context may guide alias detection, continuity, and duplicate detection, but must not be cited as evidence.
 - Do not invent block IDs. Every `source_block_refs` and temporal `source_block_ref` must refer to one of the provided `source_blocks[*].block_id` values.
 - Concept and atomic item IDs are segment-local. Use stable simple IDs like `concept-0001` and `item-0001`; the caller will scope and reindex them later.
-- A `concept.surface` must be copied exactly from the current source block text.
+- A `concept.surface` must be copied exactly from the source block text inside the corresponding inline markers.
 - `concept_type` is schema-light. Use a recommended type when it fits; otherwise use `other` or a concise custom string. Do not force people/location/time extraction.
-- Use `observed_surfaces` for exact forms found in this segment. Use `aliases` only for aliases directly supported by this segment. Use `alias_candidates` for uncertain alias relationships suggested by context or local evidence.
+- Use `observed_surfaces` for exact forms found in this segment. Use `aliases` only for aliases directly supported by this segment.
 - Atomic items should be compact source-grounded compressions. Prefer fewer meaningful items over one item per sentence.
 - An atomic item may cite multiple non-contiguous source blocks when one meaning unit is distributed across the segment.
 - Multiple atomic items may cite the same source block.
@@ -102,5 +97,5 @@ Region guidance:
 - Dialogue-heavy segments: capture speakers, addressed persons, salient actions, emotional/social roles, and any relationship-changing exchanges.
 - Narrative or scene segments: capture event-like items, scene descriptions, participants, places, objects, motifs, and time anchors when present.
 - Expository or argumentative segments: capture terms, claims, arguments, evidence statements, methods, examples, limitations, and questions.
-- Technical/paper-like segments: capture methods, datasets, metrics, technical components, results, limitations, and source statements.
+- Technical/paper-like segments: capture methods, datasets, metrics, technical components, results, usecaes, scenarios, conditions, limitations, and source statements.
 - Sparse/front-matter/table/note-only segments: return minimal concepts/items, avoid over-extraction, and explain in `warnings`.

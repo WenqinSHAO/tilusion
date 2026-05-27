@@ -5,20 +5,82 @@ from typing import Any
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
 
 
+def render_text_with_block_markers(
+    segment_text: str,
+    source_blocks: list[Any],
+    segment_offset: int,
+) -> str:
+    """Render segment text with inline block boundary markers.
+
+    Each block's text is wrapped as ``{block_id:block_type}...{/block_id}``.
+    Blocks must be contiguous and cover the full segment text.
+    """
+    parts: list[str] = []
+    cursor = 0
+
+    for block in source_blocks:
+        # block.start/end are unit-level offsets; convert to segment-local
+        local_start = block.start - segment_offset
+        local_end = block.end - segment_offset
+
+        if local_start < 0 or local_end > len(segment_text):
+            raise ValueError(
+                f"Block {block.block_id} range [{local_start}, {local_end}) "
+                f"exceeds segment bounds [0, {len(segment_text)})"
+            )
+
+        # Text between previous block and this one (should be empty for contiguous blocks)
+        if local_start < cursor:
+            raise ValueError(
+                f"Block {block.block_id} overlaps with previous block at offset {local_start}"
+            )
+        if local_start > cursor:
+            parts.append(segment_text[cursor:local_start])
+
+        parts.append(f"{{{block.block_id}:{block.block_type}}}")
+        parts.append(segment_text[local_start:local_end])
+        parts.append(f"{{/{block.block_id}}}")
+        cursor = local_end
+
+    if cursor < len(segment_text):
+        parts.append(segment_text[cursor:])
+
+    return "".join(parts)
+
+
+def _source_block_meta(block: Any) -> dict[str, Any]:
+    """Extract metadata-only dict from a SourceBlock for LLM payloads."""
+    return {
+        "block_id": block.block_id,
+        "block_type": block.block_type,
+        "start": block.start,
+        "end": block.end,
+    }
+
+
 def build_per_segment_extraction_payload(
     *,
     unit_id: str,
     segment: dict[str, Any],
     text: str,
+    source_blocks: list[Any] | None = None,
+    segment_offset: int = 0,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    blocks = source_blocks or []
+    marked_text = (
+        render_text_with_block_markers(text, blocks, segment_offset)
+        if blocks
+        else text
+    )
     return {
         "task": "per_segment_extraction",
         "schema_version": READING_UNIT_SCHEMA_VERSION,
         "unit_id": unit_id,
         "segment": segment,
+        "source_blocks": [_source_block_meta(b) for b in blocks],
+        "text": marked_text,
         "context": context or {},
-        "text": text,
     }
 
 
