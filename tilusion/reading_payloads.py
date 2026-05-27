@@ -222,12 +222,25 @@ def flatten_and_stabilize_segment_results(
         stabilized["item_id"] = f"item-{i + 1:04d}"
         stabilized_items.append(stabilized)
 
+    # ── Phase 5: compute stabilization metrics ──
+    concepts_before = len(concepts)
+    concepts_after = len(merged_concepts)
+    stabilization_metrics = {
+        "concepts_before_merge": concepts_before,
+        "concepts_after_merge": concepts_after,
+        "merge_count": concepts_before - concepts_after,
+        "ambiguous_surface_count": sum(
+            1 for u in unresolved_items if u.get("kind") == "ambiguous_concept_surface"
+        ),
+    }
+
     return {
         "source_blocks": source_blocks,
         "concepts": merged_concepts,
         "atomic_items": stabilized_items,
         "unresolved_items": unresolved_items,
         "warnings": warnings,
+        "metrics": {"stabilization": stabilization_metrics},
     }
 
 

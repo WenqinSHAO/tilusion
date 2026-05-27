@@ -71,6 +71,40 @@ def _log_progress(step: int, total: int, description: str, status: str, elapsed_
     print(f"  [{step}/{total}] {description}: {status} ({elapsed_ms}ms)", file=sys.stderr)
 
 
+def _aggregate_per_segment_metrics(
+    segment_records: list[ReadingPassRecord],
+) -> dict[str, Any]:
+    """Aggregate per-segment extraction metrics across all segments."""
+    total_blocks = 0
+    total_concepts = 0
+    total_items = 0
+    total_sb_refs = 0
+    segment_metrics: list[dict[str, Any]] = []
+
+    for record in segment_records:
+        m = record.data.get("metrics", {})
+        sb = m.get("source_blocks", {})
+        ex = m.get("extraction", {})
+        total_blocks += ex.get("block_count", 0)
+        total_concepts += ex.get("concept_count", 0)
+        total_items += ex.get("item_count", 0)
+        segment_metrics.append({
+            "segment_id": record.data.get("segment_id", ""),
+            "source_block_metrics": sb,
+            "extraction_metrics": ex,
+        })
+
+    return {
+        "total_blocks": total_blocks,
+        "total_concepts": total_concepts,
+        "total_items": total_items,
+        "concepts_per_block": round(total_concepts / total_blocks, 2) if total_blocks else 0.0,
+        "items_per_block": round(total_items / total_blocks, 2) if total_blocks else 0.0,
+        "segment_count": len(segment_records),
+        "per_segment": segment_metrics,
+    }
+
+
 def _raise_on_validation_errors(pass_name: str, report: ReadingValidationReport) -> None:
     if report.passed:
         return
@@ -254,7 +288,7 @@ def run_per_segment_extraction_pass(
     segment_text = segment.text
     block_unit_text = unit_text if unit_text is not None else segment_text
     block_unit_offset = segment.start if unit_text is not None else 0
-    blocks, _block_metrics = split_source_blocks(
+    blocks, block_metrics = split_source_blocks(
         segment_text,
         segment_id=segment.segment_id,
         unit_id=unit_id,
@@ -314,9 +348,32 @@ def run_per_segment_extraction_pass(
     validation_report = validate_extraction_unit_package(validation_subject)
     _raise_on_validation_errors("per-segment-extraction", validation_report)
 
+    # Compute per-segment extraction metrics
+    llm_concepts = data.get("concepts", [])
+    llm_items = data.get("atomic_items", [])
+    n_blocks = len(blocks)
+    n_concepts = len(llm_concepts)
+    n_items = len(llm_items)
+    total_sb_refs = sum(
+        len(_as_list(it.get("source_block_refs"))) for it in llm_items if isinstance(it, dict)
+    )
+
+    extraction_metrics = {
+        "block_count": n_blocks,
+        "concept_count": n_concepts,
+        "item_count": n_items,
+        "concepts_per_block": round(n_concepts / n_blocks, 2) if n_blocks else 0.0,
+        "items_per_block": round(n_items / n_blocks, 2) if n_blocks else 0.0,
+        "avg_source_blocks_per_item": round(total_sb_refs / n_items, 2) if n_items else 0.0,
+    }
+
     enriched_data = {
         **data,
         "source_blocks": [b.to_dict() for b in blocks],
+        "metrics": {
+            "source_blocks": block_metrics.to_dict(),
+            "extraction": extraction_metrics,
+        },
     }
 
     record = ReadingPassRecord(
@@ -445,6 +502,65 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _compute_grouping_metrics(
+    groups: list[dict[str, Any]],
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compute quality metrics from the logical grouping pass output."""
+    group_count = len(groups)
+    singleton_count = 0
+    groups_with_graph = 0
+    total_edges = 0
+
+    items_in_groups: set[str] = set()
+    for group in groups:
+        refs = _as_list(group.get("item_refs"))
+        if len(refs) == 1:
+            singleton_count += 1
+        for ref in refs:
+            if isinstance(ref, str):
+                items_in_groups.add(ref)
+        graph = group.get("graph")
+        if isinstance(graph, dict):
+            edges = _as_list(graph.get("edges"))
+            if edges:
+                groups_with_graph += 1
+                total_edges += len(edges)
+
+    all_item_ids = {
+        it["item_id"] for it in items if isinstance(it, dict) and "item_id" in it
+    }
+    ungrouped_count = len(all_item_ids - items_in_groups)
+
+    temporal_event_count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("item_type") not in ("event", "action", "scene"):
+            continue
+        tas = item.get("temporal_attributes")
+        if isinstance(tas, list) and any(
+            isinstance(ta, dict) and ta.get("kind") in ("explicit", "implicit", "relative")
+            for ta in tas
+        ):
+            temporal_event_count += 1
+
+    has_timeline = any(
+        g.get("group_type") in ("timeline", "temporal_sequence") for g in groups
+    )
+
+    return {
+        "group_count": group_count,
+        "singleton_group_count": singleton_count,
+        "groups_with_graph_count": groups_with_graph,
+        "total_graph_edges": total_edges,
+        "items_in_any_group": len(items_in_groups),
+        "ungrouped_item_count": ungrouped_count,
+        "event_items_with_temporal_hints": temporal_event_count,
+        "has_timeline_group": has_timeline,
+    }
+
+
 def run_unit_logical_grouping_pass(
     *,
     unit_id: str,
@@ -543,6 +659,9 @@ def run_unit_logical_grouping_pass(
     validation_report = validate_extraction_unit_package(validation_subject)
     _raise_on_validation_errors("unit-logical-grouping", validation_report)
 
+    # ── Compute grouping metrics ──
+    grouping_metrics = _compute_grouping_metrics(updated_groups, updated_items)
+
     record = ReadingPassRecord(
         pass_name="unit-logical-grouping",
         cache_key=cache_key,
@@ -560,6 +679,7 @@ def run_unit_logical_grouping_pass(
             "logical_groups": updated_groups,
             "validation": validation_report.to_dict(),
             "context_metadata": {"context_injection": context is not None},
+            "metrics": {"grouping": grouping_metrics},
         },
         validation_report=validation_report,
         artifact_paths=paths,
@@ -673,6 +793,12 @@ def run_reading_pipeline(
         [r.data for r in segment_records], unit_id=unit_id
     )
 
+    # ── Aggregate pipeline metrics ──
+    pipeline_metrics: dict[str, Any] = {
+        "per_segment": _aggregate_per_segment_metrics(segment_records),
+        "stabilization": stabilized.get("metrics", {}).get("stabilization", {}),
+    }
+
     # ── Step 3: Unit logical grouping ──
     step = 3
     t0 = time.monotonic()
@@ -703,6 +829,8 @@ def run_reading_pipeline(
         _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "FAILED", _elapsed_ms(t0))
         raise
 
+    pipeline_metrics["grouping"] = grouping_record.data.get("metrics", {}).get("grouping", {})
+
     final_data = {
         "schema_version": READING_UNIT_SCHEMA_VERSION,
         "unit_id": unit_id,
@@ -715,7 +843,7 @@ def run_reading_pipeline(
         "validation": grouping_record.validation_report.to_dict(),
         "context_metadata": {"context_injection": context is not None},
     }
-    final_validation_report = validate_extraction_unit_package(final_data)
+    final_validation_report = validate_extraction_unit_package(final_data, metrics=pipeline_metrics)
     _raise_on_validation_errors("reading-unit-package", final_validation_report)
     final_data["validation"] = final_validation_report.to_dict()
     final_validation = final_validation_report.to_dict()
