@@ -47,17 +47,17 @@
 
 **Generalized reading-pipeline direction**
 - Current extraction branch exposed the limit of event/timeline-centered modeling: `event` became `atom`, but the architecture still privileges entity/location/thread/timeline records.
-- New canonical direction: tilusion is a source-grounded reading workspace, with revised core flow `source text → deterministic source blocks → concepts + atomic items → unit concepts/logical groups → derived views → cross-unit registry deltas`.
+- New canonical direction: tilusion is a source-grounded reading workspace, with revised core flow `source text -> deterministic source blocks -> concepts + atomic items -> logical groups with optional graphs -> cross-unit registry deltas`.
 - Canonical plan: `docs/source_grounded_reading_pipeline.md`.
-- Reading schema scaffold added: `tilusion/reading_schema.py` defines type-open source spans, source blocks, concepts, logical groups, links, derived views, unit packages, document snapshots, registry deltas, ambiguity items, and user correction operations.
+- Reading schema scaffold added: `tilusion/reading_schema.py`, but it is now partly stale: the next implementation should simplify around source blocks, concepts, atomic items, and logical groups rather than preserving separate source spans, links, derived views, concept mentions, and unit concepts.
 - Reading validation scaffold added: `tilusion/reading_validation.py` validates package shape, IDs, refs, source-grounded links, synthesis links, derived-view non-authority, prior-context evidence misuse, and registry delta safety.
-- First reading-pipeline prompt contracts added under `tilusion/prompts/`: source-block/concept, logical-group, link-structure, and unit-reading-finalization.
-- Reading prompt composition and payload builders added: `tilusion/reading_prompts.py` and `tilusion/reading_payloads.py` prepare versioned prompts and schema-aware request payloads without runtime pipeline wiring yet.
-- Unit-0002 reading trial review documented: current generalized pipeline regressed because source blocks are too LLM-driven, per-segment extraction is overloaded, derived timeline views are absent, finalization is too shallow, and deterministic ID reindexing corrupts repeated segment-local refs. The fix order is now deterministic source blocks first, then per-segment atomic-item extraction, then ID/ref stabilization.
+- First reading-pipeline prompt contracts added under `tilusion/prompts/`, but the next prompt iteration should make per-segment extraction stop at concepts and atomic items over deterministic source blocks.
+- Reading prompt composition and payload builders added: `tilusion/reading_prompts.py` and `tilusion/reading_payloads.py`; these should be adapted to the simplified pipeline instead of extended in their current verbose form.
+- Unit-0002 reading trial review documented: current generalized pipeline regressed because source blocks are too LLM-driven, per-segment extraction is overloaded, logical grouping happens too early, timeline-as-view is absent, and repeated segment-local refs can corrupt final records. The fix order is now deterministic source blocks first, per-segment concepts + atomic items second, segment-scoped ID/ref stabilization third, then unit-level logical grouping with optional timeline/discourse/theme graphs.
 
 ## Ongoing
 
 - Current goal: refactor extraction from event/timeline-centered records to the generalized source-grounded reading model.
-- Immediate next step: revise the reading pipeline around deterministic source blocks and a simpler per-segment output (`concept_mentions` + `atomic_items` over block refs), then fix segment-scoped ID/ref stabilization, then add unit-level grouping and derived timeline views.
+- Immediate next step: start a clean implementation from the revised plan: deterministic source blocks and simplified schema first, then per-segment concepts + atomic items over block refs, then segment-scoped ID/ref stabilization, then unit-level logical groups with optional graphs.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.

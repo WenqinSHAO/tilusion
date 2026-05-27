@@ -10,12 +10,12 @@ The revised core pipeline is:
 
 ```text
 source text
-→ deterministic source blocks
-→ per-segment concept mentions + atomic items over source blocks
-→ unit-level concept unification + item stabilization
-→ unit-level logical/thematic grouping
-→ derived views such as timelines, discourse graphs, claim maps, and theme maps
-→ cross-unit registry deltas
+-> deterministic source blocks
+-> per-segment concepts + atomic items over source blocks
+-> unit-level concept unification + item stabilization
+-> unit-level logical/thematic grouping
+-> graph-shaped derived views such as timelines, discourse graphs, claim maps, and theme maps
+-> cross-unit registry deltas
 ```
 
 Timelines are useful, but they are one derived view. They are not the source of truth.
@@ -27,9 +27,9 @@ The immediate correction after the unit-0002 reading trial is to stop asking the
 **Schema-light, type-open, source-grounded:**
 
 - Keep the outer data envelopes stable.
-- Allow `concept_type`, `item_type`, `group_type`, and `view_type` to be extensible strings.
-- Start with short recommended type sets. The LLM uses these as a starter vocabulary; `other` and justified custom strings are always accepted.
-- Validate IDs, source-block refs, provenance, confidence, and context use strictly.
+- Allow `concept_type`, `item_type`, `group_type`, `view_type`, and graph edge types to be extensible strings.
+- Start with short recommended type sets. The LLM uses these as a starter vocabulary; `other` and justified custom strings are accepted.
+- Validate IDs, source-block refs, provenance, context use, and references strictly.
 - Do not privilege people, locations, time expressions, events, or timelines as the only extraction model.
 - Do not require every genre to use every type.
 
@@ -37,40 +37,141 @@ The immediate correction after the unit-0002 reading trial is to stop asking the
 
 - Source blocks are built before LLM extraction.
 - A block may be a natural paragraph, a dialogue turn, a line, or a short sequence of sentences, depending on source layout and size.
-- The block splitter should prefer natural paragraphs when they are not too large, and split oversized paragraphs into sentence-ish blocks.
-- Source blocks should carry stable unit/segment coordinates and exact text.
+- The splitter should prefer natural paragraphs when they are not too large, and split oversized paragraphs into sentence-ish blocks.
+- Source blocks carry stable unit/segment coordinates and exact text.
 - Source blocks do not contain back-references to extracted items. Avoid two-way references in the data model.
 - Extracted atomic items reference source blocks with `source_block_refs`. That is the authoritative direction.
+
+**No confidence as a core field:**
+
+- The current pipeline does not operationally use confidence for merging, canonicalization, or validation.
+- Keep explicit `uncertainty` and `review_notes` fields instead. They are easier for humans and later repair passes to act on.
+- Add confidence later only if a concrete downstream decision uses it.
 
 **Prior document context** is guidance for aliasing, continuity, duplicate detection, and retrieval. It is never evidence for facts in the current unit.
 
 **KV cache reuse:** source text is stable across passes. The overview pass loads the full unit text; later unit-level passes can reuse that source text prefix. Per-segment extraction loads source blocks for one segment at a time.
 
-## Generalized Data Model
+## Core Data Model
 
-### Confidence values
+The core unit package should stay small and one-directional:
 
-`high`, `medium`, `low`, `unknown`
+```json
+{
+  "schema_version": "reading-unit-v0.3",
+  "unit_id": "unit-0002",
+  "source": {},
+  "source_blocks": [],
+  "concepts": [],
+  "atomic_items": [],
+  "logical_groups": [],
+  "unresolved_items": [],
+  "validation": {},
+  "context_metadata": {}
+}
+```
 
-### Grounding / provenance values
+### Recommended Type Values
 
-`source_grounded`, `synthesis`, `deterministic`, `llm_inferred`, `user_corrected`
+Recommended `concept_type` values:
 
-### Recommended concept_type values
+- `person`
+- `group`
+- `organization`
+- `place`
+- `object`
+- `term`
+- `method`
+- `theme`
+- `motif`
+- `time_anchor`
+- `emotion`
+- `social_role`
+- `institution`
+- `symbol`
+- `scene_element`
+- `technical_component`
+- `dataset`
+- `metric`
+- `source`
+- `other`
 
-`person`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `other`
+Recommended `item_type` values:
 
-### Recommended item_type values
+- `event`
+- `scene`
+- `action`
+- `claim`
+- `argument`
+- `statement`
+- `observation`
+- `description`
+- `method`
+- `technique`
+- `result`
+- `limitation`
+- `habit`
+- `question`
+- `unresolved_issue`
+- `definition`
+- `example`
+- `comparison`
+- `contrast`
+- `background`
+- `note`
+- `other`
 
-`event`, `scene`, `action`, `claim`, `argument`, `statement`, `observation`, `description`, `method`, `habit`, `question`, `other`
+Recommended `group_type` values:
 
-### Recommended group_type values
+- `timeline`
+- `temporal_sequence`
+- `theme_set`
+- `concept_map`
+- `discourse_graph`
+- `claim_evidence_map`
+- `viewpoint_evolution`
+- `open_thread_list`
+- `method_example_set`
+- `motif_development`
+- `contrast_set`
+- `other`
 
-`temporal_sequence`, `theme_set`, `claim_evidence_set`, `method_example_set`, `motif_development`, `open_question_set`, `contrast_set`, `other`
+Recommended graph edge types:
 
-### Recommended view_type values
+- `mentions`
+- `refers_to`
+- `aliases`
+- `same_as_candidate`
+- `part_of`
+- `elaborates`
+- `supports`
+- `contradicts`
+- `qualifies`
+- `contrasts`
+- `causes`
+- `enables`
+- `explains`
+- `follows_from`
+- `precedes`
+- `continues`
+- `resolves`
+- `raises_question`
+- `answers_question`
+- `exemplifies`
+- `defines`
+- `uses_method`
+- `produces_result`
+- `has_limitation`
+- `related_to`
+- `other`
 
-`timeline`, `discourse_graph`, `claim_evidence_map`, `theme_map`, `viewpoint_evolution`, `open_thread_list`, `other`
+Recommended provenance values:
+
+- `source_grounded`
+- `synthesis`
+- `deterministic`
+- `llm_inferred`
+- `user_corrected`
 
 ### SourceBlock
 
@@ -92,24 +193,34 @@ The immediate correction after the unit-0002 reading trial is to stop asking the
 }
 ```
 
-Source blocks are the grounding primitive. They should be deterministic and navigable. They should not list concepts, atomic items, groups, or views that cite them.
+Source blocks are the grounding primitive. They should be deterministic, navigable, and reviewable in the source reader. They should not list concepts, atomic items, groups, or views that cite them.
 
-### ConceptMention
+UI note: when a user activates a source block in the future reader, the app can navigate to the atomic items and logical groups that cite it. That is a UI/query concern, not a reason to add reverse references to the stored block.
+
+### Concept
+
+`Concept` replaces both old per-segment `ConceptMention` and unit-level `UnitConcept`.
 
 ```json
 {
-  "mention_id": "mention-0001",
-  "surface": "exact source surface",
+  "concept_id": "concept-000001",
+  "surface": "芸",
   "concept_type": "person|place|term|method|theme|time_anchor|other|custom",
-  "canonical_name": "optional normalized name",
-  "local_summary": "brief source-grounded note",
-  "aliases_or_candidates": [],
+  "canonical_name": "陈芸",
+  "summary": "brief source-grounded note",
+  "aliases": ["淑珍"],
+  "alias_candidates": [],
+  "observed_surfaces": ["芸", "陈芸", "淑珍"],
   "source_block_refs": ["block-0001"],
-  "confidence": "high|medium|low|unknown",
-  "facets": ["behaves_like_person", "speaker", "time_anchor"],
-  "uncertainty": []
+  "facets": ["behaves_like_person", "speaker"],
+  "uncertainty": [],
+  "provenance": {
+    "grounding": "source_grounded"
+  }
 }
 ```
+
+Per-segment extraction may emit local concepts. Unit-level stabilization may merge repeated local concepts into one unit concept. Across units, the canonical registry may update aliases and summaries. This is the same conceptual object at different scopes, so the interface should not split it into separate mention and unit-concept models.
 
 ### AtomicItem
 
@@ -119,14 +230,13 @@ Source blocks are the grounding primitive. They should be deterministic and navi
   "item_type": "event|scene|action|claim|argument|statement|observation|description|method|habit|question|other",
   "summary": "short source-grounded compression",
   "source_block_refs": ["block-0001", "block-0002"],
-  "concept_refs": ["mention-0001"],
+  "concept_refs": ["concept-000001"],
   "temporal_attributes": [
     {
       "kind": "explicit|implicit|relative|none",
       "surface": "乾隆庚子正月二十二日",
       "normalized_hint": "1780-02-26",
       "source_block_ref": "block-0001",
-      "confidence": "high",
       "uncertainty": []
     }
   ],
@@ -135,7 +245,6 @@ Source blocks are the grounding primitive. They should be deterministic and navi
     "narrative_role": "setup|turning_point|resolution|null",
     "salience": "high|medium|low"
   },
-  "confidence": "high|medium|low|unknown",
   "uncertainty": [],
   "provenance": {
     "grounding": "source_grounded"
@@ -145,34 +254,39 @@ Source blocks are the grounding primitive. They should be deterministic and navi
 
 Atomic items are the per-segment extraction product. They replace early `logical_groups` in the per-segment pass. They are not necessarily events.
 
-### UnitConcept
-
-```json
-{
-  "concept_id": "concept-000001",
-  "canonical_name": "陈芸",
-  "concept_types": ["person"],
-  "facets": ["behaves_like_person"],
-  "aliases": ["芸", "淑珍"],
-  "observed_surfaces": [],
-  "summary": "compact unit-level summary",
-  "mention_refs": ["mention-0001"],
-  "confidence": "high|medium|low|unknown",
-  "alias_candidates": [],
-  "merge_split_uncertainty": []
-}
-```
-
 ### LogicalGroup
+
+`LogicalGroup` is the general higher-level structure. It also replaces separate `DerivedStructure`; derived timelines, discourse graphs, theme maps, and claim maps are graph-shaped logical groups.
 
 ```json
 {
   "group_id": "group-0001",
-  "group_type": "temporal_sequence|theme_set|claim_evidence_set|method_example_set|other",
-  "summary": "unit-level grouping of related atomic items",
+  "group_type": "timeline|theme_set|claim_evidence_map|discourse_graph|viewpoint_evolution|other",
+  "summary": "unit-level grouping or view over related atomic items",
   "item_refs": ["item-0001", "item-0007"],
   "concept_refs": ["concept-000001"],
-  "confidence": "high|medium|low|unknown",
+  "graph": {
+    "nodes": [
+      {
+        "node_id": "node-0001",
+        "item_ref": "item-0001",
+        "label": "optional display label"
+      }
+    ],
+    "edges": [
+      {
+        "source": "node-0001",
+        "target": "node-0002",
+        "edge_type": "precedes|supports|contradicts|elaborates|related_to|other",
+        "summary": "brief explanation of the relationship",
+        "source_block_refs": ["block-0003"],
+        "provenance": {
+          "grounding": "source_grounded|synthesis"
+        },
+        "uncertainty": []
+      }
+    ]
+  },
   "uncertainty": [],
   "provenance": {
     "grounding": "source_grounded|synthesis"
@@ -180,41 +294,9 @@ Atomic items are the per-segment extraction product. They replace early `logical
 }
 ```
 
-Logical groups are unit-level structures. They should usually be built after cross-segment item stabilization, not in the first per-segment extraction pass.
+A simple group can omit `graph` and behave like a stack/list of atomic items. A timeline is a `LogicalGroup` with `group_type: "timeline"` and a graph whose edges usually include `precedes`, `continues`, or `causes`. A discourse graph is the same base structure with argument-oriented edge types.
 
-### DerivedStructure
-
-```json
-{
-  "view_id": "view-0001",
-  "view_type": "timeline|discourse_graph|claim_evidence_map|theme_map|viewpoint_evolution|open_thread_list",
-  "input_item_refs": [],
-  "input_group_refs": [],
-  "structure": {},
-  "confidence": "high|medium|low|unknown",
-  "generated_by": "deterministic|llm",
-  "is_source_of_truth": false
-}
-```
-
-### ExtractionUnitPackage
-
-```json
-{
-  "schema_version": "reading-unit-v0.2",
-  "unit_id": "unit-0002",
-  "source": {},
-  "source_blocks": [],
-  "concept_mentions": [],
-  "atomic_items": [],
-  "unit_concepts": [],
-  "logical_groups": [],
-  "derived_views": [],
-  "unresolved_items": [],
-  "validation": {},
-  "context_metadata": {}
-}
-```
+## Document State And Registry Delta
 
 ### DocumentStateSnapshot
 
@@ -226,7 +308,6 @@ Logical groups are unit-level structures. They should usually be built after cro
   "reusable_item_summaries": [],
   "reusable_group_summaries": [],
   "cross_unit_links": [],
-  "derived_checkpoints": [],
   "ambiguity_queue": [],
   "transactions": []
 }
@@ -239,12 +320,20 @@ Logical groups are unit-level structures. They should usually be built after cro
   "delta_id": "delta-...",
   "base_snapshot_id": "snapshot-...",
   "unit_id": "unit-0003",
-  "operations": [],
+  "operations": [
+    {
+      "operation_type": "new_concept|alias_candidate|merge_proposal|summary_update|logical_group_continuation|cross_unit_link|ambiguity_item|user_review_needed",
+      "payload": {},
+      "provenance": {}
+    }
+  ],
   "validation": {}
 }
 ```
 
-## Pipeline Stages (Revised)
+No raw LLM output should destructively mutate document state. It proposes a delta. Deterministic validation and, when needed, user approval apply the delta to a new snapshot.
+
+## Pipeline Stages
 
 ### Stage 1: Overview / Segmentation
 
@@ -254,7 +343,9 @@ Input: reader unit text, reader metadata, optional compact context summary.
 
 Output: restored source regions with anchor quotes and extraction hints.
 
-Backend: LLM-backed, followed by deterministic span restoration.
+Backend: LLM-backed, followed by deterministic segment restoration.
+
+Why separate: the overview pass needs the whole unit and should decide reading windows before detailed extraction begins.
 
 ### Stage 2: Deterministic Source Block Construction
 
@@ -279,13 +370,14 @@ Purpose: annotate deterministic source blocks with concepts and atomic items.
 
 Input: source blocks for one segment, segment metadata, optional context pack.
 
-Output: `ConceptMention` and `AtomicItem` records.
+Output: local `Concept` and `AtomicItem` records.
 
 Backend: LLM-backed, deterministic validation after.
 
 This pass should stop at:
 
-- concept mentions,
+- concepts,
+- atomic items,
 - source-block-to-item mapping through `atomic_items[*].source_block_refs`,
 - item attributes,
 - temporal attributes when present.
@@ -294,7 +386,7 @@ This pass should not build:
 
 - cross-segment concept unification,
 - unit-level logical groups,
-- dense links,
+- dense link graphs,
 - timelines,
 - discourse graphs,
 - theme maps.
@@ -303,50 +395,37 @@ This pass should not build:
 
 Purpose: deduplicate and stabilize per-segment records.
 
-Input: source blocks, concept mentions, atomic items, validation reports.
+Input: source blocks, local concepts, atomic items, validation reports.
 
-Output: unit package with stabilized item IDs and unit concepts.
+Output: unit package with stable concept and item IDs.
 
-Backend: LLM-backed plus deterministic ID/ref handling.
+Backend: deterministic ID/ref handling plus LLM-backed semantic deduplication when useful.
 
 ### Stage 5: Unit-Level Logical/Thematic Grouping
 
 Purpose: form logical/thematic groups from stabilized atomic items.
 
-Input: unit concepts and atomic items.
+Input: stable concepts and atomic items.
 
-Output: `LogicalGroup` records.
+Output: `LogicalGroup` records, with optional graph structure.
 
 Backend: LLM-backed with deterministic validation.
 
-This is the right level for grouping scattered items across segments.
+This is the right level for grouping scattered items across segments. It is also where event-like items can become timelines, claims can become claim/evidence maps, and motifs can become theme maps. These are group/view outputs over atomic items, not new sources of truth.
 
-### Stage 6: Derived Views
-
-Purpose: build timelines, discourse graphs, claim/evidence maps, theme maps, viewpoint evolution, or open-thread lists from stabilized records.
-
-Input: unit concepts, atomic items, logical groups, temporal attributes.
-
-Output: `DerivedStructure` records.
-
-Backend: deterministic where possible, LLM-backed when synthesis is needed.
-
-Timeline is a special derived view over event-like atomic items with explicit or inferable temporal attributes. It should reuse the old successful timeline practices: partial order, DAG validation, no forced total order, and no unnecessary timelines.
-
-### Stage 7: Cross-Unit Registry Delta
+### Stage 6: Cross-Unit Registry Delta
 
 Future stage. It should operate only after unit-level extraction is stable.
 
+Input: finalized unit package and selected document context pack.
+
+Output: validated registry delta against the current document snapshot.
+
+Backend: LLM-backed proposal plus deterministic validation and transaction write.
+
 ## Current State Review
 
-The current `cross-unit-refactor` branch has a usable but narrative-biased pipeline:
-
-- `run-chain` performs overview segmentation, deterministic segment restoration, per-segment extraction, validation, and repair-hint generation.
-- `finalize-unit` merges segment records into unit-level entities, locations, atoms, threads, unresolved items, and quality notes.
-- `repair-unit` repairs unit-level extraction from deterministic hints.
-- `timeline-unit` builds optional partially ordered timelines from atom records.
-- `repair-timeline` repairs timeline validation failures.
-- `run-all` writes `.tilusion_cache/units/<unit_id>/unit_package.json`.
+The current `cross-unit-refactor` branch has useful infrastructure, but parts remain tied to the older event/timeline-centered model and the first generalized reading trial showed quality regressions.
 
 Strong parts to preserve:
 
@@ -354,30 +433,30 @@ Strong parts to preserve:
 - Inspectable pass artifacts: prompt composition, system prompt, request payload, raw response, parsed result, validation report, validated result, and manifest.
 - Deterministic evidence relocation and source-window reconstruction.
 - Separation between local validation reports and concise LLM repair payloads.
-- Context packs whose hashes are included in cache keys when `context_injection.enabled` is true.
+- Context packs whose hashes are included in cache keys when context injection is true.
 - Reader/index layer with stable unit IDs and source coordinate extraction.
 
 Current concepts to rename or generalize:
 
-- `evidence_spans` → `source_spans` and `source_blocks`.
-- `entity_mentions` + `location_mentions` → `concept_mentions`.
-- `time_expressions` → concept mentions of type `time_anchor`, plus temporal hints on groups when useful.
-- `atom_mentions` / `atom_records` → `logical_groups`.
-- `thread_candidates` / `thread_records` → open-question, theme, continuity, or thread-like derived structures built from groups and links.
-- `timelines` → `derived_views` of type `timeline`.
-- `book_context` → document state/context pack with canonical concepts, compact group summaries, links, ambiguity queues, and derived checkpoints.
+- `evidence_spans` / `source_spans` -> deterministic `source_blocks` as the primary grounding layer.
+- `entity_mentions` + `location_mentions` + `time_expressions` -> `concepts` with extensible `concept_type`.
+- `atom_mentions` / `atom_records` -> `atomic_items`.
+- `thread_candidates` / `thread_records` -> `logical_groups` such as open-thread lists, theme sets, or continuity groups.
+- `timelines` -> `logical_groups` with `group_type: "timeline"` and graph edges.
+- `book_context` -> document state/context pack with canonical concepts, compact item/group summaries, links, and ambiguity queues.
 
 Current concepts to remove or decenter:
 
 - Timeline construction as a required core pass.
 - Fixed `entity/location/time/event/thread/timeline` top-level schema.
 - Thread as a universal organizing container.
-- Old `event_records` compatibility shims.
-
+- Separate `DerivedStructure` as a parallel top-level model.
+- Separate `ConceptMention` and `UnitConcept` schemas.
+- Confidence as a required core field.
 
 ## Unit-0002 Reading Trial Review
 
-A first LLM-backed reading-pipeline trial on `unit-0002` produced a valid-looking generalized package shape, but the extraction quality regressed compared with the older timeline-centered pipeline.
+A first LLM-backed reading-pipeline trial on `unit-0002` produced a valid-looking generalized package shape, but extraction quality regressed compared with the older timeline-centered pipeline.
 
 Artifacts reviewed:
 
@@ -397,86 +476,81 @@ Observed new package shape:
 
 ### What Went Wrong
 
-**1. Timeline reasoning is absent, not merely weaker.**
+**1. The grounding layer was too LLM-driven.**
 
-The new pipeline currently runs overview, per-segment extraction, and finalization only. Derived views are documented as downstream and optional, but no derived-view pass exists yet. Therefore timeline reasoning and timeline construction are completely missing from the new output. This is an implementation gap, not evidence that the generalized reading model cannot support timelines.
+The prompt asked the LLM to invent both `source_spans` and `source_blocks`. The result was verbose and inconsistent. Source blocks should be deterministic navigation units; the LLM should cite them.
 
-The older reference path supplied for comparison is itself only unit finalization and does not contain final timelines. The useful timeline behavior lived in subsequent `unit_timeline` and `unit_timeline_repair` artifacts, which built 43 event records into timeline views. A fair comparison must include a new derived timeline view built from logical groups.
+**2. The per-segment pass was overloaded.**
 
-**2. Finalization has a deterministic ID/reference bug.**
+The pass asked for spans, blocks, concepts, logical groups, and links at once. The output became paragraph-local and verbose. Per-segment extraction should stop at concepts and atomic items.
 
-Per-segment extraction outputs repeat local IDs such as `block-0001`, `group-0001`, and `link-0001` across segments. The current deterministic reindexing maps by raw local ID only, so later segment IDs overwrite earlier segment IDs. This corrupts references after reindexing.
+**3. Logical grouping happened too early and too weakly.**
 
-The current result also leaves stale `logical_groups[*].link_refs` pointing to old link IDs, producing validation errors. This is a correctness bug that should be fixed before prompt tuning or additional LLM trials.
+Many groups were single-block or single-event groups. Meaningful logical/thematic grouping needs a unit-level view after cross-segment concept and item stabilization.
 
-**3. Source block extraction is too LLM-driven.**
+**4. Timeline reasoning was absent.**
 
-The prompt asks the LLM to invent both `source_spans` and `source_blocks`. The result has many source spans and blocks, with block construction varying by segment. Source blocks should be a deterministic navigation layer wherever possible. The LLM should cite source blocks and optionally propose smaller evidence spans, not be responsible for creating the whole block layer.
+The new pipeline had no derived-view/group pass yet. Timelines should return as `LogicalGroup` records with `group_type: "timeline"`, built from event-like atomic items and temporal attributes.
 
-**4. The all-in-one per-segment pass is overloaded.**
+**5. Segment-local IDs corrupted final references.**
 
-The simplified pass asks for source spans, blocks, concepts, logical groups, and links in one response. This is efficient, but the output suggests the LLM is doing mostly paragraph-local extraction instead of higher-level semantic grouping. Many logical groups are single-block or single-event groups, and finalization does not merge them enough.
+Per-segment extraction repeated local IDs such as `block-0001`, `group-0001`, and `link-0001`. Reindexing by raw ID can overwrite earlier segment records. The rewrite should scope local IDs by segment before flattening or avoid LLM-generated grounding IDs entirely.
 
-**5. Finalization is not doing semantic finalization.**
+## Fix Sequence
 
-The finalization response mostly preserves or concatenates per-segment records. It does not sufficiently deduplicate concepts, merge cross-segment groups, compress related events/observations, or prepare derived views. The deterministic reindexer then normalizes IDs but cannot create semantic quality.
-
-## Fix Sequence After Unit-0002 Review
-
-The next work should prioritize deterministic correctness before prompt tuning.
-
-### Step 1: Fix Deterministic ID Scoping And Reindexing
-
-- Scope every segment-local ID with `segment_id` before flattening, or make the reindexer operate on `(segment_id, local_id)` pairs.
-- Update all refs consistently: span refs, block refs, concept refs, group refs, link refs, source-order hints, evidence refs, and derived-view refs when present.
-- Update `logical_groups[*].link_refs`; do not leave stale link IDs after reindexing.
-- Add tests with two segments that both contain `block-0001`, `group-0001`, and `link-0001` to prove refs do not cross-wire.
-- Treat a failed final validation report as a hard failure or at least make the CLI clearly report it.
-
-### Step 2: Make Source Blocks Deterministic
+### Step 1: Make Source Blocks Deterministic
 
 - Build source blocks from restored segment text using deterministic paragraph/line/sentence-ish splitting.
 - Assign stable unit-level coordinates and block IDs before LLM extraction.
 - Pass these blocks to the LLM and ask it to cite `source_block_refs`.
-- Keep `source_spans` as smaller evidence spans or quotes when useful, but do not let the LLM define the primary navigation block layer.
 - Add coverage metrics: block count, covered chars, uncovered gaps, and average block size.
 
-### Step 3: Add Reading Quality Metrics
+### Step 2: Change Per-Segment Extraction Shape
+
+- Emit only local concepts and atomic items.
+- Require atomic items to cite one or more deterministic source blocks.
+- Allow temporal attributes on event-like or time-bearing items.
+- Do not emit logical groups, dense links, timelines, or derived views at this stage.
+
+### Step 3: Fix Cross-Segment ID Scoping And Reindexing
+
+- Scope every segment-local ID with `segment_id` before flattening, or make the reindexer operate on `(segment_id, local_id)` pairs.
+- Update all refs consistently: source block refs, concept refs, item refs, group graph node refs, and graph edge evidence refs.
+- Add tests with two segments that both contain local `concept-0001` and `item-0001` to prove refs do not cross-wire.
+- Treat a failed final validation report as a hard failure or make the CLI clearly report it.
+
+### Step 4: Add Unit-Level Logical/Thematic Grouping
+
+- Merge cross-segment concepts.
+- Stabilize atomic items.
+- Group related items into logical groups.
+- Represent timeline, discourse, claim/evidence, theme, and open-thread views as logical groups with optional graphs.
+
+### Step 5: Add Reading Quality Metrics
 
 Add deterministic quality checks beyond schema validity:
 
-- group/block ratio
+- atomic item/source block ratio
 - singleton group rate
-- average source blocks per group
+- average source blocks per item
 - unreferenced source block count
 - concepts per block
-- links per group
-- unresolved link refs
-- event-like group count
-- event-like groups with temporal hints
-- derived timeline absent when event-like temporal groups exist
+- graph edges per group
+- unresolved refs
+- event-like item count
+- event-like items with temporal hints
+- missing timeline group when event-like temporal items are present and salient
 
 These metrics should first be reported as warnings, not hard errors.
 
-### Step 4: Restore Timeline As A Derived View
+### Step 6: Then Tune Extraction Behavior
 
-- Add a derived timeline pass that consumes finalized `logical_groups`, `links`, and temporal hints.
-- Only event-like groups need timeline placement.
-- Store the result under `derived_views` with `view_type: timeline` and `is_source_of_truth: false`.
-- Reuse the old timeline validation ideas: DAG checks, phantom refs, self-loop detection, missing event-like groups when expected, and no forced total ordering.
+Only after the deterministic layer and output shape are correct:
 
-### Step 5: Then Tune Extraction Behavior
-
-Only after the deterministic layer is correct:
-
-- Reconsider whether per-segment extraction should remain one pass or split into source-block/concept extraction followed by logical grouping/linking.
-- Tighten prompts so logical groups are meaning units, not one group per paragraph or one group per surface event.
-- Add guidance for when to merge blocks into one logical group and when not to.
-- Add finalization instructions that actively deduplicate concepts and merge cross-segment logical groups while preserving ambiguity.
-
-### Current Priority
-
-Do not tune the LLM prompt first. The next commit should change source-block ownership: deterministic source blocks first, then per-segment extraction over those blocks. Segment-scoped ID/ref fixes should follow after the new per-segment output shape is stable.
+- Tighten prompts so atomic items are compact source-grounded compressions.
+- Add guidance for when multiple source blocks belong to one item.
+- Add unit-level grouping guidance that actively merges related items while preserving ambiguity.
+- Add graph guidance for timeline/discourse/theme structures without forcing irrelevant views.
 
 ## Validation And Tests
 
@@ -484,93 +558,68 @@ Required tests:
 
 - Recommended concept types are accepted.
 - Custom/open concept types are accepted and preserved.
-- Recommended group/link types are accepted.
-- Custom/open group/link types are accepted and preserved.
-- Source-grounded concept mentions require source block/span refs.
-- Source-grounded links require evidence block refs.
-- Synthesis links must be marked as synthesis and cannot pretend to be direct evidence.
-- One logical group can cite non-contiguous source blocks.
-- Multiple logical groups can share a source block.
-- Timeline is a derived view, not a core package field.
-- Discourse graph is a derived view, not a core package field.
+- Recommended item/group/edge types are accepted.
+- Custom/open item/group/edge types are accepted and preserved.
+- Source-grounded concepts require source block refs.
+- Source-grounded atomic items require source block refs.
+- Graph edges with `source_grounded` provenance require source block refs.
+- Synthesis graph edges must be marked as synthesis and cannot pretend to be direct evidence.
+- One atomic item can cite non-contiguous source blocks.
+- Multiple atomic items can share a source block.
+- Timeline is a logical group/view over atomic items, not a core package field.
+- Discourse graph is a logical group/view over atomic items, not a core package field.
 - Registry deltas validate against a base snapshot hash.
-- Prior context cannot appear in evidence refs for current-unit records.
+- Prior context cannot appear in source refs for current-unit records.
 - Merge proposals do not mutate canonical records unless applied by a validated transaction.
 - Cache keys include context-pack hashes when context injection is enabled.
-- Multi-pass provenance survives from source span to concept/group/link/unit package.
+- Multi-pass provenance survives from source block to concept/item/group/unit package.
 
 Likely modules:
 
 - `tilusion/reading_schema.py`
+- `tilusion/source_blocks.py`
 - `tilusion/reading_validation.py`
 - `tilusion/reading_prompts.py`
 - `tilusion/reading_payloads.py`
 - `tilusion/reading_pipeline.py`
 - `tilusion/document_state.py`
 - `tilusion/registry_delta.py`
-- `tilusion/derived_views.py`
 
 ## Implementation Sequence
 
-### Commit 1: Canonical Plan (done)
+### Commit 1: Canonical Plan
 
-- Add this document.
+- Revise this document around deterministic source blocks, concepts, atomic items, and logical groups.
 - Compact `PROGRESS.md` around the new direction.
-- Remove stale extraction planning docs.
+- Remove or ignore stale extraction planning docs that duplicate this plan.
 
-### Commit 2: Reading Schema (done)
+### Commit 2: Source Block Splitter And Schema
 
-- Add `tilusion/reading_schema.py`.
-- Define stable outer envelopes, recommended type constants (~8 each), confidence values, grounding values, and JSON helpers.
-- Add tests for type-open schema behavior.
+- Add deterministic source block construction.
+- Define simplified dataclasses/schema for source blocks, concepts, atomic items, and logical groups.
+- Add validation tests for the simplified model.
 
-### Commit 3: Generalized Validation (done)
+### Commit 3: Per-Segment Extraction Over Source Blocks
 
-- Add `tilusion/reading_validation.py`.
-- Validate spans, blocks, concepts, groups, links, derived views, unit packages, and provenance.
-- Add deterministic tests before LLM prompt changes.
+- Update prompt composition to provide source blocks.
+- Update per-segment prompt to emit concepts and atomic items only.
+- Cache prompt composition, request payload, raw response, parsed response, validation, and validated output.
 
-### Commit 4: Prompt Resources (done)
+### Commit 4: Unit Stabilization
 
-- Add per-segment extraction prompt (source spans + concepts + groups + links, one pass).
-- Add unit finalization prompt.
-- Keep prompts externalized and versioned.
-- Do not run expensive LLM calls yet.
+- Reindex segment outputs with segment-scoped local IDs.
+- Merge concepts within a unit.
+- Stabilize item IDs and refs.
+- Add tests for duplicate local IDs across segments.
 
-### Commit 5: Payload And Prompt Composition (done)
+### Commit 5: Unit Logical Grouping
 
-- Add `tilusion/reading_payloads.py` and `tilusion/reading_prompts.py`.
-- Reuse `PromptPart` / `PromptComposition`.
+- Add a unit-level grouping prompt/pass.
+- Represent timelines, discourse graphs, theme maps, and open threads as logical groups with optional graphs.
+- Validate graph refs and provenance.
 
-### Commit 6: Mock Backend
+### Commit 6: Cross-Unit Registry Delta
 
-- Add mock responses for per-segment extraction and unit finalization.
-- Keep tests LLM-free.
-
-### Commit 7: Reading Pipeline Orchestrator
-
-- Add `tilusion/reading_pipeline.py`.
-- Wire stages 1-3: overview/segmentation (reuse existing), per-segment extraction (one pass), cross-segment finalization.
-- Write artifacts for every pass.
-- Produce `ExtractionUnitPackage`.
-
-### Commit 8: Derived Views
-
-- Add timeline, discourse graph, claim/evidence map, theme map, viewpoint evolution, and open-thread list builders.
-- Keep them downstream of unit packages.
-
-### Commit 9: CLI Wiring
-
-- Add or replace CLI commands for the new reading pipeline.
-- Compatibility with old event/timeline commands is not required.
-
-### Commit 10: LLM Trials
-
-- Run mock first.
-- Then run DeepSeek on unit-0002 and unit-0003 after schema, validation, cache, and artifact layout are stable.
-
-### Later: Document Context + Registry Delta
-
-- Replace entity/location/thread/event/timeline registry with canonical concepts, group summaries, links, ambiguity queue, and derived checkpoints.
-- Add registry delta schema, deterministic validation, transaction logs, and snapshot writes.
-- This needs a more detailed plan once unit-level extraction is stable.
+- Propose document-state deltas from finalized unit packages.
+- Validate deltas before snapshot writes.
+- Keep raw LLM proposals inspectable and non-destructive.
