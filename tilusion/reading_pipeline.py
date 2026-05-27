@@ -496,7 +496,7 @@ def run_reading_pipeline(
     Reuses the existing overview/segmentation pass, then runs the new
     reading-model per-segment extraction and unit finalization passes.
     """
-    from .extraction_pipeline import build_book_index, unit_text
+    from .book_reader import build_book_index, extract_unit_text as unit_text
 
     total_start = time.monotonic()
     llm = backend or MockReadingBackend()
@@ -528,7 +528,7 @@ def run_reading_pipeline(
             cache_dir=cache_root / "overview",
             use_cache=use_cache,
         )
-        segments = resolve_overview_segments(overview_record, unit, text)
+        segments = resolve_overview_segments(overview_record.data, text)
         pass_summaries["overview_segmentation"] = {
             "cache_key": overview_record.cache_key,
             "cache_dir": overview_record.cache_dir,
