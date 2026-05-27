@@ -30,6 +30,9 @@ def test_mock_backend_dispatches_per_segment_extraction() -> None:
         "task": "per_segment_extraction",
         "unit_id": "unit-0001",
         "segment": {"segment_id": "seg-0001"},
+        "source_blocks": [
+            {"block_id": "seg-0001-block-0000", "block_type": "paragraph", "start": 0, "end": 33}
+        ],
         "text": "A short segment.\nWith two lines.",
         "context": {},
     }
@@ -39,14 +42,11 @@ def test_mock_backend_dispatches_per_segment_extraction() -> None:
 
     assert result["unit_id"] == "unit-0001"
     assert result["segment_id"] == "seg-0001"
-    assert len(result["source_spans"]) == 1
-    assert result["source_spans"][0]["span_id"] == "span-seg-0001-0001"
-    assert result["source_spans"][0]["quote"] == "A short segment."
-    assert len(result["source_blocks"]) == 1
-    assert len(result["concept_mentions"]) == 1
-    assert len(result["logical_groups"]) == 1
-    assert len(result["links"]) == 1
-    assert result["links"][0]["grounding"] == "source_grounded"
+    assert len(result["concepts"]) == 1
+    assert result["concepts"][0]["concept_id"] == "concept-0001"
+    assert result["concepts"][0]["source_block_refs"] == ["seg-0001-block-0000"]
+    assert len(result["atomic_items"]) == 1
+    assert result["atomic_items"][0]["concept_refs"] == ["concept-0001"]
     assert "mock per-segment extraction" in result["warnings"][0]
 
 
@@ -55,11 +55,13 @@ def test_mock_per_segment_extraction_handles_empty_text() -> None:
         {
             "unit_id": "unit-0001",
             "segment": {"segment_id": "seg-empty"},
+            "source_blocks": [],
             "text": "",
         }
     )
 
-    assert result["source_spans"][0]["quote"] == ""
+    assert result["concepts"] == []
+    assert result["atomic_items"] == []
 
 
 def test_mock_backend_dispatches_unit_reading_finalization() -> None:
@@ -216,10 +218,9 @@ def _make_segment(segment_id: str = "seg-0001", text: str = "A test segment.") -
     )
 
 
-@pytest.mark.xfail(reason="v0.1 per-segment pipeline is intentionally stale until commit 6 rewrites it")
 def test_run_per_segment_extraction_pass_with_mock(tmp_path: Path) -> None:
     backend = MockReadingBackend()
-    segment = _make_segment(text="Alice defines entropy.\nBob disagrees.")
+    segment = _make_segment(text="Alice defines entropy and Bob disagrees.")
 
     record = run_per_segment_extraction_pass(
         unit_id="unit-0001",
@@ -231,11 +232,8 @@ def test_run_per_segment_extraction_pass_with_mock(tmp_path: Path) -> None:
 
     assert record.pass_name == "per-segment-extraction"
     assert record.cache_hit is False
-    assert len(record.data["source_spans"]) == 1
-    assert len(record.data["source_blocks"]) == 1
-    assert len(record.data["concept_mentions"]) == 1
-    assert len(record.data["logical_groups"]) == 1
-    assert len(record.data["links"]) == 1
+    assert len(record.data["concepts"]) == 1
+    assert len(record.data["atomic_items"]) == 1
     assert record.validation_report.passed
 
     # Verify artifacts were written

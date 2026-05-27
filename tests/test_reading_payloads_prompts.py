@@ -213,12 +213,10 @@ def test_finalization_payload_declares_forbidden_legacy_core_fields() -> None:
 def test_flatten_segment_results_collects_reading_records() -> None:
     flat = flatten_segment_results(
         [
-            {"source_spans": [{"span_id": "s1"}], "logical_groups": [{"group_id": "g1"}]},
-            {"source_blocks": [{"block_id": "b1"}], "links": [{"link_id": "l1"}]},
+            {"concepts": [{"concept_id": "c1"}], "atomic_items": [{"item_id": "i1"}]},
+            {"concepts": [{"concept_id": "c2"}], "atomic_items": [{"item_id": "i2"}]},
         ]
     )
 
-    assert flat["source_spans"] == [{"span_id": "s1"}]
-    assert flat["source_blocks"] == [{"block_id": "b1"}]
-    assert flat["logical_groups"] == [{"group_id": "g1"}]
-    assert flat["links"] == [{"link_id": "l1"}]
+    assert flat["concepts"] == [{"concept_id": "c1"}, {"concept_id": "c2"}]
+    assert flat["atomic_items"] == [{"item_id": "i1"}, {"item_id": "i2"}]

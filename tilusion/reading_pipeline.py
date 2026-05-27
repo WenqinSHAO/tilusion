@@ -31,6 +31,7 @@ from .reading_prompts import (
     build_unit_reading_finalization_composition,
 )
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
+from .source_blocks import split_source_blocks
 from .reading_validation import (
     ReadingValidationReport,
     validate_extraction_unit_package,
@@ -129,74 +130,43 @@ def mock_per_segment_extraction_response(user_payload: dict[str, Any]) -> dict[s
     unit_id = user_payload.get("unit_id", "unit-0001")
     segment = user_payload.get("segment", {})
     segment_id = segment.get("segment_id", "seg-0001")
-    text = user_payload.get("text", "")
-    first = _first_nonempty_line(text)
+    blocks = user_payload.get("source_blocks", [])
+    first_block_id = blocks[0]["block_id"] if blocks else f"{segment_id}-block-0000"
 
-    span_id = f"span-{segment_id}-0001"
-    block_id = f"block-{segment_id}-0001"
-    mention_id = f"mention-{segment_id}-0001"
-    group_id = f"group-{segment_id}-0001"
-    link_id = f"link-{segment_id}-0001"
+    concepts = [
+        {
+            "concept_id": "concept-0001",
+            "surface": "mock surface",
+            "concept_type": "other",
+            "source_block_refs": [first_block_id],
+            "canonical_name": "",
+            "summary": f"Mock concept from {segment_id}.",
+            "aliases": [],
+            "observed_surfaces": ["mock surface"],
+            "facets": [],
+            "uncertainty": [],
+            "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"},
+        }
+    ] if blocks else []
+    atomic_items = [
+        {
+            "item_id": "item-0001",
+            "item_type": "observation",
+            "summary": f"Mock item from {segment_id}.",
+            "source_block_refs": [first_block_id],
+            "concept_refs": ["concept-0001"],
+            "temporal_attributes": [],
+            "attributes": {},
+            "uncertainty": [],
+            "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"},
+        }
+    ] if blocks else []
 
     return {
         "unit_id": unit_id,
         "segment_id": segment_id,
-        "source_spans": [
-            {
-                "span_id": span_id,
-                "unit_id": unit_id,
-                "source_range": {"kind": "segment-local-quote", "quote": first},
-                "quote": first,
-                "provenance": {"created_by": "llm", "pass": "per_segment_extraction"},
-            }
-        ],
-        "source_blocks": [
-            {
-                "block_id": block_id,
-                "block_type": "paragraph",
-                "span_refs": [span_id],
-                "source_order": 1,
-                "confidence": "medium",
-            }
-        ],
-        "concept_mentions": [
-            {
-                "mention_id": mention_id,
-                "surface": first[:40] if first else "",
-                "concept_type": "other",
-                "local_summary": f"Mock concept from {segment_id}.",
-                "source_block_refs": [block_id],
-                "source_span_refs": [span_id],
-                "confidence": "low",
-                "facets": [],
-                "uncertainty": [],
-            }
-        ],
-        "logical_groups": [
-            {
-                "group_id": group_id,
-                "group_type": "other",
-                "summary": f"Mock group covering {segment_id}.",
-                "source_block_refs": [block_id],
-                "concept_refs": [mention_id],
-                "source_order_hints": {"first_block": block_id, "last_block": block_id},
-                "confidence": "low",
-                "uncertainty": [],
-                "provenance": {"grounding": "source_grounded", "created_by": "llm"},
-            }
-        ],
-        "links": [
-            {
-                "link_id": link_id,
-                "source_ref": group_id,
-                "target_ref": mention_id,
-                "link_type": "mentions",
-                "evidence_block_refs": [block_id],
-                "confidence": "low",
-                "rationale": "Mock link.",
-                "grounding": "source_grounded",
-            }
-        ],
+        "concepts": concepts,
+        "atomic_items": atomic_items,
         "warnings": ["mock per-segment extraction: placeholder records"],
     }
 
@@ -321,12 +291,27 @@ def run_per_segment_extraction_pass(
     cache_dir: Path,
     use_cache: bool = True,
     context: dict[str, Any] | None = None,
+    unit_text: str | None = None,
 ) -> ReadingPassRecord:
     """Run the reading per-segment extraction pass on one segment.
 
-    Returns source spans, source blocks, concept mentions, logical groups,
-    and links — all in a single LLM call.
+    Splits the segment text into deterministic source blocks, builds a
+    v0.3 per-segment payload with inline block markers, calls the LLM,
+    and validates the returned concepts and atomic_items against the
+    authoritative source blocks.
     """
+    # Deterministic source block splitting
+    segment_text = segment.text
+    block_unit_text = unit_text if unit_text is not None else segment_text
+    block_unit_offset = segment.start if unit_text is not None else 0
+    blocks, _block_metrics = split_source_blocks(
+        segment_text,
+        segment_id=segment.segment_id,
+        unit_id=unit_id,
+        unit_text=block_unit_text,
+        unit_offset=block_unit_offset,
+    )
+
     prompt = build_per_segment_extraction_composition()
     payload = build_per_segment_extraction_payload(
         unit_id=unit_id,
@@ -339,7 +324,9 @@ def run_per_segment_extraction_pass(
                 "end": segment.end,
             },
         },
-        text=segment.text,
+        text=segment_text,
+        source_blocks=blocks,
+        segment_offset=block_unit_offset,
         context=context,
     )
 
@@ -361,17 +348,15 @@ def run_per_segment_extraction_pass(
         raw_response = backend.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
 
-    # Build a temporary unit-package-like dict for validation
+    # Build a v0.3 validation subject with authoritative source blocks
     validation_subject = {
         "schema_version": READING_UNIT_SCHEMA_VERSION,
         "unit_id": unit_id,
-        "source": {},
-        "source_spans": data.get("source_spans", []),
-        "source_blocks": data.get("source_blocks", []),
-        "concept_mentions": data.get("concept_mentions", []),
-        "logical_groups": data.get("logical_groups", []),
-        "links": data.get("links", []),
-        "derived_views": [],
+        "source": {"unit_text": block_unit_text} if unit_text is not None else {},
+        "source_blocks": [b.to_dict() for b in blocks],
+        "concepts": data.get("concepts", []),
+        "atomic_items": data.get("atomic_items", []),
+        "logical_groups": [],
         "unresolved_items": [],
         "validation": {},
         "context_metadata": {},
@@ -439,11 +424,11 @@ def run_reading_finalization_pass(
             }
             for s in segments
         ],
-        source_spans=flat["source_spans"],
-        source_blocks=flat["source_blocks"],
-        concept_mentions=flat["concept_mentions"],
-        logical_groups=flat["logical_groups"],
-        links=flat["links"],
+        source_spans=[],
+        source_blocks=[],
+        concept_mentions=flat["concepts"],
+        logical_groups=[],
+        links=[],
         validation_reports=[r.validation_report.to_dict() for r in segment_records],
         context_metadata={"context_injection": context is not None},
     )
@@ -569,6 +554,7 @@ def run_reading_pipeline(
                 cache_dir=cache_root / "per_segment",
                 use_cache=use_cache,
                 context=context,
+                unit_text=text,
             )
             segment_records.append(seg_record)
         pass_summaries["per_segment_extraction"] = {

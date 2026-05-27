@@ -45,7 +45,7 @@ Minimum shape:
       "source_block_refs": ["seg-0001-block-0000"],
       "facets": [],
       "uncertainty": [],
-      "provenance": {"grounding": "source_grounded", "created_by": "llm"}
+      "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}
     }
   ],
   "atomic_items": [
@@ -66,7 +66,7 @@ Minimum shape:
       ],
       "attributes": {},
       "uncertainty": [],
-      "provenance": {"grounding": "source_grounded", "created_by": "llm"}
+      "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}
     }
   ],
   "warnings": []

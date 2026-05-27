@@ -136,23 +136,14 @@ def build_unit_reading_finalization_payload(
 
 def flatten_segment_results(segment_results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """Flatten per-segment extraction results for unit finalization payloads."""
-    source_spans: list[dict[str, Any]] = []
-    source_blocks: list[dict[str, Any]] = []
-    concept_mentions: list[dict[str, Any]] = []
-    logical_groups: list[dict[str, Any]] = []
-    links: list[dict[str, Any]] = []
+    concepts: list[dict[str, Any]] = []
+    atomic_items: list[dict[str, Any]] = []
     for result in segment_results:
-        source_spans.extend(_list(result.get("source_spans")))
-        source_blocks.extend(_list(result.get("source_blocks")))
-        concept_mentions.extend(_list(result.get("concept_mentions")))
-        logical_groups.extend(_list(result.get("logical_groups")))
-        links.extend(_list(result.get("links")))
+        concepts.extend(_list(result.get("concepts")))
+        atomic_items.extend(_list(result.get("atomic_items")))
     return {
-        "source_spans": source_spans,
-        "source_blocks": source_blocks,
-        "concept_mentions": concept_mentions,
-        "logical_groups": logical_groups,
-        "links": links,
+        "concepts": concepts,
+        "atomic_items": atomic_items,
     }
 
 
