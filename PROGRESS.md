@@ -52,6 +52,7 @@
 - **Current goal:** Rebuild the reading pipeline from scratch following the 12-commit sequence in `docs/source_grounded_reading_pipeline.md`.
 - **Immediate next step:** Commit 11 — quality metrics wiring.
 - **Branch:** `cross-unit-refactor`. Old extraction pipeline (`extraction*.py`) stays untouched as regression baseline. Reading modules (`reading_*.py`) rewritten in-place.
+- Commits 1–10 reviewed 2026-05-28. Three fixes applied: per-segment `warnings` now propagated through `flatten_and_stabilize_segment_results`, dead `elif` branch removed from `_validate_temporal_attributes`, `_list` return type corrected, and unused `alias_candidates` field removed from `Concept` schema.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
 

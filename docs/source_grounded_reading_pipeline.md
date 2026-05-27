@@ -125,7 +125,6 @@ Replaces both the old per-segment `ConceptMention` and unit-level `UnitConcept`.
   "canonical_name": "陈芸",
   "summary": "brief source-grounded note",
   "aliases": ["淑珍"],
-  "alias_candidates": [],
   "observed_surfaces": ["芸", "陈芸", "淑珍"],
   "source_block_refs": ["seg-0003-block-0001"],
   "facets": ["behaves_like_person", "speaker"],

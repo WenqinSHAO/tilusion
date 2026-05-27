@@ -134,6 +134,7 @@ def flatten_and_stabilize_segment_results(
     concepts: list[dict[str, Any]] = []
     atomic_items: list[dict[str, Any]] = []
     unresolved_items: list[dict[str, Any]] = []
+    warnings: list[str] = []
     seen_source_blocks: set[str] = set()
 
     # ── Phase 1: scope local IDs to segment-prefixed IDs ──
@@ -146,6 +147,10 @@ def flatten_and_stabilize_segment_results(
             if block_id and block_id not in seen_source_blocks:
                 seen_source_blocks.add(block_id)
                 source_blocks.append(dict(block))
+
+        for w in result.get("warnings") or []:
+            if isinstance(w, str) and w.strip():
+                warnings.append(w)
 
         for concept in _list(result.get("concepts")):
             local_id = concept.get("concept_id", "")
@@ -222,6 +227,7 @@ def flatten_and_stabilize_segment_results(
         "concepts": merged_concepts,
         "atomic_items": stabilized_items,
         "unresolved_items": unresolved_items,
+        "warnings": warnings,
     }
 
 
@@ -267,5 +273,5 @@ def _merge_concept_group(
     }
 
 
-def _list(value: Any) -> list[dict[str, Any]]:
+def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []

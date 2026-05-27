@@ -374,8 +374,6 @@ def _validate_temporal_attributes(
         source_block_ref = attr.get("source_block_ref")
         if source_block_ref:
             _validate_single_ref(source_block_ref, block_ids, f"{attr_path}.source_block_ref", issues)
-        elif _ref_uses_prior_context(source_block_ref):
-            issues.append(_prior_context_issue(f"{attr_path}.source_block_ref"))
         _validate_string_list(attr.get("uncertainty", []), f"{attr_path}.uncertainty", issues)
 
 

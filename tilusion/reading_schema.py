@@ -188,7 +188,6 @@ class Concept:
     canonical_name: str | None = None
     summary: str = ""
     aliases: list[str] = field(default_factory=list)
-    alias_candidates: list[dict[str, Any]] = field(default_factory=list)
     observed_surfaces: list[str] = field(default_factory=list)
     facets: list[str] = field(default_factory=list)
     uncertainty: list[str] = field(default_factory=list)
