@@ -84,57 +84,6 @@ def build_per_segment_extraction_payload(
     }
 
 
-def build_unit_reading_finalization_payload(
-    *,
-    unit_id: str,
-    source: dict[str, Any],
-    segments: list[dict[str, Any]],
-    source_spans: list[dict[str, Any]],
-    source_blocks: list[dict[str, Any]],
-    concept_mentions: list[dict[str, Any]],
-    logical_groups: list[dict[str, Any]],
-    links: list[dict[str, Any]],
-    validation_reports: list[dict[str, Any]] | None = None,
-    repair_hints: dict[str, Any] | None = None,
-    context_metadata: dict[str, Any] | None = None,
-    unresolved_items: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    return {
-        "task": "unit_reading_finalization",
-        "schema_version": READING_UNIT_SCHEMA_VERSION,
-        "unit_id": unit_id,
-        "source": source,
-        "segments": segments,
-        "source_spans": source_spans,
-        "source_blocks": source_blocks,
-        "concept_mentions": concept_mentions,
-        "logical_groups": logical_groups,
-        "links": links,
-        "unresolved_items": unresolved_items or [],
-        "validation_reports": validation_reports or [],
-        "repair_hints": repair_hints or {},
-        "context_metadata": context_metadata or {},
-        "expected_output": {
-            "schema_version": READING_UNIT_SCHEMA_VERSION,
-            "core_fields": [
-                "source_spans",
-                "source_blocks",
-                "concept_mentions",
-                "logical_groups",
-                "links",
-                "derived_views",
-                "unresolved_items",
-            ],
-            "forbidden_core_fields": [
-                "entity_records",
-                "location_records",
-                "atom_records",
-                "thread_records",
-                "timelines",
-            ],
-        },
-    }
-
 
 def build_unit_logical_grouping_payload(
     *,
@@ -181,14 +130,22 @@ def flatten_and_stabilize_segment_results(
     Surfaces that appear with different types across segments are flagged
     in ``unresolved_items`` for later LLM review.
     """
+    source_blocks: list[dict[str, Any]] = []
     concepts: list[dict[str, Any]] = []
     atomic_items: list[dict[str, Any]] = []
     unresolved_items: list[dict[str, Any]] = []
+    seen_source_blocks: set[str] = set()
 
     # ── Phase 1: scope local IDs to segment-prefixed IDs ──
     for result in segment_results:
         segment_id = result.get("segment_id", "unknown-segment")
         concept_id_map: dict[str, str] = {}
+
+        for block in _list(result.get("source_blocks")):
+            block_id = block.get("block_id", "")
+            if block_id and block_id not in seen_source_blocks:
+                seen_source_blocks.add(block_id)
+                source_blocks.append(dict(block))
 
         for concept in _list(result.get("concepts")):
             local_id = concept.get("concept_id", "")
@@ -261,6 +218,7 @@ def flatten_and_stabilize_segment_results(
         stabilized_items.append(stabilized)
 
     return {
+        "source_blocks": source_blocks,
         "concepts": merged_concepts,
         "atomic_items": stabilized_items,
         "unresolved_items": unresolved_items,

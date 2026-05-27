@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +11,6 @@ from .extraction import (
     LLMBackend,
     MockExtractionBackend,
     parse_json_response,
-    sha256_json,
 )
 from .extraction_pipeline import (
     ResolvedOverviewSegment,
@@ -19,18 +18,15 @@ from .extraction_pipeline import (
     pass_artifact_paths,
     resolve_overview_segments,
     run_overview_segmentation_pass,
-    write_pass_artifacts,
 )
 from .reading_payloads import (
     build_per_segment_extraction_payload,
     build_unit_logical_grouping_payload,
-    build_unit_reading_finalization_payload,
     flatten_and_stabilize_segment_results,
 )
 from .reading_prompts import (
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
-    build_unit_reading_finalization_composition,
 )
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
 from .source_blocks import split_source_blocks
@@ -45,7 +41,6 @@ __all__ = [
     "ReadingPassRecord",
     "ReadingPipelineRecord",
     "run_per_segment_extraction_pass",
-    "run_reading_finalization_pass",
     "run_reading_pipeline",
     "write_reading_unit_package",
 ]
@@ -74,6 +69,17 @@ def _elapsed_ms(since: float) -> int:
 
 def _log_progress(step: int, total: int, description: str, status: str, elapsed_ms: int) -> None:
     print(f"  [{step}/{total}] {description}: {status} ({elapsed_ms}ms)", file=sys.stderr)
+
+
+def _raise_on_validation_errors(pass_name: str, report: ReadingValidationReport) -> None:
+    if report.passed:
+        return
+    issue_summary = "; ".join(
+        f"{issue.code} at {issue.path}: {issue.message}"
+        for issue in report.issues
+        if issue.severity == "error"
+    )
+    raise ValueError(f"{pass_name} validation failed: {issue_summary}")
 
 
 # ── Pass record ──────────────────────────────────────────────────────────────
@@ -173,84 +179,6 @@ def mock_per_segment_extraction_response(user_payload: dict[str, Any]) -> dict[s
     }
 
 
-def mock_unit_reading_finalization_response(user_payload: dict[str, Any]) -> dict[str, Any]:
-    unit_id = user_payload.get("unit_id", "unit-0001")
-    source = user_payload.get("source", {})
-    source_spans = user_payload.get("source_spans", [])
-    source_blocks = user_payload.get("source_blocks", [])
-    concept_mentions = user_payload.get("concept_mentions", [])
-    logical_groups = user_payload.get("logical_groups", [])
-    links = user_payload.get("links", [])
-    context_metadata = user_payload.get("context_metadata", {})
-
-    def _reindex(records: list[dict[str, Any]], prefix: str, id_field: str) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        for i, rec in enumerate(records):
-            updated = dict(rec)
-            updated[id_field] = f"{prefix}{i + 1:04d}"
-            if "confidence" not in updated:
-                updated["confidence"] = "low"
-            result.append(updated)
-        return result
-
-    final_spans = _reindex(source_spans, "span-", "span_id")
-    final_blocks = _reindex(source_blocks, "block-", "block_id")
-    final_concepts = _reindex(concept_mentions, "mention-", "mention_id")
-    final_groups = _reindex(logical_groups, "group-", "group_id")
-
-    span_map = _id_map(source_spans, final_spans, "span_id")
-    block_map = _id_map(source_blocks, final_blocks, "block_id")
-    mention_map = _id_map(concept_mentions, final_concepts, "mention_id")
-    group_map = _id_map(logical_groups, final_groups, "group_id")
-
-    final_links: list[dict[str, Any]] = []
-    for i, link in enumerate(links):
-        updated = dict(link)
-        updated["link_id"] = f"link-{i + 1:04d}"
-        updated["source_ref"] = group_map.get(link.get("source_ref", ""), link.get("source_ref", ""))
-        updated["target_ref"] = (
-            group_map.get(link.get("target_ref", ""))
-            or mention_map.get(link.get("target_ref", ""))
-            or block_map.get(link.get("target_ref", ""))
-            or link.get("target_ref", "")
-        )
-        updated["evidence_block_refs"] = [block_map.get(ref, ref) for ref in link.get("evidence_block_refs", [])]
-        if "confidence" not in updated:
-            updated["confidence"] = "low"
-        final_links.append(updated)
-
-    for group in final_groups:
-        group["concept_refs"] = [mention_map.get(ref, ref) for ref in group.get("concept_refs", [])]
-        group["source_block_refs"] = [block_map.get(ref, ref) for ref in group.get("source_block_refs", [])]
-        hints = group.get("source_order_hints", {})
-        if isinstance(hints, dict):
-            for key in ("first_block", "last_block"):
-                if key in hints:
-                    hints[key] = block_map.get(hints[key], hints[key])
-
-    for concept in final_concepts:
-        concept["source_block_refs"] = [block_map.get(ref, ref) for ref in concept.get("source_block_refs", [])]
-        concept["source_span_refs"] = [span_map.get(ref, ref) for ref in concept.get("source_span_refs", [])]
-
-    for block in final_blocks:
-        block["span_refs"] = [span_map.get(ref, ref) for ref in block.get("span_refs", [])]
-
-    return {
-        "schema_version": READING_UNIT_SCHEMA_VERSION,
-        "unit_id": unit_id,
-        "source": source,
-        "source_spans": final_spans,
-        "source_blocks": final_blocks,
-        "concept_mentions": final_concepts,
-        "logical_groups": final_groups,
-        "links": final_links,
-        "derived_views": [],
-        "unresolved_items": [],
-        "validation": {"mock": True, "warnings": ["mock finalization: records re-indexed to unit-level IDs"]},
-        "context_metadata": context_metadata,
-    }
-
-
 def mock_unit_logical_grouping_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     unit_id = user_payload.get("unit_id", "unit-0001")
     concepts = user_payload.get("concepts", [])
@@ -284,19 +212,6 @@ def mock_unit_logical_grouping_response(user_payload: dict[str, Any]) -> dict[st
     }
 
 
-def _id_map(
-    source_records: list[dict[str, Any]],
-    target_records: list[dict[str, Any]],
-    id_field: str,
-) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for src, tgt in zip(source_records, target_records):
-        src_id = src.get(id_field)
-        tgt_id = tgt.get(id_field)
-        if isinstance(src_id, str) and isinstance(tgt_id, str):
-            mapping[src_id] = tgt_id
-    return mapping
-
 
 # ── Mock backend ─────────────────────────────────────────────────────────────
 
@@ -309,8 +224,6 @@ class MockReadingBackend:
 
         if task == "per_segment_extraction":
             return json.dumps(mock_per_segment_extraction_response(user_payload), ensure_ascii=False)
-        if task == "unit_reading_finalization":
-            return json.dumps(mock_unit_reading_finalization_response(user_payload), ensure_ascii=False)
         if task == "unit_logical_grouping":
             return json.dumps(mock_unit_logical_grouping_response(user_payload), ensure_ascii=False)
 
@@ -399,6 +312,12 @@ def run_per_segment_extraction_pass(
         "context_metadata": {},
     }
     validation_report = validate_extraction_unit_package(validation_subject)
+    _raise_on_validation_errors("per-segment-extraction", validation_report)
+
+    enriched_data = {
+        **data,
+        "source_blocks": [b.to_dict() for b in blocks],
+    }
 
     record = ReadingPassRecord(
         pass_name="per-segment-extraction",
@@ -406,7 +325,7 @@ def run_per_segment_extraction_pass(
         cache_dir=str(pass_dir),
         cache_hit=cache_hit,
         raw_response=raw_response,
-        data=data,
+        data=enriched_data,
         validation_report=validation_report,
         artifact_paths=paths,
     )
@@ -418,103 +337,7 @@ def run_per_segment_extraction_pass(
             prompt=prompt,
             user_payload=payload,
             raw_response=raw_response,
-            data=data,
-            validation_report=validation_report,
-            record=record,
-        )
-
-    return record
-
-
-# ── Pass: unit reading finalization ──────────────────────────────────────────
-
-
-def run_reading_finalization_pass(
-    *,
-    unit_id: str,
-    source: dict[str, Any],
-    segments: list[ResolvedOverviewSegment],
-    segment_records: list[ReadingPassRecord],
-    backend: LLMBackend,
-    cache_dir: Path,
-    use_cache: bool = True,
-    context: dict[str, Any] | None = None,
-    stabilized: dict[str, list[dict[str, Any]]] | None = None,
-) -> ReadingPassRecord:
-    """Run the reading unit finalization pass.
-
-    If *stabilized* is provided, it is used directly as the pre-merged
-    concepts, atomic_items, and unresolved_items.  Otherwise the function
-    falls back to the old flatten-only behaviour (for tests / backwards
-    compatibility during the transition).
-    """
-    if stabilized is None:
-        stabilized = flatten_and_stabilize_segment_results(
-            [r.data for r in segment_records], unit_id=unit_id
-        )
-
-    prompt = build_unit_reading_finalization_composition()
-    payload = build_unit_reading_finalization_payload(
-        unit_id=unit_id,
-        source=source,
-        segments=[
-            {
-                "segment_id": s.segment_id,
-                "title": s.title,
-                "summary": s.summary,
-                "source_range": {"start": s.start, "end": s.end},
-            }
-            for s in segments
-        ],
-        source_spans=[],
-        source_blocks=[],
-        concept_mentions=stabilized["concepts"],
-        logical_groups=[],
-        links=[],
-        unresolved_items=stabilized.get("unresolved_items", []),
-        validation_reports=[r.validation_report.to_dict() for r in segment_records],
-        context_metadata={"context_injection": context is not None},
-    )
-
-    cache_key = build_pass_cache_key(
-        pass_name="unit-reading-finalization",
-        prompt=prompt,
-        user_payload=payload,
-        model_identity=backend.model_identity,
-    )
-    pass_dir = cache_dir / cache_key
-    paths = pass_artifact_paths(pass_dir)
-    result_path = Path(paths["result"])
-    cache_hit = use_cache and result_path.exists()
-
-    if cache_hit:
-        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
-        data = json.loads(result_path.read_text(encoding="utf-8"))
-    else:
-        raw_response = backend.complete_json(prompt.content, payload)
-        data = parse_json_response(raw_response)
-
-    validation_report = validate_extraction_unit_package(data)
-
-    record = ReadingPassRecord(
-        pass_name="unit-reading-finalization",
-        cache_key=cache_key,
-        cache_dir=str(pass_dir),
-        cache_hit=cache_hit,
-        raw_response=raw_response,
-        data=data,
-        validation_report=validation_report,
-        artifact_paths=paths,
-    )
-
-    if use_cache:
-        _write_reading_pass_artifacts(
-            pass_dir=pass_dir,
-            paths=paths,
-            prompt=prompt,
-            user_payload=payload,
-            raw_response=raw_response,
-            data=data,
+            data=record.data,
             validation_report=validation_report,
             record=record,
         )
@@ -549,9 +372,44 @@ def _apply_concept_deltas(
         changes = delta.get("changes", {})
 
         if delta_type == "merge":
-            for ref in target_refs:
-                if ref in concept_by_id:
-                    remap[ref] = target_refs[0] if target_refs else ref
+            known_refs = [ref for ref in target_refs if ref in concept_by_id]
+            if not known_refs:
+                continue
+            primary_id = known_refs[0]
+            primary = concept_by_id[primary_id]
+            for ref in known_refs:
+                remap[ref] = primary_id
+
+            for field in ("canonical_name", "summary", "surface", "concept_type"):
+                if changes.get(field):
+                    primary[field] = changes[field]
+
+            for field in ("aliases", "observed_surfaces", "source_block_refs", "facets", "uncertainty"):
+                seen = set()
+                values: list[Any] = []
+                for value in _as_list(primary.get(field)):
+                    if value not in seen:
+                        seen.add(value)
+                        values.append(value)
+                for ref in known_refs[1:]:
+                    for value in _as_list(concept_by_id[ref].get(field)):
+                        if value not in seen:
+                            seen.add(value)
+                            values.append(value)
+                for value in _as_list(changes.get(field)):
+                    if value not in seen:
+                        seen.add(value)
+                        values.append(value)
+                if values:
+                    primary[field] = values
+
+            merged_from = []
+            for ref in known_refs:
+                merged_from.extend(_as_list(concept_by_id[ref].get("merged_from")) or [ref])
+            primary["merged_from"] = list(dict.fromkeys(merged_from))
+
+            for ref in known_refs[1:]:
+                del concept_by_id[ref]
 
         elif delta_type == "split":
             original_id = target_refs[0] if target_refs else ""
@@ -583,12 +441,17 @@ def _apply_concept_deltas(
     return list(concept_by_id.values()), remap
 
 
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def run_unit_logical_grouping_pass(
     *,
     unit_id: str,
     unit_text: str,
     source: dict[str, Any],
     segments: list[ResolvedOverviewSegment],
+    source_blocks: list[dict[str, Any]],
     concepts: list[dict[str, Any]],
     atomic_items: list[dict[str, Any]],
     unresolved_items: list[dict[str, Any]],
@@ -665,29 +528,11 @@ def run_unit_logical_grouping_pass(
         ]
         updated_groups.append(updated)
 
-    # Collect all referenced block IDs for validation (stubs satisfy ref checks)
-    referenced_block_ids: set[str] = set()
-    for concept in updated_concepts:
-        for ref in concept.get("source_block_refs", []):
-            if isinstance(ref, str):
-                referenced_block_ids.add(ref)
-    for item in updated_items:
-        for ref in item.get("source_block_refs", []):
-            if isinstance(ref, str):
-                referenced_block_ids.add(ref)
-
     validation_subject = {
         "schema_version": READING_UNIT_SCHEMA_VERSION,
         "unit_id": unit_id,
-        "source": source,
-        "source_blocks": [
-            {
-                "block_id": bid, "unit_id": unit_id, "segment_id": "",
-                "block_index": 0, "block_type": "unknown", "start": 0, "end": 0,
-                "text": "", "text_hash": "",
-            }
-            for bid in sorted(referenced_block_ids)
-        ],
+        "source": {**source, "unit_text": unit_text},
+        "source_blocks": source_blocks,
         "concepts": updated_concepts,
         "atomic_items": updated_items,
         "logical_groups": updated_groups,
@@ -696,6 +541,7 @@ def run_unit_logical_grouping_pass(
         "context_metadata": {},
     }
     validation_report = validate_extraction_unit_package(validation_subject)
+    _raise_on_validation_errors("unit-logical-grouping", validation_report)
 
     record = ReadingPassRecord(
         pass_name="unit-logical-grouping",
@@ -705,9 +551,15 @@ def run_unit_logical_grouping_pass(
         raw_response=raw_response,
         data={
             **data,
+            "schema_version": READING_UNIT_SCHEMA_VERSION,
+            "unit_id": unit_id,
+            "source": source,
+            "source_blocks": source_blocks,
             "concepts": updated_concepts,
             "atomic_items": updated_items,
             "logical_groups": updated_groups,
+            "validation": validation_report.to_dict(),
+            "context_metadata": {"context_injection": context is not None},
         },
         validation_report=validation_report,
         artifact_paths=paths,
@@ -830,6 +682,7 @@ def run_reading_pipeline(
             unit_text=text,
             source=source,
             segments=segments,
+            source_blocks=stabilized["source_blocks"],
             concepts=stabilized["concepts"],
             atomic_items=stabilized["atomic_items"],
             unresolved_items=stabilized.get("unresolved_items", []),
@@ -850,8 +703,22 @@ def run_reading_pipeline(
         _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "FAILED", _elapsed_ms(t0))
         raise
 
-    final_data = grouping_record.data
-    final_validation = grouping_record.validation_report.to_dict()
+    final_data = {
+        "schema_version": READING_UNIT_SCHEMA_VERSION,
+        "unit_id": unit_id,
+        "source": source,
+        "source_blocks": grouping_record.data["source_blocks"],
+        "concepts": grouping_record.data["concepts"],
+        "atomic_items": grouping_record.data["atomic_items"],
+        "logical_groups": grouping_record.data["logical_groups"],
+        "unresolved_items": grouping_record.data.get("unresolved_items", []),
+        "validation": grouping_record.validation_report.to_dict(),
+        "context_metadata": {"context_injection": context is not None},
+    }
+    final_validation_report = validate_extraction_unit_package(final_data)
+    _raise_on_validation_errors("reading-unit-package", final_validation_report)
+    final_data["validation"] = final_validation_report.to_dict()
+    final_validation = final_validation_report.to_dict()
 
     # ── Write unit package ──
     package_path = write_reading_unit_package(
@@ -925,13 +792,11 @@ def write_reading_unit_package(
     package_dir.mkdir(parents=True, exist_ok=True)
     package_path = package_dir / "unit_package.json"
 
-    package = {
-        "schema_version": data.get("schema_version", READING_UNIT_SCHEMA_VERSION),
-        "unit_id": unit_id,
-        "source": source,
-        "passes": passes,
-        "data": data,
-        "validation": validation,
-    }
+    package = dict(data)
+    package.setdefault("schema_version", READING_UNIT_SCHEMA_VERSION)
+    package["unit_id"] = unit_id
+    package["source"] = data.get("source") or source
+    package["passes"] = passes
+    package["validation"] = validation
     package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(package_path)

@@ -6,7 +6,6 @@ from tilusion.extraction_prompts import generated_prompt_part
 from tilusion.reading_payloads import (
     _source_block_meta,
     build_per_segment_extraction_payload,
-    build_unit_reading_finalization_payload,
     flatten_and_stabilize_segment_results,
     render_text_with_block_markers,
 )
@@ -14,7 +13,6 @@ from tilusion.reading_schema import SourceBlock
 from tilusion.reading_prompts import (
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
-    build_unit_reading_finalization_composition,
 )
 
 
@@ -37,9 +35,6 @@ def test_per_segment_extraction_composition_loads_static_contract() -> None:
     assert "Do not invent block IDs" in composition.content
     assert composition.to_dict()["parts"][0]["metadata"]["schema_version"] == "reading-unit-v0.3"
 
-
-def test_unit_finalization_composition_has_stable_id() -> None:
-    assert build_unit_reading_finalization_composition().composition_id == "unit-reading-finalization-v0.1"
 
 
 def test_unit_logical_grouping_composition_loads_static_contract() -> None:
@@ -206,22 +201,6 @@ def test_source_block_meta_drops_text_and_hash() -> None:
     assert "text_hash" not in meta
 
 
-def test_finalization_payload_declares_forbidden_legacy_core_fields() -> None:
-    payload = build_unit_reading_finalization_payload(
-        unit_id="unit-0001",
-        source={"book_path": "book.txt"},
-        segments=[],
-        source_spans=[],
-        source_blocks=[],
-        concept_mentions=[],
-        logical_groups=[],
-        links=[],
-    )
-
-    assert payload["task"] == "unit_reading_finalization"
-    assert "timelines" in payload["expected_output"]["forbidden_core_fields"]
-    assert "logical_groups" in payload["expected_output"]["core_fields"]
-
 
 # ── flatten_and_stabilize_segment_results tests ────────────────────────────────
 
@@ -232,6 +211,7 @@ def test_stabilize_merges_duplicate_concepts() -> None:
         [
             {
                 "segment_id": "seg-0001",
+                "source_blocks": [{"block_id": "b1", "text": "block 1"}],
                 "concepts": [
                     {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
                      "summary": "narrator", "source_block_refs": ["b1"],
@@ -242,6 +222,7 @@ def test_stabilize_merges_duplicate_concepts() -> None:
             },
             {
                 "segment_id": "seg-0002",
+                "source_blocks": [{"block_id": "b2", "text": "block 2"}],
                 "concepts": [
                     {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
                      "summary": "husband", "source_block_refs": ["b2"],
@@ -255,6 +236,7 @@ def test_stabilize_merges_duplicate_concepts() -> None:
     )
 
     # One merged concept
+    assert result["source_blocks"] == [{"block_id": "b1", "text": "block 1"}, {"block_id": "b2", "text": "block 2"}]
     assert len(result["concepts"]) == 1
     c = result["concepts"][0]
     assert c["concept_id"] == "concept-0001"
@@ -360,6 +342,7 @@ def test_stabilize_remaps_item_concept_refs() -> None:
 
 def test_stabilize_empty_input() -> None:
     result = flatten_and_stabilize_segment_results([], unit_id="unit-0001")
+    assert result["source_blocks"] == []
     assert result["concepts"] == []
     assert result["atomic_items"] == []
     assert result["unresolved_items"] == []
