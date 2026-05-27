@@ -53,10 +53,11 @@
 - Reading validation scaffold added: `tilusion/reading_validation.py` validates package shape, IDs, refs, source-grounded links, synthesis links, derived-view non-authority, prior-context evidence misuse, and registry delta safety.
 - First reading-pipeline prompt contracts added under `tilusion/prompts/`: source-block/concept, logical-group, link-structure, and unit-reading-finalization.
 - Reading prompt composition and payload builders added: `tilusion/reading_prompts.py` and `tilusion/reading_payloads.py` prepare versioned prompts and schema-aware request payloads without runtime pipeline wiring yet.
+- Unit-0002 reading trial review documented: current generalized pipeline regressed because derived timeline views are absent, source blocks are too LLM-driven, per-segment extraction is overloaded, finalization is too shallow, and deterministic ID reindexing corrupts repeated segment-local refs.
 
 ## Ongoing
 
 - Current goal: refactor extraction from event/timeline-centered records to the generalized source-grounded reading model.
-- Immediate next step: add mock backend responses and a minimal reading pipeline orchestrator around the new schema before further DeepSeek runs.
+- Immediate next step: fix deterministic reading-pipeline correctness first: segment-scoped ID reindexing, ref rewrites including `link_refs`, validation failure surfacing, then deterministic source blocks before prompt tuning.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.

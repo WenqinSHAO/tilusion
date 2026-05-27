@@ -424,6 +424,110 @@ Current concepts to remove or decenter:
 - Thread as a universal organizing container.
 - Old `event_records` compatibility shims.
 
+
+## Unit-0002 Reading Trial Review
+
+A first LLM-backed reading-pipeline trial on `unit-0002` produced a valid-looking generalized package shape, but the extraction quality regressed compared with the older timeline-centered pipeline.
+
+Artifacts reviewed:
+
+- New reading package: `.tilusion_cache/reading_passes/units/unit-0002/unit_package.json`
+- Previous finalization reference: `.tilusion_cache/extraction_chains/b1c97fb428677d02d4401f47ace5bc2d1559c0ba9375c8d68fad54f4497aa497/unit_finalization/344977836ae24da4f34be672ad2c21d0b51c7693d752326cef1f48a31768a452/result.json`
+- Previous timeline references: later `unit_timeline` / `unit_timeline_repair` artifacts under the same old chain cache.
+
+Observed new package shape:
+
+- `source_spans`: 193
+- `source_blocks`: 78
+- `concept_mentions`: 169
+- `logical_groups`: 71
+- `links`: 84
+- `derived_views`: 0
+- validation: failed with 7 unresolved `logical_groups[*].link_refs` references.
+
+### What Went Wrong
+
+**1. Timeline reasoning is absent, not merely weaker.**
+
+The new pipeline currently runs overview, per-segment extraction, and finalization only. Derived views are documented as downstream and optional, but no derived-view pass exists yet. Therefore timeline reasoning and timeline construction are completely missing from the new output. This is an implementation gap, not evidence that the generalized reading model cannot support timelines.
+
+The older reference path supplied for comparison is itself only unit finalization and does not contain final timelines. The useful timeline behavior lived in subsequent `unit_timeline` and `unit_timeline_repair` artifacts, which built 43 event records into timeline views. A fair comparison must include a new derived timeline view built from logical groups.
+
+**2. Finalization has a deterministic ID/reference bug.**
+
+Per-segment extraction outputs repeat local IDs such as `block-0001`, `group-0001`, and `link-0001` across segments. The current deterministic reindexing maps by raw local ID only, so later segment IDs overwrite earlier segment IDs. This corrupts references after reindexing.
+
+The current result also leaves stale `logical_groups[*].link_refs` pointing to old link IDs, producing validation errors. This is a correctness bug that should be fixed before prompt tuning or additional LLM trials.
+
+**3. Source block extraction is too LLM-driven.**
+
+The prompt asks the LLM to invent both `source_spans` and `source_blocks`. The result has many source spans and blocks, with block construction varying by segment. Source blocks should be a deterministic navigation layer wherever possible. The LLM should cite source blocks and optionally propose smaller evidence spans, not be responsible for creating the whole block layer.
+
+**4. The all-in-one per-segment pass is overloaded.**
+
+The simplified pass asks for source spans, blocks, concepts, logical groups, and links in one response. This is efficient, but the output suggests the LLM is doing mostly paragraph-local extraction instead of higher-level semantic grouping. Many logical groups are single-block or single-event groups, and finalization does not merge them enough.
+
+**5. Finalization is not doing semantic finalization.**
+
+The finalization response mostly preserves or concatenates per-segment records. It does not sufficiently deduplicate concepts, merge cross-segment groups, compress related events/observations, or prepare derived views. The deterministic reindexer then normalizes IDs but cannot create semantic quality.
+
+## Fix Sequence After Unit-0002 Review
+
+The next work should prioritize deterministic correctness before prompt tuning.
+
+### Step 1: Fix Deterministic ID Scoping And Reindexing
+
+- Scope every segment-local ID with `segment_id` before flattening, or make the reindexer operate on `(segment_id, local_id)` pairs.
+- Update all refs consistently: span refs, block refs, concept refs, group refs, link refs, source-order hints, evidence refs, and derived-view refs when present.
+- Update `logical_groups[*].link_refs`; do not leave stale link IDs after reindexing.
+- Add tests with two segments that both contain `block-0001`, `group-0001`, and `link-0001` to prove refs do not cross-wire.
+- Treat a failed final validation report as a hard failure or at least make the CLI clearly report it.
+
+### Step 2: Make Source Blocks Deterministic
+
+- Build source blocks from restored segment text using deterministic paragraph/line/sentence-ish splitting.
+- Assign stable unit-level coordinates and block IDs before LLM extraction.
+- Pass these blocks to the LLM and ask it to cite `source_block_refs`.
+- Keep `source_spans` as smaller evidence spans or quotes when useful, but do not let the LLM define the primary navigation block layer.
+- Add coverage metrics: block count, covered chars, uncovered gaps, and average block size.
+
+### Step 3: Add Reading Quality Metrics
+
+Add deterministic quality checks beyond schema validity:
+
+- group/block ratio
+- singleton group rate
+- average source blocks per group
+- unreferenced source block count
+- concepts per block
+- links per group
+- unresolved link refs
+- event-like group count
+- event-like groups with temporal hints
+- derived timeline absent when event-like temporal groups exist
+
+These metrics should first be reported as warnings, not hard errors.
+
+### Step 4: Restore Timeline As A Derived View
+
+- Add a derived timeline pass that consumes finalized `logical_groups`, `links`, and temporal hints.
+- Only event-like groups need timeline placement.
+- Store the result under `derived_views` with `view_type: timeline` and `is_source_of_truth: false`.
+- Reuse the old timeline validation ideas: DAG checks, phantom refs, self-loop detection, missing event-like groups when expected, and no forced total ordering.
+
+### Step 5: Then Tune Extraction Behavior
+
+Only after the deterministic layer is correct:
+
+- Reconsider whether per-segment extraction should remain one pass or split into source-block/concept extraction followed by logical grouping/linking.
+- Tighten prompts so logical groups are meaning units, not one group per paragraph or one group per surface event.
+- Add guidance for when to merge blocks into one logical group and when not to.
+- Add finalization instructions that actively deduplicate concepts and merge cross-segment logical groups while preserving ambiguity.
+
+### Current Priority
+
+Do not tune the LLM prompt first. The next commit should fix deterministic ID scoping/reindexing and validation behavior. The following commit should introduce deterministic source blocks. Only then should LLM prompt behavior be compared again on `unit-0002`.
+
 ## Validation And Tests
 
 Required tests:
