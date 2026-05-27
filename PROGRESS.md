@@ -7,57 +7,67 @@
 - Reader foundation: TXT/EPUB reader (`f4d1d3d`), index attribute enrichment (`3fa276b`), unit ID normalization (`625ec2a`), reader schema docs (`c15cf0c`).
 - Reader contract: `docs/reader_index_schema.md` — structure index, normalized opaque unit IDs, navigation metadata, on-demand unit text extraction.
 
-**Extraction pipeline — first skeleton**
+**Extraction pipeline — first skeleton (event/timeline-centered)**
 - Extraction roadmap (`b82f5ee`), context-aware pass strategy (`2165fbf`), validation-and-repair loop design (`4b5632a`).
 - Pipeline skeleton (`4c6690d`), DeepSeek SDK backend (`ef1f265`), versioned segment prompt and extraction failure handling (`5934ceb`).
 - First deterministic validation slice: evidence relocation, response-local ID/reference integrity, evidence span length, object-surface grounding, compact LLM repair payloads (`f957a5e` onward).
 
-**Multi-pass extraction and chain flow**
-- Multi-pass scaffolding: `run-pass` caches prompt, payload, raw response, parsed result, validation report, and manifest under `.tilusion_cache/extraction_passes/` (`f5adf58`).
-- First chained extraction flow (`run-chain`): overview segmentation, deterministic segment-anchor relocation, per-segment extraction with overview hints, aggregate validation, repair-hint artifacts (`09ec7a7`).
-- Validation outputs separated into full local reports, compact LLM-actionable repair hints, and enriched validated results with evidence source locations (`5b7a8a2`).
-- Chain cache revalidation without backend calls via `refresh-chain-validation` (`d83b15d`).
+**Multi-pass extraction and chain flow (old model)**
+- Multi-pass scaffolding with `.tilusion_cache/extraction_passes/` artifact caching.
+- Chained extraction flow: overview segmentation, deterministic segment-anchor relocation, per-segment extraction with overview hints, aggregate validation, repair-hint artifacts.
+- Validation outputs: full local reports, compact LLM-actionable repair hints, enriched validated results with evidence source locations.
+- Chain cache revalidation without backend calls via `refresh-chain-validation`.
 
-**Validation refinement and chain trials**
-- Validation output audit gaps (A: segment quality overview, B: unified relocation, C: non-actionable warning summary) all resolved (`69aab40`, `ac66822`, `9db21bb`).
-- First LLM-backed chain trial (unit-0002, ~15.7K chars): 6/6 segments resolved, 0 errors. Trial surfaced five improvement areas: canonical_name, evidence-granularity guidance, CJK surface validation, cross-segment entity aliasing, CJK sentence-boundary context windows (`651e95f`).
-- Second chain trial (v0.5 prompt): 14/14 segments restored, non-blocking QC issues documented (`b0557ec`).
+**Validation refinement and chain trials (old model)**
+- First LLM-backed chain trial (unit-0002, ~15.7K chars): 6/6 segments resolved, 0 errors, surfaced five improvement areas.
+- Second chain trial (v0.5 prompt): 14/14 segments restored.
 
-**Unit finalization, repair, and timeline construction**
-- Prompt composition strategy for LLM KV cache reuse: static system prompts + shared source text prefixes for cheap multi-round refinement (`694ad30`).
-- Unit-finalization pass (`finalize-unit`): cross-segment merge, alias resolution, duplicate detection, source-navigable unit artifacts (`7d209e2`, `67ed913`).
-- Unit repair pass (`repair-unit`): KV cache prefix sharing with finalization pass, repair-specific instructions and `repair_targets`. Trial on unit-0002 repaired all 3 blocking concerns, reduced unresolved items 8→5 (`ae3eea2`).
-- Timeline construction pass (`timeline-unit`): partially-ordered timelines with DAG-structured `before_events` edges. Trial on unit-0002 produced 3 timelines covering 40/43 events (`14b96c0`).
-- Timeline repair pass with KV cache prefix sharing (`3fe179e`).
-- `run-all` command: end-to-end orchestration with progress logging and unit package output (`4129aba`).
+**Unit finalization, repair, and timeline construction (old model)**
+- KV-cache-aware prompt composition for multi-round refinement.
+- Unit-finalization, repair, timeline construction, and timeline repair passes.
+- `run-all` command: end-to-end orchestration with progress logging and unit package output.
 
 **Reader view generator**
-- Self-contained HTML demo consuming real extraction data (`7ccf03c`).
-- Usage: `python tools/generate_reader_view.py <unit_package.json> <resolved_segments.json> <book.txt> -o reader_view.html`
-- Template: `tools/reader_view_template.html` (CSS + JS skeleton). Known UI notes: `docs/reader_view_notes.md`.
+- Self-contained HTML demo consuming real extraction data.
+- Template: `tools/reader_view_template.html` (CSS + JS skeleton).
 
 **Regression coverage**
 - Tests for reader behavior and extraction pipeline (`pytest tests/test_extraction.py -x -q`).
 
-**Cross-unit readiness scaffold**
-- No-behavior extraction refactor split prompt composition, payload builders, and unit validation from the pipeline orchestrator (`8f25370`, `5aa6c4f`, `2bb59ca`, `e494dfe`).
-- Passive book-context scaffold and cache-aware context injection: empty snapshots, context packs, deterministic surface scan, context-pack hash cache isolation, and CLI `run-all --prior-unit-package` (`fb7f969` through `905c1d9`).
-- Renamed `prompt_injection` → `context_injection`; dropped backward-compat shims while the API is still unstable.
-- Verified cross-unit plumbing on unit-0002 → unit-0003 mock runs, including `book-scope-context` prompt injection and cache isolation.
+**Cross-unit readiness scaffold (old model)**
+- No-behavior extraction refactor split prompt composition, payload builders, and unit validation from the pipeline orchestrator.
+- Passive book-context scaffold and cache-aware context injection.
 
-**Generalized reading-pipeline direction**
-- Current extraction branch exposed the limit of event/timeline-centered modeling: `event` became `atom`, but the architecture still privileges entity/location/thread/timeline records.
-- New canonical direction: tilusion is a source-grounded reading workspace, with revised core flow `source text -> deterministic source blocks -> concepts + atomic items -> logical groups with optional graphs -> cross-unit registry deltas`.
-- Canonical plan: `docs/source_grounded_reading_pipeline.md`.
-- Reading schema scaffold added: `tilusion/reading_schema.py`, but it is now partly stale: the next implementation should simplify around source blocks, concepts, atomic items, and logical groups rather than preserving separate source spans, links, derived views, concept mentions, and unit concepts.
-- Reading validation scaffold added: `tilusion/reading_validation.py` validates package shape, IDs, refs, source-grounded links, synthesis links, derived-view non-authority, prior-context evidence misuse, and registry delta safety.
-- First reading-pipeline prompt contracts added under `tilusion/prompts/`, but the next prompt iteration should make per-segment extraction stop at concepts and atomic items over deterministic source blocks.
-- Reading prompt composition and payload builders added: `tilusion/reading_prompts.py` and `tilusion/reading_payloads.py`; these should be adapted to the simplified pipeline instead of extended in their current verbose form.
-- Unit-0002 reading trial review documented: current generalized pipeline regressed because source blocks are too LLM-driven, per-segment extraction is overloaded, logical grouping happens too early, timeline-as-view is absent, and repeated segment-local refs can corrupt final records. The fix order is now deterministic source blocks first, per-segment concepts + atomic items second, segment-scoped ID/ref stabilization third, then unit-level logical grouping with optional timeline/discourse/theme graphs.
+**First reading-pipeline trial and pivot**
+- Generalized reading-pipeline direction documented; reading schema, validation, prompts, payloads, and pipeline scaffold added.
+- Unit-0002 reading trial run. Extraction quality regressed vs. the older timeline-centered pipeline. Root causes identified and documented in `docs/source_grounded_reading_pipeline.md`.
+- Decision: rebuild the reading pipeline from scratch around deterministic source blocks, concepts, atomic items, and graph-shaped logical groups.
+
+**Updated plan**
+- `docs/source_grounded_reading_pipeline.md` revised with v0.3 model, clarified naming, splitter spec, and 12-commit implementation sequence.
+- Key design decisions: no backward compat with v0.1, source_spans/ConceptMention/GroupLink/DerivedStructure removed, links moved into logical group graphs, cross-group item membership allowed, quality metrics built into each module from the start.
 
 ## Ongoing
 
-- Current goal: refactor extraction from event/timeline-centered records to the generalized source-grounded reading model.
-- Immediate next step: start a clean implementation from the revised plan: deterministic source blocks and simplified schema first, then per-segment concepts + atomic items over block refs, then segment-scoped ID/ref stabilization, then unit-level logical groups with optional graphs.
+- **Current goal:** Rebuild the reading pipeline from scratch following the 12-commit sequence in `docs/source_grounded_reading_pipeline.md`.
+- **Immediate next step:** Commit 2 — deterministic source block splitter (`tilusion/source_blocks.py`).
+- **Branch:** `cross-unit-refactor`. Old extraction pipeline (`extraction*.py`) stays untouched as regression baseline. Reading modules (`reading_*.py`) rewritten in-place.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
+
+## Implementation Status
+
+| # | Commit | Status |
+|---|---|---|
+| 1 | Update plan and PROGRESS.md | done |
+| 2 | Deterministic source block splitter | next |
+| 3 | Rewrite reading schema (v0.3) | pending |
+| 4 | Rewrite reading validation | pending |
+| 5 | Rewrite per-segment extraction prompt | pending |
+| 6 | Rewrite per-segment pass (prompts, payloads, pipeline) | pending |
+| 7 | Segment-scoped ID reindexing | pending |
+| 8 | Unit-level concept unification and item stabilization | pending |
+| 9 | Unit-level logical grouping prompt | pending |
+| 10 | Unit-level logical grouping pass | pending |
+| 11 | Quality metrics wiring | pending |
+| 12 | Update CLI | pending |
