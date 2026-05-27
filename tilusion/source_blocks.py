@@ -9,8 +9,32 @@ SOURCE_BLOCK_SPLITTER_VERSION = "source-block-splitter-v0.1"
 MAX_BLOCK_CHARS = 800
 MIN_SENTENCE_FRAGMENT_CHARS = 20
 
-_CJK_SENTENCE_END = re.compile(r"[。！？；](?=\s*)")
+# Sentence-ending punctuation: CJK (always safe) + ASCII .!?
+# The period '.' is post-filtered by _is_abbreviation to avoid splitting on
+# "Mr.", "Dr.", etc.
+_SENTENCE_END_RE = re.compile(r"[。！？；.!?]")
+
+# Blank-line paragraph separator, plus horizontal rules (***, ---, etc.)
 _PARA_SEP = re.compile(r"(\n\s*\n)")
+
+# Horizontal rule patterns — ornamental dividers between sections
+_HRULE_RE = re.compile(
+    r"^\s*(?:[-*_]{3,}|[—]{2,}|\*[ ]*\*[ ]*\*)\s*$",
+    re.MULTILINE,
+)
+
+# Common English abbreviations whose trailing period is not a sentence end.
+_ABBREVIATIONS: frozenset[str] = frozenset(
+    {
+        "dr", "mr", "mrs", "ms", "prof", "rev", "hon", "jr", "sr",
+        "vs", "etc", "approx", "dept", "est", "govt",
+        "ie", "eg", "am", "pm", "st", "ave", "blvd", "rd",
+        "vol", "ch", "p", "pp", "no", "nos",
+        "al", "cf", "ed", "eds", "et", "fig", "figs",
+        "ibid", "id", "loc", "op", "seq", "sq", "ss", "v",
+        "capt", "col", "gen", "lt", "maj", "sgt",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -82,6 +106,10 @@ def split_source_blocks(
     Blocks are contiguous — every character of the segment text belongs to
     exactly one block. Blank-line paragraph separators are included as
     trailing text in the preceding block.
+
+    Works with both TXT and EPUB source text. The caller is responsible for
+    providing correctly offset segment text (the book reader already
+    normalises whitespace and handles format differences).
     """
 
     # Round-trip verification
@@ -103,7 +131,21 @@ def split_source_blocks(
 
         stripped = chunk.strip()
         if not stripped:
-            # Whitespace-only chunk — keep as a minimal block for coverage
+            blocks.append(
+                _make_block(
+                    segment_id=segment_id,
+                    unit_id=unit_id,
+                    block_index=len(blocks),
+                    block_type="other",
+                    start=unit_offset + pos,
+                    text=chunk,
+                )
+            )
+            pos += len(chunk)
+            continue
+
+        # Horizontal rule stands alone
+        if _is_horizontal_rule(stripped):
             blocks.append(
                 _make_block(
                     segment_id=segment_id,
@@ -141,7 +183,6 @@ def _split_contiguous(text: str) -> list[str]:
     exactly one chunk.
     """
     parts = _PARA_SEP.split(text)
-    # parts alternates: content, separator, content, separator, ..., content
     chunks: list[str] = []
     for i in range(0, len(parts), 2):
         content = parts[i]
@@ -177,13 +218,11 @@ def _chunk_to_blocks(
     # Oversized — split on sentence boundaries
     sub_texts = _split_on_sentences(stripped)
     blocks: list[SourceBlock] = []
-    # Locate each sub_text within the chunk to recover leading/trailing whitespace
     sub_offset = 0
     for sub in sub_texts:
         idx = chunk.find(sub, sub_offset)
         if idx < 0:
             continue
-        # Include any whitespace between this sub and the previous one
         actual_start = sub_offset if sub_offset < idx else idx
         actual_text = chunk[actual_start : idx + len(sub)]
         blocks.append(
@@ -201,7 +240,6 @@ def _chunk_to_blocks(
     # Catch any trailing whitespace after the last sentence
     if sub_offset < len(chunk):
         if blocks:
-            # Append trailing whitespace to last block
             last = blocks[-1]
             extra = chunk[sub_offset:]
             blocks[-1] = _make_block(
@@ -228,22 +266,72 @@ def _chunk_to_blocks(
 
 
 def _split_on_sentences(text: str) -> list[str]:
-    """Split text on CJK sentence boundaries, keeping delimiters attached.
+    """Split on CJK and English sentence boundaries.
 
-    Falls back to fixed-size splitting when no sentence boundaries are found.
+    CJK punctuation (``。！？；``) unconditionally ends a sentence.
+    ASCII ``.`` ends a sentence only when followed by whitespace and a
+    capital letter (or end of text), and is not part of a known abbreviation.
+    ASCII ``!`` and ``?`` unconditionally end a sentence.
     """
     result: list[str] = []
     last = 0
-    for m in _CJK_SENTENCE_END.finditer(text):
-        end = m.end()
-        result.append(text[last:end])
-        last = end
+    n = len(text)
+
+    for m in _SENTENCE_END_RE.finditer(text):
+        i = m.start()
+        ch = m.group()
+
+        if ch == ".":
+            # Skip abbreviation periods
+            if _is_abbreviation(text, i):
+                continue
+            # Period must be followed by whitespace + uppercase or end-of-text
+            after = _peek_after(text, i + 1)
+            if after and not _starts_sentence(after):
+                continue
+
+        result.append(text[last : i + 1])
+        last = i + 1
+
     if last == 0:
-        # No sentence boundaries found — split on fixed character limit
+        # No sentence boundaries found — fixed-size split
         return _split_fixed(text, MAX_BLOCK_CHARS)
-    if last < len(text):
+    if last < n:
         result.append(text[last:])
+
     return _merge_short_fragments(result)
+
+
+def _peek_after(text: str, pos: int) -> str:
+    """Return the text after skipping whitespace, or '' if at end."""
+    rest = text[pos:]
+    m = re.match(r"\s*", rest)
+    if m is None:
+        return ""
+    return rest[m.end() :]
+
+
+def _starts_sentence(text: str) -> bool:
+    """Return True if *text* starts like a new sentence."""
+    if not text:
+        return False
+    # Capital letter (ASCII or CJK fullwidth)
+    if re.match(r"[A-Z　-〿一-鿿]", text):
+        return True
+    # Opening quote or bracket followed by capital
+    if re.match(r"""["'‘“（(〔［｛][A-Z一-鿿]""", text):
+        return True
+    return False
+
+
+def _is_abbreviation(text: str, period_pos: int) -> bool:
+    """Return True if the period at *period_pos* is part of a known abbreviation."""
+    # Find the word before the period
+    start = period_pos - 1
+    while start >= 0 and text[start].isalpha():
+        start -= 1
+    word = text[start + 1 : period_pos].lower()
+    return word in _ABBREVIATIONS
 
 
 def _split_fixed(text: str, chunk_size: int) -> list[str]:
@@ -278,17 +366,32 @@ def _merge_short_fragments(fragments: list[str]) -> list[str]:
     return merged or fragments
 
 
+def _is_horizontal_rule(text: str) -> bool:
+    """Return True if *text* is an ornamental divider (***, ---, ——, etc.)."""
+    return bool(_HRULE_RE.match(text))
+
+
 def _classify_block_type(text: str) -> str:
-    """Heuristic block type classification."""
+    """Heuristic block type classification.
+
+    Classifies into: paragraph, line, note, or other.
+    The classifier avoids overfitting to any specific book format.
+    """
     stripped = text.strip()
     if not stripped:
         return "other"
-    # Footnote / annotation: starts with [digit]
-    if re.match(r"\[\d+\]", stripped):
+
+    if _is_horizontal_rule(stripped):
+        return "other"
+
+    # Annotation / footnote-like: short line starting with bracket or paren marker
+    if len(stripped) < 200 and re.match(r"[\[(（【〈]\d+[\]）)】〉]?", stripped):
         return "note"
-    # Single short line (title, standalone line)
+
+    # Standalone short line (title, byline, section header, standalone sentence)
     if "\n" not in stripped and len(stripped) < 120:
         return "line"
+
     return "paragraph"
 
 

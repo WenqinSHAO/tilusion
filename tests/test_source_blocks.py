@@ -250,3 +250,141 @@ def test_text_hash_is_sha256_hex():
     )
     assert len(blocks[0].text_hash) == 64
     assert all(c in "0123456789abcdef" for c in blocks[0].text_hash)
+
+
+# ── English prose ─────────────────────────────────────────────────────────────
+
+
+def test_english_paragraph_splitting():
+    text = (
+        "The first paragraph of an English novel. It contains multiple sentences "
+        "about the protagonist's journey. The morning sun cast long shadows across "
+        "the courtyard as she stepped outside.\n\n"
+        "The second paragraph picks up the next morning. The birds were singing "
+        "and the world felt new again.\n\n"
+        "A brief third paragraph."
+    )
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert len(blocks) == 3
+    assert blocks[0].block_type == "paragraph"
+    assert "first paragraph" in blocks[0].text
+    assert "second paragraph" in blocks[1].text
+
+
+def test_english_oversized_split_on_sentence_boundaries():
+    # Build a long paragraph that exceeds MAX_BLOCK_CHARS with clear sentence endings
+    sentence = "This is sentence number {}. "
+    text = "".join(sentence.format(i) for i in range(60))
+    text += "The final sentence ends here."
+    assert len(text) > MAX_BLOCK_CHARS
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert len(blocks) > 1
+    for b in blocks:
+        assert len(b.text.strip()) > 0
+
+
+def test_abbreviation_not_split():
+    # "Dr. Smith" should not be split after "Dr."
+    text = (
+        "Dr. Smith arrived at the hospital. The patient was waiting. "
+        + "more filler content. " * 60
+    )
+    assert len(text) > MAX_BLOCK_CHARS
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    combined = "".join(b.text for b in blocks)
+    assert "Dr. Smith" in combined
+
+
+def test_english_question_and_exclamation_split():
+    text = (
+        "What happened? She couldn't believe it! The truth was shocking. "
+        + "More text. " * 80
+    )
+    assert len(text) > MAX_BLOCK_CHARS
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert len(blocks) > 1
+
+
+# ── Horizontal rules ──────────────────────────────────────────────────────────
+
+
+def test_horizontal_rule_standalone():
+    text = "Paragraph above.\n\n***\n\nParagraph below."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    types = [b.block_type for b in blocks if b.text.strip()]
+    assert "other" in types  # the horizontal rule
+
+
+def test_horizontal_rule_dashes():
+    text = "Before.\n\n---\n\nAfter."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    rule_blocks = [b for b in blocks if b.text.strip() == "---"]
+    assert len(rule_blocks) == 1
+
+
+def test_horizontal_rule_spaced_asterisks():
+    text = "Before.\n\n* * *\n\nAfter."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    content_blocks = [b for b in blocks if b.text.strip()]
+    # Should have 3 content blocks: before, rule, after
+    assert len(content_blocks) >= 3
+
+
+# ── Mixed CJK + English ──────────────────────────────────────────────────────
+
+
+def test_mixed_cjk_and_english():
+    text = (
+        "这是中文段落，包含一些内容。This is English text inside. "
+        "还有一个句子。And another English sentence. "
+        + "extra filler text. " * 50
+    )
+    assert len(text) > MAX_BLOCK_CHARS
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert len(blocks) > 1
+    # All blocks combined should cover the full text
+    combined = "".join(b.text for b in blocks)
+    assert combined == text
+
+
+# ── Note classification (generalised) ────────────────────────────────────────
+
+
+def test_note_with_chinese_bracket():
+    text = "（1）这是一个注释文本。"
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert blocks[0].block_type == "note"
+
+
+def test_note_with_japanese_bracket():
+    text = "【2】これは注釈です。"
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert blocks[0].block_type == "note"
+
+
+def test_regular_text_not_classified_as_note():
+    text = "This is just a regular paragraph that happens to be somewhat longer."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert blocks[0].block_type != "note"
