@@ -47,17 +47,17 @@
 
 **Generalized reading-pipeline direction**
 - Current extraction branch exposed the limit of event/timeline-centered modeling: `event` became `atom`, but the architecture still privileges entity/location/thread/timeline records.
-- New canonical direction: tilusion is a source-grounded reading workspace, with core flow `source text → source blocks → concepts → logical groups → links → derived views → cross-unit registry deltas`.
+- New canonical direction: tilusion is a source-grounded reading workspace, with revised core flow `source text → deterministic source blocks → concepts + atomic items → unit concepts/logical groups → derived views → cross-unit registry deltas`.
 - Canonical plan: `docs/source_grounded_reading_pipeline.md`.
 - Reading schema scaffold added: `tilusion/reading_schema.py` defines type-open source spans, source blocks, concepts, logical groups, links, derived views, unit packages, document snapshots, registry deltas, ambiguity items, and user correction operations.
 - Reading validation scaffold added: `tilusion/reading_validation.py` validates package shape, IDs, refs, source-grounded links, synthesis links, derived-view non-authority, prior-context evidence misuse, and registry delta safety.
 - First reading-pipeline prompt contracts added under `tilusion/prompts/`: source-block/concept, logical-group, link-structure, and unit-reading-finalization.
 - Reading prompt composition and payload builders added: `tilusion/reading_prompts.py` and `tilusion/reading_payloads.py` prepare versioned prompts and schema-aware request payloads without runtime pipeline wiring yet.
-- Unit-0002 reading trial review documented: current generalized pipeline regressed because derived timeline views are absent, source blocks are too LLM-driven, per-segment extraction is overloaded, finalization is too shallow, and deterministic ID reindexing corrupts repeated segment-local refs.
+- Unit-0002 reading trial review documented: current generalized pipeline regressed because source blocks are too LLM-driven, per-segment extraction is overloaded, derived timeline views are absent, finalization is too shallow, and deterministic ID reindexing corrupts repeated segment-local refs. The fix order is now deterministic source blocks first, then per-segment atomic-item extraction, then ID/ref stabilization.
 
 ## Ongoing
 
 - Current goal: refactor extraction from event/timeline-centered records to the generalized source-grounded reading model.
-- Immediate next step: fix deterministic reading-pipeline correctness first: segment-scoped ID reindexing, ref rewrites including `link_refs`, validation failure surfacing, then deterministic source blocks before prompt tuning.
+- Immediate next step: revise the reading pipeline around deterministic source blocks and a simpler per-segment output (`concept_mentions` + `atomic_items` over block refs), then fix segment-scoped ID/ref stabilization, then add unit-level grouping and derived timeline views.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
