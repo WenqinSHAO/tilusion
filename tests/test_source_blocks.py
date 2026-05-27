@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from tilusion.reading_schema import SourceBlock
 from tilusion.source_blocks import (
     MAX_BLOCK_CHARS,
     SOURCE_BLOCK_SPLITTER_VERSION,
-    SourceBlock,
     SourceBlockMetrics,
     split_source_blocks,
 )

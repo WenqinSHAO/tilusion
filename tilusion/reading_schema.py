@@ -1,24 +1,116 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 
-READING_UNIT_SCHEMA_VERSION = "reading-unit-v0.1"
+READING_UNIT_SCHEMA_VERSION = "reading-unit-v0.3"
 DOCUMENT_STATE_SCHEMA_VERSION = "document-state-v0.1"
 REGISTRY_DELTA_SCHEMA_VERSION = "registry-delta-v0.1"
 
-Confidence = Literal["high", "medium", "low", "unknown"]
-Grounding = Literal[
-    "source_grounded",
-    "synthesis",
-    "deterministic",
-    "llm_inferred",
-    "user_corrected",
-]
+Grounding = str  # "source_grounded" | "synthesis" | "deterministic" | "llm_inferred" | "user_corrected"
 
-CONFIDENCE_VALUES = frozenset({"high", "medium", "low", "unknown"})
-GROUNDING_VALUES = frozenset(
+RECOMMENDED_CONCEPT_TYPES = frozenset(
+    {
+        "person",
+        "group",
+        "organization",
+        "place",
+        "object",
+        "term",
+        "method",
+        "theme",
+        "motif",
+        "time_anchor",
+        "emotion",
+        "social_role",
+        "institution",
+        "symbol",
+        "scene_element",
+        "technical_component",
+        "dataset",
+        "metric",
+        "source",
+        "other",
+    }
+)
+
+RECOMMENDED_ITEM_TYPES = frozenset(
+    {
+        "event",
+        "scene",
+        "action",
+        "claim",
+        "argument",
+        "statement",
+        "observation",
+        "description",
+        "method",
+        "technique",
+        "result",
+        "limitation",
+        "habit",
+        "question",
+        "unresolved_issue",
+        "definition",
+        "example",
+        "comparison",
+        "contrast",
+        "background",
+        "note",
+        "other",
+    }
+)
+
+RECOMMENDED_GROUP_TYPES = frozenset(
+    {
+        "timeline",
+        "temporal_sequence",
+        "theme_set",
+        "concept_map",
+        "discourse_graph",
+        "claim_evidence_map",
+        "viewpoint_evolution",
+        "open_thread_list",
+        "method_example_set",
+        "motif_development",
+        "contrast_set",
+        "other",
+    }
+)
+
+RECOMMENDED_EDGE_TYPES = frozenset(
+    {
+        "mentions",
+        "refers_to",
+        "aliases",
+        "same_as_candidate",
+        "part_of",
+        "elaborates",
+        "supports",
+        "contradicts",
+        "qualifies",
+        "contrasts",
+        "causes",
+        "enables",
+        "explains",
+        "follows_from",
+        "precedes",
+        "continues",
+        "resolves",
+        "raises_question",
+        "answers_question",
+        "exemplifies",
+        "defines",
+        "uses_method",
+        "produces_result",
+        "has_limitation",
+        "related_to",
+        "other",
+    }
+)
+
+RECOMMENDED_PROVENANCE_VALUES = frozenset(
     {
         "source_grounded",
         "synthesis",
@@ -28,84 +120,22 @@ GROUNDING_VALUES = frozenset(
     }
 )
 
-RECOMMENDED_CONCEPT_TYPES = frozenset(
-    {
-        "person",
-        "place",
-        "object",
-        "term",
-        "method",
-        "theme",
-        "motif",
-        "time_anchor",
-        "other",
-    }
-)
-
-RECOMMENDED_GROUP_TYPES = frozenset(
-    {
-        "event",
-        "claim",
-        "argument",
-        "observation",
-        "description",
-        "explanation",
-        "question",
-        "other",
-    }
-)
-
-RECOMMENDED_LINK_TYPES = frozenset(
-    {
-        "mentions",
-        "supports",
-        "contradicts",
-        "causes",
-        "precedes",
-        "elaborates",
-        "part_of",
-        "exemplifies",
-        "related_to",
-        "other",
-    }
-)
-
-DERIVED_VIEW_TYPES = frozenset(
-    {
-        "timeline",
-        "discourse_graph",
-        "claim_evidence_map",
-        "theme_map",
-        "viewpoint_evolution",
-        "open_thread_list",
-        "other",
-    }
-)
-
 REGISTRY_DELTA_OPERATION_TYPES = frozenset(
     {
-        "new_canonical_concept",
+        "new_concept",
         "alias_candidate",
         "merge_proposal",
-        "split_proposal",
         "summary_update",
-        "concept_salience_update",
         "logical_group_continuation",
-        "new_cross_unit_link",
-        "derived_checkpoint_update",
-        "unresolved_ambiguity_item",
+        "cross_unit_link",
+        "ambiguity_item",
         "user_review_needed",
     }
 )
 
 
 def is_open_type_string(value: Any) -> bool:
-    """Return True for schema-light extensible type strings.
-
-    The reading schema validates type fields as non-empty strings without
-    requiring membership in the recommended sets. Detailed validators may warn
-    on unfamiliar strings, but they should not reject justified custom types.
-    """
+    """Return True for schema-light extensible type strings."""
     return isinstance(value, str) and bool(value.strip())
 
 
@@ -113,29 +143,36 @@ def is_recommended_concept_type(value: str) -> bool:
     return value in RECOMMENDED_CONCEPT_TYPES
 
 
+def is_recommended_item_type(value: str) -> bool:
+    return value in RECOMMENDED_ITEM_TYPES
+
+
 def is_recommended_group_type(value: str) -> bool:
     return value in RECOMMENDED_GROUP_TYPES
 
 
-def is_recommended_link_type(value: str) -> bool:
-    return value in RECOMMENDED_LINK_TYPES
+def is_recommended_edge_type(value: str) -> bool:
+    return value in RECOMMENDED_EDGE_TYPES
 
 
-def is_confidence(value: Any) -> bool:
-    return value in CONFIDENCE_VALUES
+def is_recommended_provenance(value: str) -> bool:
+    return value in RECOMMENDED_PROVENANCE_VALUES
 
 
-def is_grounding(value: Any) -> bool:
-    return value in GROUNDING_VALUES
+# ── Core extraction types ─────────────────────────────────────────────────────
 
 
 @dataclass(slots=True)
-class SourceSpan:
-    span_id: str
+class SourceBlock:
+    block_id: str
     unit_id: str
-    source_range: dict[str, Any]
-    quote: str
-    relocation: dict[str, Any] = field(default_factory=dict)
+    segment_id: str
+    block_index: int
+    block_type: str
+    start: int
+    end: int
+    text: str
+    text_hash: str
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -143,30 +180,16 @@ class SourceSpan:
 
 
 @dataclass(slots=True)
-class SourceBlock:
-    block_id: str
-    block_type: str
-    span_refs: list[str]
-    source_order: int | None = None
-    text_digest: str | None = None
-    confidence: Confidence = "unknown"
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class ConceptMention:
-    mention_id: str
+class Concept:
+    concept_id: str
     surface: str
     concept_type: str
-    source_block_refs: list[str]
-    source_span_refs: list[str]
+    source_block_refs: list[str] = field(default_factory=list)
     canonical_name: str | None = None
-    local_summary: str = ""
-    aliases_or_candidates: list[dict[str, Any]] = field(default_factory=list)
-    confidence: Confidence = "unknown"
+    summary: str = ""
+    aliases: list[str] = field(default_factory=list)
+    alias_candidates: list[dict[str, Any]] = field(default_factory=list)
+    observed_surfaces: list[str] = field(default_factory=list)
     facets: list[str] = field(default_factory=list)
     uncertainty: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
@@ -176,21 +199,62 @@ class ConceptMention:
 
 
 @dataclass(slots=True)
-class CanonicalConcept:
-    concept_id: str
-    canonical_name: str
-    concept_types: list[str]
-    facets: list[str] = field(default_factory=list)
-    aliases: list[str] = field(default_factory=list)
-    observed_surfaces: list[str] = field(default_factory=list)
-    summary: str = ""
-    first_seen_unit: str | None = None
-    last_seen_unit: str | None = None
-    salience: float | None = None
-    evidence_refs: list[dict[str, Any]] = field(default_factory=list)
-    alias_candidates: list[dict[str, Any]] = field(default_factory=list)
-    merge_split_uncertainty: list[str] = field(default_factory=list)
+class TemporalAttribute:
+    kind: str  # "explicit" | "implicit" | "relative" | "none"
+    surface: str = ""
+    normalized_hint: str = ""
+    source_block_ref: str = ""
+    uncertainty: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class AtomicItem:
+    item_id: str
+    item_type: str
+    summary: str
+    source_block_refs: list[str] = field(default_factory=list)
+    concept_refs: list[str] = field(default_factory=list)
+    temporal_attributes: list[TemporalAttribute] = field(default_factory=list)
+    attributes: dict[str, Any] = field(default_factory=dict)
+    uncertainty: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "item_id": self.item_id,
+            "item_type": self.item_type,
+            "summary": self.summary,
+            "source_block_refs": self.source_block_refs,
+            "concept_refs": self.concept_refs,
+            "temporal_attributes": [ta.to_dict() for ta in self.temporal_attributes],
+            "attributes": self.attributes,
+            "uncertainty": self.uncertainty,
+            "provenance": self.provenance,
+        }
+
+
+@dataclass(slots=True)
+class GraphNode:
+    node_id: str
+    item_ref: str
+    label: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class GraphEdge:
+    source: str  # node_id within the same graph
+    target: str  # node_id within the same graph
+    edge_type: str
+    summary: str = ""
+    source_block_refs: list[str] = field(default_factory=list)
+    provenance: dict[str, Any] = field(default_factory=dict)
+    uncertainty: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -201,62 +265,38 @@ class LogicalGroup:
     group_id: str
     group_type: str
     summary: str
-    source_block_refs: list[str]
+    item_refs: list[str] = field(default_factory=list)
     concept_refs: list[str] = field(default_factory=list)
-    link_refs: list[str] = field(default_factory=list)
-    source_order_hints: dict[str, Any] = field(default_factory=dict)
-    temporal_hints: list[dict[str, Any]] = field(default_factory=list)
-    confidence: Confidence = "unknown"
-    uncertainty: list[str] = field(default_factory=list)
-    provenance: dict[str, Any] = field(default_factory=lambda: {"grounding": "source_grounded"})
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class GroupLink:
-    link_id: str
-    source_ref: str
-    target_ref: str
-    link_type: str
-    evidence_block_refs: list[str] = field(default_factory=list)
-    confidence: Confidence = "unknown"
-    rationale: str = ""
-    grounding: Grounding = "source_grounded"
+    graph: dict[str, Any] = field(default_factory=dict)
     uncertainty: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class DerivedStructure:
-    view_id: str
-    view_type: str
-    structure: dict[str, Any]
-    input_group_refs: list[str] = field(default_factory=list)
-    input_link_refs: list[str] = field(default_factory=list)
-    confidence: Confidence = "unknown"
-    generated_by: str = "deterministic"
-    is_source_of_truth: bool = False
-    provenance: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        graph = self.graph
+        result: dict[str, Any] = {
+            "group_id": self.group_id,
+            "group_type": self.group_type,
+            "summary": self.summary,
+            "item_refs": self.item_refs,
+            "concept_refs": self.concept_refs,
+            "graph": {
+                "nodes": [n.to_dict() for n in graph.get("nodes", [])],
+                "edges": [e.to_dict() for e in graph.get("edges", [])],
+            },
+            "uncertainty": self.uncertainty,
+            "provenance": self.provenance,
+        }
+        return result
 
 
 @dataclass(slots=True)
 class ExtractionUnitPackage:
     unit_id: str
     source: dict[str, Any]
-    source_spans: list[SourceSpan] = field(default_factory=list)
     source_blocks: list[SourceBlock] = field(default_factory=list)
-    concept_mentions: list[ConceptMention] = field(default_factory=list)
+    concepts: list[Concept] = field(default_factory=list)
+    atomic_items: list[AtomicItem] = field(default_factory=list)
     logical_groups: list[LogicalGroup] = field(default_factory=list)
-    links: list[GroupLink] = field(default_factory=list)
-    derived_views: list[DerivedStructure] = field(default_factory=list)
     unresolved_items: list[dict[str, Any]] = field(default_factory=list)
     validation: dict[str, Any] = field(default_factory=dict)
     context_metadata: dict[str, Any] = field(default_factory=dict)
@@ -267,16 +307,17 @@ class ExtractionUnitPackage:
             "schema_version": self.schema_version,
             "unit_id": self.unit_id,
             "source": self.source,
-            "source_spans": [item.to_dict() for item in self.source_spans],
-            "source_blocks": [item.to_dict() for item in self.source_blocks],
-            "concept_mentions": [item.to_dict() for item in self.concept_mentions],
-            "logical_groups": [item.to_dict() for item in self.logical_groups],
-            "links": [item.to_dict() for item in self.links],
-            "derived_views": [item.to_dict() for item in self.derived_views],
+            "source_blocks": [b.to_dict() for b in self.source_blocks],
+            "concepts": [c.to_dict() for c in self.concepts],
+            "atomic_items": [a.to_dict() for a in self.atomic_items],
+            "logical_groups": [g.to_dict() for g in self.logical_groups],
             "unresolved_items": self.unresolved_items,
             "validation": self.validation,
             "context_metadata": self.context_metadata,
         }
+
+
+# ── Document state types ──────────────────────────────────────────────────────
 
 
 @dataclass(slots=True)
@@ -313,10 +354,10 @@ class UserCorrectionOperation:
 class DocumentStateSnapshot:
     document_id: str
     snapshot_id: str
-    canonical_concepts: list[CanonicalConcept] = field(default_factory=list)
+    canonical_concepts: list[Concept] = field(default_factory=list)
+    reusable_item_summaries: list[dict[str, Any]] = field(default_factory=list)
     reusable_group_summaries: list[dict[str, Any]] = field(default_factory=list)
-    cross_unit_links: list[GroupLink] = field(default_factory=list)
-    derived_checkpoints: list[DerivedStructure] = field(default_factory=list)
+    cross_unit_links: list[dict[str, Any]] = field(default_factory=list)
     ambiguity_queue: list[AmbiguityQueueItem] = field(default_factory=list)
     transactions: list[dict[str, Any]] = field(default_factory=list)
     schema_version: str = DOCUMENT_STATE_SCHEMA_VERSION
@@ -326,11 +367,11 @@ class DocumentStateSnapshot:
             "schema_version": self.schema_version,
             "document_id": self.document_id,
             "snapshot_id": self.snapshot_id,
-            "canonical_concepts": [item.to_dict() for item in self.canonical_concepts],
+            "canonical_concepts": [c.to_dict() for c in self.canonical_concepts],
+            "reusable_item_summaries": self.reusable_item_summaries,
             "reusable_group_summaries": self.reusable_group_summaries,
-            "cross_unit_links": [item.to_dict() for item in self.cross_unit_links],
-            "derived_checkpoints": [item.to_dict() for item in self.derived_checkpoints],
-            "ambiguity_queue": [item.to_dict() for item in self.ambiguity_queue],
+            "cross_unit_links": self.cross_unit_links,
+            "ambiguity_queue": [a.to_dict() for a in self.ambiguity_queue],
             "transactions": self.transactions,
         }
 

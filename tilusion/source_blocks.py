@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
+
+from .reading_schema import SourceBlock
 
 SOURCE_BLOCK_SPLITTER_VERSION = "source-block-splitter-v0.1"
 MAX_BLOCK_CHARS = 800
@@ -14,7 +16,7 @@ MIN_SENTENCE_FRAGMENT_CHARS = 20
 # "Mr.", "Dr.", etc.
 _SENTENCE_END_RE = re.compile(r"[。！？；.!?]")
 
-# Blank-line paragraph separator, plus horizontal rules (***, ---, etc.)
+# Blank-line paragraph separator
 _PARA_SEP = re.compile(r"(\n\s*\n)")
 
 # Horizontal rule patterns — ornamental dividers between sections
@@ -35,34 +37,6 @@ _ABBREVIATIONS: frozenset[str] = frozenset(
         "capt", "col", "gen", "lt", "maj", "sgt",
     }
 )
-
-
-@dataclass(slots=True)
-class SourceBlock:
-    block_id: str
-    unit_id: str
-    segment_id: str
-    block_index: int
-    block_type: str
-    start: int
-    end: int
-    text: str
-    text_hash: str
-    provenance: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "block_id": self.block_id,
-            "unit_id": self.unit_id,
-            "segment_id": self.segment_id,
-            "block_index": self.block_index,
-            "block_type": self.block_type,
-            "start": self.start,
-            "end": self.end,
-            "text": self.text,
-            "text_hash": self.text_hash,
-            "provenance": self.provenance,
-        }
 
 
 @dataclass(slots=True)

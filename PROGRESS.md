@@ -50,7 +50,7 @@
 ## Ongoing
 
 - **Current goal:** Rebuild the reading pipeline from scratch following the 12-commit sequence in `docs/source_grounded_reading_pipeline.md`.
-- **Immediate next step:** Commit 3 — rewrite reading schema to v0.3.
+- **Immediate next step:** Commit 4 — rewrite reading validation for v0.3 schema.
 - **Branch:** `cross-unit-refactor`. Old extraction pipeline (`extraction*.py`) stays untouched as regression baseline. Reading modules (`reading_*.py`) rewritten in-place.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
@@ -61,8 +61,8 @@
 |---|---|---|
 | 1 | Update plan and PROGRESS.md | done |
 | 2 | Deterministic source block splitter | done |
-| 3 | Rewrite reading schema (v0.3) | next |
-| 4 | Rewrite reading validation | pending |
+| 3 | Rewrite reading schema (v0.3) | done |
+| 4 | Rewrite reading validation | next |
 | 5 | Rewrite per-segment extraction prompt | pending |
 | 6 | Rewrite per-segment pass (prompts, payloads, pipeline) | pending |
 | 7 | Segment-scoped ID reindexing | pending |
