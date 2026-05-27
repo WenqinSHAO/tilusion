@@ -50,7 +50,7 @@
 ## Ongoing
 
 - **Current goal:** Rebuild the reading pipeline from scratch following the 12-commit sequence in `docs/source_grounded_reading_pipeline.md`.
-- **Immediate next step:** Commit 8 — unit-level concept unification and item stabilization.
+- **Immediate next step:** Commit 9 — unit-level logical grouping prompt.
 - **Branch:** `cross-unit-refactor`. Old extraction pipeline (`extraction*.py`) stays untouched as regression baseline. Reading modules (`reading_*.py`) rewritten in-place.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
@@ -66,7 +66,7 @@
 | 5 | Rewrite per-segment extraction prompt | done |
 | 6 | Rewrite per-segment pass (prompts, payloads, pipeline) | done |
 | 7 | Segment-scoped ID reindexing | done |
-| 8 | Unit-level concept unification and item stabilization | pending |
+| 8 | Unit-level concept unification and item stabilization | done |
 | 9 | Unit-level logical grouping prompt | pending |
 | 10 | Unit-level logical grouping pass | pending |
 | 11 | Quality metrics wiring | pending |

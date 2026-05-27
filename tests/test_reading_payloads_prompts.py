@@ -7,7 +7,7 @@ from tilusion.reading_payloads import (
     _source_block_meta,
     build_per_segment_extraction_payload,
     build_unit_reading_finalization_payload,
-    flatten_segment_results,
+    flatten_and_stabilize_segment_results,
     render_text_with_block_markers,
 )
 from tilusion.reading_schema import SourceBlock
@@ -210,32 +210,175 @@ def test_finalization_payload_declares_forbidden_legacy_core_fields() -> None:
     assert "logical_groups" in payload["expected_output"]["core_fields"]
 
 
-def test_flatten_segment_results_scopes_ids() -> None:
-    flat = flatten_segment_results(
+# ── flatten_and_stabilize_segment_results tests ────────────────────────────────
+
+
+def test_stabilize_merges_duplicate_concepts() -> None:
+    """Same surface + same type across two segments → one merged concept."""
+    result = flatten_and_stabilize_segment_results(
         [
             {
                 "segment_id": "seg-0001",
-                "concepts": [{"concept_id": "concept-0001", "surface": "a"}],
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+                     "summary": "narrator", "source_block_refs": ["b1"],
+                     "aliases": [], "observed_surfaces": ["余"], "facets": [],
+                     "uncertainty": [], "canonical_name": ""}
+                ],
+                "atomic_items": [],
+            },
+            {
+                "segment_id": "seg-0002",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+                     "summary": "husband", "source_block_refs": ["b2"],
+                     "aliases": [], "observed_surfaces": ["余"], "facets": [],
+                     "uncertainty": [], "canonical_name": "沈复"}
+                ],
+                "atomic_items": [],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    # One merged concept
+    assert len(result["concepts"]) == 1
+    c = result["concepts"][0]
+    assert c["concept_id"] == "concept-0001"
+    assert c["surface"] == "余"
+    assert c["concept_type"] == "person"
+    assert c["merged_from"] == ["seg-0001-concept-0001", "seg-0002-concept-0001"]
+    assert set(c["source_block_refs"]) == {"b1", "b2"}
+    assert c["canonical_name"] == "沈复"  # first non-empty
+    assert c["summary"] == "narrator"  # first non-empty
+    assert c["provenance"] == {"grounding": "synthesis", "created_by": "deterministic"}
+    assert result["unresolved_items"] == []
+
+
+def test_stabilize_preserves_different_types() -> None:
+    """Same surface but different types → separate concepts."""
+    result = flatten_and_stabilize_segment_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "芸", "concept_type": "person",
+                     "source_block_refs": ["b1"],
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "", "summary": ""}
+                ],
+                "atomic_items": [],
+            },
+            {
+                "segment_id": "seg-0002",
+                "concepts": [
+                    {"concept_id": "concept-0002", "surface": "芸", "concept_type": "plant",
+                     "source_block_refs": ["b2"],
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "", "summary": ""}
+                ],
+                "atomic_items": [],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    assert len(result["concepts"]) == 2
+    types = {c["concept_type"] for c in result["concepts"]}
+    assert types == {"person", "plant"}
+
+    # Unresolved item for ambiguous surface
+    assert len(result["unresolved_items"]) == 1
+    u = result["unresolved_items"][0]
+    assert u["kind"] == "ambiguous_concept_surface"
+    assert u["surface"] == "芸"
+    assert set(u["candidate_types"]) == {"person", "plant"}
+
+
+def test_stabilize_remaps_item_concept_refs() -> None:
+    """After merge, item concept_refs point to merged concept IDs."""
+    result = flatten_and_stabilize_segment_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+                     "source_block_refs": ["b1"],
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "", "summary": ""}
+                ],
                 "atomic_items": [
-                    {"item_id": "item-0001", "concept_refs": ["concept-0001"]}
+                    {"item_id": "item-0001", "concept_refs": ["concept-0001"],
+                     "summary": "event", "item_type": "event",
+                     "source_block_refs": ["b1"],
+                     "temporal_attributes": [], "attributes": {}, "uncertainty": [],
+                     "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}}
                 ],
             },
             {
                 "segment_id": "seg-0002",
-                "concepts": [{"concept_id": "concept-0001", "surface": "b"}],
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+                     "source_block_refs": ["b2"],
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "", "summary": ""}
+                ],
                 "atomic_items": [
-                    {"item_id": "item-0001", "concept_refs": ["concept-0001"]}
+                    {"item_id": "item-0001", "concept_refs": ["concept-0001"],
+                     "summary": "another event", "item_type": "event",
+                     "source_block_refs": ["b2"],
+                     "temporal_attributes": [], "attributes": {}, "uncertainty": [],
+                     "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}}
                 ],
             },
-        ]
+        ],
+        unit_id="unit-0001",
     )
 
-    # Both segments had local concept-0001 — now scoped to unit-unique IDs
-    assert flat["concepts"][0]["concept_id"] == "seg-0001-concept-0001"
-    assert flat["concepts"][1]["concept_id"] == "seg-0002-concept-0001"
-    assert flat["atomic_items"][0]["item_id"] == "seg-0001-item-0001"
-    assert flat["atomic_items"][1]["item_id"] == "seg-0002-item-0001"
+    # Concept merged, items reindexed
+    assert result["concepts"][0]["concept_id"] == "concept-0001"
+    assert result["atomic_items"][0]["item_id"] == "item-0001"
+    assert result["atomic_items"][1]["item_id"] == "item-0002"
 
-    # concept_refs rewritten to match scoped concept IDs
-    assert flat["atomic_items"][0]["concept_refs"] == ["seg-0001-concept-0001"]
-    assert flat["atomic_items"][1]["concept_refs"] == ["seg-0002-concept-0001"]
+    # Both items' concept_refs point to the merged concept ID
+    assert result["atomic_items"][0]["concept_refs"] == ["concept-0001"]
+    assert result["atomic_items"][1]["concept_refs"] == ["concept-0001"]
+
+
+def test_stabilize_empty_input() -> None:
+    result = flatten_and_stabilize_segment_results([], unit_id="unit-0001")
+    assert result["concepts"] == []
+    assert result["atomic_items"] == []
+    assert result["unresolved_items"] == []
+
+
+def test_stabilize_single_segment_no_merge_needed() -> None:
+    """Single segment with one concept — gets clean ID, merged_from with single entry."""
+    result = flatten_and_stabilize_segment_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "余", "concept_type": "person",
+                     "source_block_refs": ["b1"],
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "", "summary": ""}
+                ],
+                "atomic_items": [
+                    {"item_id": "item-0001", "concept_refs": ["concept-0001"],
+                     "summary": "event", "item_type": "event",
+                     "source_block_refs": ["b1"],
+                     "temporal_attributes": [], "attributes": {}, "uncertainty": [],
+                     "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}}
+                ],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    assert len(result["concepts"]) == 1
+    assert result["concepts"][0]["concept_id"] == "concept-0001"
+    assert result["concepts"][0]["merged_from"] == ["seg-0001-concept-0001"]
+    assert result["atomic_items"][0]["item_id"] == "item-0001"
+    assert result["atomic_items"][0]["concept_refs"] == ["concept-0001"]
+    assert result["unresolved_items"] == []

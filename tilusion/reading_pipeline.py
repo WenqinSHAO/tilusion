@@ -24,7 +24,7 @@ from .extraction_pipeline import (
 from .reading_payloads import (
     build_per_segment_extraction_payload,
     build_unit_reading_finalization_payload,
-    flatten_segment_results,
+    flatten_and_stabilize_segment_results,
 )
 from .reading_prompts import (
     build_per_segment_extraction_composition,
@@ -402,14 +402,19 @@ def run_reading_finalization_pass(
     cache_dir: Path,
     use_cache: bool = True,
     context: dict[str, Any] | None = None,
+    stabilized: dict[str, list[dict[str, Any]]] | None = None,
 ) -> ReadingPassRecord:
     """Run the reading unit finalization pass.
 
-    Deduplicates and stabilizes records from all per-segment passes into
-    a single ExtractionUnitPackage.
+    If *stabilized* is provided, it is used directly as the pre-merged
+    concepts, atomic_items, and unresolved_items.  Otherwise the function
+    falls back to the old flatten-only behaviour (for tests / backwards
+    compatibility during the transition).
     """
-    # Flatten all segment results
-    flat = flatten_segment_results([r.data for r in segment_records])
+    if stabilized is None:
+        stabilized = flatten_and_stabilize_segment_results(
+            [r.data for r in segment_records], unit_id=unit_id
+        )
 
     prompt = build_unit_reading_finalization_composition()
     payload = build_unit_reading_finalization_payload(
@@ -426,9 +431,10 @@ def run_reading_finalization_pass(
         ],
         source_spans=[],
         source_blocks=[],
-        concept_mentions=flat["concepts"],
+        concept_mentions=stabilized["concepts"],
         logical_groups=[],
         links=[],
+        unresolved_items=stabilized.get("unresolved_items", []),
         validation_reports=[r.validation_report.to_dict() for r in segment_records],
         context_metadata={"context_injection": context is not None},
     )
@@ -566,6 +572,11 @@ def run_reading_pipeline(
         _log_progress(step, TOTAL_STEPS, "Per-segment extraction", "FAILED", _elapsed_ms(t0))
         raise
 
+    # ── Stabilize: merge concepts and reindex items ──
+    stabilized = flatten_and_stabilize_segment_results(
+        [r.data for r in segment_records], unit_id=unit_id
+    )
+
     # ── Step 3: Unit reading finalization ──
     step = 3
     t0 = time.monotonic()
@@ -579,6 +590,7 @@ def run_reading_pipeline(
             cache_dir=cache_root / "finalization",
             use_cache=use_cache,
             context=context,
+            stabilized=stabilized,
         )
         pass_summaries["unit_reading_finalization"] = {
             "cache_key": finalization_record.cache_key,
