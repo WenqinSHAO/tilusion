@@ -154,11 +154,13 @@ def test_prompt_composition_tracks_static_and_generated_parts() -> None:
 def test_overview_composition_tracks_static_prompt_contract() -> None:
     prompt = build_overview_composition()
 
-    assert prompt.composition_id == "overview-segmentation-v0.1"
+    assert prompt.composition_id == "overview-segmentation-v0.2"
     assert prompt.parts[0].part_id == "overview-segmentation-contract"
     assert "coarse, source-grounded navigation overview" in prompt.content
     assert "start_quote" in prompt.content
     assert "end_quote" in prompt.content
+    assert "region" in prompt.content
+    assert "Do not pre-extract entities" in prompt.content
 
 
 def test_unit_finalization_composition_tracks_static_prompt_contract() -> None:
