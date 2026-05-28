@@ -240,7 +240,7 @@ def test_segment_merge_merges_duplicate_concepts() -> None:
     assert len(result["concepts"]) == 1
     c = result["concepts"][0]
     assert c["concept_id"] == "concept-0001"
-    assert c["surface"] == "余"
+    assert c["surface"] == "沈复"  # canonical_name preferred over raw surface
     assert c["concept_type"] == "person"
     assert c["merged_from"] == ["seg-0001-concept-0001", "seg-0002-concept-0001"]
     assert set(c["source_block_refs"]) == {"b1", "b2"}
@@ -258,6 +258,46 @@ def test_segment_merge_merges_duplicate_concepts() -> None:
         "ambiguous_surface_count": 0,
         "warning_count": 0,
     }
+
+
+def test_canonical_name_merge_across_different_surfaces() -> None:
+    """Concepts with different surfaces but same canonical_name + type → merged."""
+    result = merge_segment_extraction_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "source_blocks": [],
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "相如", "concept_type": "person",
+                     "summary": "汉代辞赋家", "source_block_refs": ["b1"],
+                     "aliases": [], "observed_surfaces": ["相如"], "facets": [],
+                     "uncertainty": [], "canonical_name": "司马相如"}
+                ],
+                "atomic_items": [],
+            },
+            {
+                "segment_id": "seg-0002",
+                "source_blocks": [],
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "长卿", "concept_type": "person",
+                     "summary": "字长卿", "source_block_refs": ["b2"],
+                     "aliases": [], "observed_surfaces": ["长卿"], "facets": [],
+                     "uncertainty": [], "canonical_name": "司马相如"}
+                ],
+                "atomic_items": [],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    assert len(result["concepts"]) == 1
+    c = result["concepts"][0]
+    assert c["surface"] == "司马相如"
+    assert c["canonical_name"] == "司马相如"
+    assert c["concept_type"] == "person"
+    assert len(c["merged_from"]) == 2
+    assert "相如" in c["observed_surfaces"]
+    assert "长卿" in c["observed_surfaces"]
 
 
 def test_segment_merge_preserves_different_types() -> None:

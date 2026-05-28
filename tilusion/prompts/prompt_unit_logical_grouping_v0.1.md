@@ -94,10 +94,17 @@ Rules:
 
 Concept delta guidance:
 
-- `merge`: two or more existing concepts (possibly with different surfaces or types) actually refer to the same entity. Provide `target_refs` (IDs to merge) and `changes` with the merged concept's `surface`, `concept_type`, `canonical_name`, `summary`, and any merged `aliases`/`observed_surfaces`.
+- `merge`: two or more existing concepts (possibly with different surfaces or types) actually refer to the same entity. Provide `target_refs` (IDs to merge) and `changes` with the merged concept's `surface`, `concept_type`, `canonical_name`, `summary`, and any merged `aliases`/`observed_surfaces`. Be aggressive about merging: if two concepts refer to the same real-world entity or idea, merge them even if surfaces differ. The deterministic merge already groups by canonical_name + type; use merge deltas to catch remaining duplicates the deterministic step missed.
 - `split`: a merged concept actually refers to different entities (e.g., same surface used for distinct referents). Provide the concept to split as `target_refs[0]` and `changes.split_into` with an array of new concept objects, each with `surface`, `concept_type`, `canonical_name`, `summary`, and the `source_block_refs` that belong to each.
 - `refine`: update `canonical_name`, `summary`, `aliases`, `observed_surfaces`, `facets`, or `uncertainty` without changing identity or type.
-- `reclassify`: change `concept_type` only.
+- `reclassify`: change `concept_type` only. Use this to consolidate overly fine-grained types. Prefer fewer, coarser categories:
+
+  **Merge these types:** `substance`, `thing`, `object` → `object`. `work`, `collection` → `collection`. `condition`, `phenomenon` → `theme`. `custom`, `event_type` → `theme` or `other`.
+
+  **Avoid these types:** `event_type` (misleading — these are abstract event categories, not atomic items/events). `thing` (too vague; use `object`). `substance` (use `object` unless truly a material/substance with distinct identity).
+
+  **Prefer:** `person`, `place`, `object`, `term`, `theme`, `method`, `time_anchor`, `organization`, `work`/`collection`, `motif`, `emotion`, `other`.
+
 - Do not emit no-op deltas. If nothing needs changing, return an empty `concept_deltas` list.
 - The caller will apply deltas after your response. You only declare the edits.
 

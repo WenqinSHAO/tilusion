@@ -176,6 +176,26 @@ def merge_segment_extraction_results(
         key = (concept.get("surface", ""), concept.get("concept_type", ""))
         groups.setdefault(key, []).append(concept)
 
+    # ── Phase 2.5: merge groups that share the same canonical_name ──
+    # When the LLM assigns the same canonical_name to concepts with different
+    # surface forms (e.g. 司马相如 appearing as 相如 and 长卿), the surface-group
+    # key alone won't merge them. Canonical-name merging catches these.
+    #
+    # Build canonical_name → set of (surface, type) group keys.
+    cname_to_keys: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for key, members in groups.items():
+        for m in members:
+            cname = m.get("canonical_name", "")
+            if cname:
+                cname_to_keys.setdefault((cname, key[1]), set()).add(key)
+
+    for (_cname, _ctype), related_keys in cname_to_keys.items():
+        if len(related_keys) > 1:
+            primary = next(iter(related_keys))
+            for other_key in related_keys:
+                if other_key != primary and other_key in groups:
+                    groups[primary].extend(groups.pop(other_key))
+
     # ── Phase 3: merge groups and detect ambiguous surfaces ──
     surfaces_to_types: dict[str, set[str]] = {}
     merged_concepts: list[dict[str, Any]] = []
@@ -183,12 +203,12 @@ def merge_segment_extraction_results(
     concept_index = 0
 
     for (surface, concept_type), members in groups.items():
-        surfaces_to_types.setdefault(surface, set()).add(concept_type)
         concept_index += 1
         merged_id = f"concept-{concept_index:04d}"
 
         for member in members:
             scoped_to_merged[member["concept_id"]] = merged_id
+            surfaces_to_types.setdefault(surface, set()).add(concept_type)
 
         merged = _merge_concept_group(merged_id, surface, concept_type, members)
         merged_concepts.append(merged)
@@ -274,11 +294,13 @@ def _merge_concept_group(
                 return v
         return default
 
+    canonical = _first_nonempty("canonical_name")
+
     return {
         "concept_id": merged_id,
-        "surface": surface,
+        "surface": canonical or surface,
         "concept_type": concept_type,
-        "canonical_name": _first_nonempty("canonical_name"),
+        "canonical_name": canonical,
         "summary": _first_nonempty("summary"),
         "aliases": _union("aliases"),
         "observed_surfaces": _union("observed_surfaces"),
