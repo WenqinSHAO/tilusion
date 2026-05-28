@@ -62,6 +62,7 @@
 - Quality cleanup step 3 done: unit grouping now dedupes concepts that become equivalent after LLM concept deltas, and remaps item/group concept refs through the composed remap.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
+  - Commits 14–18 done 2026-05-28: concept quality fixes after comparison review of two extraction runs. The LLM unit grouping pass was emitting unsafe merge deltas that collapsed distinct entities into synthetic collections (dates into "biography timeline", places into "place series", terms into "terminology group"). Five commits address this: (14) tightened merge identity rules, (15) narrowed concept type definitions, (16) separated temporal mentions from merging, (17) added deterministic merge safety validation, (18) added tests.
 
 ## Implementation Status
 
@@ -80,3 +81,8 @@
 | 11 | Metrics wiring | done |
 | 12 | Update CLI | done |
 | 13 | Content-addressable unit package caching | done |
+| 14 | Tighten concept merge identity rules | done |
+| 15 | Narrow concept type guidance | done |
+| 16 | Separate temporal mentions from concept merging | done |
+| 17 | Deterministic merge safety validation | done |
+| 18 | Merge safety validation tests | done |
