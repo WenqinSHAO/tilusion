@@ -1404,6 +1404,17 @@ def resolve_overview_segments(
                 end_location=end_location,
             )
         )
+    # De-overlap: ensure segments are disjoint so source blocks from
+    # different segments never cover the same text region twice.
+    resolved.sort(key=lambda s: s.start)
+    for i in range(len(resolved) - 1):
+        if resolved[i].end > resolved[i + 1].start:
+            resolved[i].end = resolved[i + 1].start
+            resolved[i].text = text[resolved[i].start : resolved[i].end]
+
+    # Drop segments that became empty after de-overlapping.
+    resolved = [s for s in resolved if s.start < s.end]
+
     return resolved, repair_hints
 
 

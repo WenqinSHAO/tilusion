@@ -658,8 +658,9 @@ function focusConcept(cid) {
   // Navigate to a group that references this concept
   for (const g of GROUPS) {
     if ((g.concept_refs || []).includes(cid)) {
+      document.querySelectorAll('#sidebarNav .nav-item').forEach(n => n.classList.remove('active'));
       activateGroupSilent(g.group_id);
-      document.querySelectorAll(`#sidebarNav .nav-item[data-group="${g.group_id}"]`).forEach(n => n.classList.add('active'));
+      document.querySelector(`#sidebarNav .nav-item[data-group="${g.group_id}"]`)?.classList.add('active');
       break;
     }
   }
@@ -1073,8 +1074,9 @@ function showBlockInfo(el, blockId) {
       // Navigate to a group containing this item
       for (const g of GROUPS) {
         if ((g.item_refs || []).includes(infoItem.dataset.item)) {
+          document.querySelectorAll('#sidebarNav .nav-item').forEach(n => n.classList.remove('active'));
           activateGroupSilent(g.group_id);
-          document.querySelectorAll(`#sidebarNav .nav-item[data-group="${g.group_id}"]`).forEach(n => n.classList.add('active'));
+          document.querySelector(`#sidebarNav .nav-item[data-group="${g.group_id}"]`)?.classList.add('active');
           break;
         }
       }
