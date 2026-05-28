@@ -82,6 +82,16 @@ Rules:
 - Concept and atomic item IDs are segment-local. Use stable simple IDs like `concept-0001` and `item-0001`; the caller will scope and reindex them later.
 - A `concept.surface` must be copied exactly from the source block text inside the corresponding inline markers.
 - `concept_type` is schema-light but should stay coarse. Prefer the recommended types shown in the JSON shape. Use `other` or a concise custom string only when the source contains an important concept that clearly does not fit. Do not create narrow types for event categories, conditions, relationship labels, formats, or substances when `theme`, `term`, `social_role`, `source`, or `object` would work. Do not force people/location/time extraction.
+
+  **Type definitions:**
+  - `source`: only for cited or named texts, books, poems, songs, documents, articles, scriptures, datasets, quoted source materials. If extracting sources in a segment, be reasonably complete for salient named sources.
+  - `object`: only for concrete salient physical objects that participate in action, symbolism, ownership, exchange, or scene meaning. Do not use it as a vague bucket for "things".
+  - `term`: for reusable concepts, technical terms, expressions, or named ideas that appear in the text and carry specific meaning. Not every phrase is a term.
+  - `theme`: for abstract recurring ideas, motifs, or topics that the text discusses or develops. A theme is not a replacement for a logical group.
+  - `time_anchor`: for explicit and relative time expressions that help temporal ordering or timeline construction. Keep each distinct temporal reference as a separate concept — do not merge dates into a single time_anchor.
+  - `place`: for named locations, geographic features, buildings, rooms, regions, or natural landmarks.
+  - `person`: for named individuals, historical figures, or characters.
+  - Do not create synthetic collection/category concepts. If you need to express that items belong together, do so through logical groups later, not through concept types.
 - Use `observed_surfaces` for exact forms found in this segment. Use `aliases` only for aliases directly supported by this segment.
 - Atomic items should be compact source-grounded compressions. Prefer fewer meaningful items over one item per sentence.
 - An atomic item may cite multiple non-contiguous source blocks when one meaning unit is distributed across the segment.

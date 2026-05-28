@@ -117,6 +117,14 @@ Concept delta guidance:
 
   **Prefer:** `person`, `group`, `organization`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `emotion`, `social_role`, `institution`, `symbol`, `scene_element`, `technical_component`, `dataset`, `metric`, `source`, `other`.
 
+  **Type definitions for reclassification:**
+  - `source`: only for cited/named texts, books, poems, songs, documents, articles, scriptures, datasets, quoted source materials. A source must have a title or clear name.
+  - `object`: only for concrete salient physical objects that participate in action, symbolism, ownership, exchange, or scene meaning. Do not use as a vague "things" bucket.
+  - `term`: for reusable concepts, technical terms, named expressions that carry specific meaning. Not a catch-all for phrases.
+  - `theme`: for abstract recurring ideas or motifs. A theme is not a replacement for a logical group.
+  - `time_anchor`: for individual temporal mentions (dates, seasons, relative times). Keep distinct temporal references as separate concepts — do not consolidate them into one.
+  - Do not reclassify multiple distinct entities into a single concept just because they share a category. Categories belong in logical groups, not concepts.
+
 - Do not emit no-op deltas. If nothing needs changing, return an empty `concept_deltas` list.
 - The caller will apply deltas after your response. You only declare the edits.
 
