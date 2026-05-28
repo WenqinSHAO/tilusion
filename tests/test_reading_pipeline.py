@@ -814,3 +814,63 @@ def test_classify_merge_risk_distinct_terms_no_identity_signal() -> None:
     reason = _classify_merge_risk(targets, {})
     assert reason is not None
     assert "distinct surfaces" in reason
+
+
+# ── Uncertainty normalization tests ──────────────────────────────────────────
+
+
+def test_normalize_uncertainty_coerces_dict_to_json_string() -> None:
+    """Dict in uncertainty list is coerced to JSON string."""
+    from tilusion.reading_pipeline import _normalize_uncertainty_fields
+
+    data = {
+        "concepts": [
+            {"concept_id": "concept-0001", "uncertainty": [
+                "plain string",
+                {"note": "ambiguous reference", "confidence": "low"},
+            ]},
+        ],
+    }
+    _normalize_uncertainty_fields(data)
+    assert all(isinstance(v, str) for v in data["concepts"][0]["uncertainty"])
+    assert data["concepts"][0]["uncertainty"][0] == "plain string"
+    assert "ambiguous reference" in data["concepts"][0]["uncertainty"][1]
+
+
+def test_normalize_uncertainty_coerces_nested_temporal_attr() -> None:
+    """Non-string in temporal_attributes uncertainty is coerced."""
+    from tilusion.reading_pipeline import _normalize_uncertainty_fields
+
+    data = {
+        "atomic_items": [
+            {
+                "item_id": "item-0001",
+                "temporal_attributes": [
+                    {"kind": "explicit", "uncertainty": [{"reason": "vague"}]},
+                ],
+            },
+        ],
+    }
+    _normalize_uncertainty_fields(data)
+    attr = data["atomic_items"][0]["temporal_attributes"][0]
+    assert all(isinstance(v, str) for v in attr["uncertainty"])
+
+
+def test_normalize_uncertainty_handles_missing_fields() -> None:
+    """Normalization does not crash on missing optional fields."""
+    from tilusion.reading_pipeline import _normalize_uncertainty_fields
+
+    data: dict[str, Any] = {"unit_id": "unit-0001"}
+    _normalize_uncertainty_fields(data)
+    assert data["unit_id"] == "unit-0001"
+
+
+def test_normalize_uncertainty_preserves_strings() -> None:
+    """Already-string uncertainty items are unchanged."""
+    from tilusion.reading_pipeline import _normalize_uncertainty_fields
+
+    data = {
+        "concepts": [{"concept_id": "concept-0001", "uncertainty": ["note 1", "note 2"]}],
+    }
+    _normalize_uncertainty_fields(data)
+    assert data["concepts"][0]["uncertainty"] == ["note 1", "note 2"]

@@ -338,6 +338,8 @@ def run_per_segment_extraction_pass(
         raw_response = backend.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
 
+    _normalize_uncertainty_fields(data)
+
     # Build a v0.3 validation subject with authoritative source blocks
     validation_subject = {
         "schema_version": READING_UNIT_SCHEMA_VERSION,
@@ -637,6 +639,45 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _normalize_uncertainty_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """Coerce non-string uncertainty list items to strings in-place.
+
+    LLMs occasionally return structured objects in uncertainty lists
+    (e.g. ``{"note": "ambiguous"}``) instead of plain strings. This
+    normalizes them so downstream validation passes.
+    """
+    for concept in _as_list(data.get("concepts")):
+        concept["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(concept.get("uncertainty"))]
+
+    for item in _as_list(data.get("atomic_items")):
+        item["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(item.get("uncertainty"))]
+        for attr in _as_list(item.get("temporal_attributes")):
+            attr["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(attr.get("uncertainty"))]
+
+    for group in _as_list(data.get("logical_groups")):
+        group["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(group.get("uncertainty"))]
+        for node in _as_list(group.get("graph", {}).get("nodes")):
+            node["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(node.get("uncertainty"))]
+        for edge in _as_list(group.get("graph", {}).get("edges")):
+            edge["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(edge.get("uncertainty"))]
+
+    for unresolved in _as_list(data.get("unresolved_items")):
+        unresolved["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(unresolved.get("uncertainty"))]
+
+    for delta in _as_list(data.get("concept_deltas")):
+        delta["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(delta.get("uncertainty"))]
+
+    return data
+
+
+def _uncertainty_to_str(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def _dedupe_equivalent_concepts(
     concepts: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
@@ -816,6 +857,8 @@ def run_unit_logical_grouping_pass(
     else:
         raw_response = backend.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
+
+    _normalize_uncertainty_fields(data)
 
     # Screen LLM merge deltas for unsafe patterns (synthetic collections,
     # merging distinct time_anchor/place/source concepts, etc.) before
