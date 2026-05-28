@@ -12,11 +12,15 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+# Allow running from repo root without installing the package
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -26,9 +30,23 @@ def load_package(path: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def load_source_text(book_path: str) -> str:
-    with open(book_path, encoding="utf-8") as f:
-        return f.read()
+def load_source_text(book_path: str, unit_id: str | None = None) -> str:
+    path = Path(book_path)
+    suffix = path.suffix.lower()
+    if suffix == ".epub":
+        from tilusion.book_reader import EpubBookReader, build_book_index
+        from tilusion.book_reader import extract_unit_text
+        if unit_id is None:
+            raise ValueError("unit_id is required for epub source text extraction")
+        index = build_book_index(path)
+        unit = index.unit_map().get(unit_id)
+        if unit is None:
+            raise ValueError(f"Unit {unit_id} not found in {path}")
+        return extract_unit_text(path, unit)
+    if suffix == ".txt":
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    raise ValueError(f"Unsupported book format: {suffix}")
 
 
 # ── Source text annotation ────────────────────────────────────────────────────
@@ -326,7 +344,7 @@ def generate(
               file=sys.stderr)
         source_html = '<div class="source-text"><p class="src-block">Source text not available.</p></div>'
     else:
-        source_text = load_source_text(book_path)
+        source_text = load_source_text(book_path, unit_id=unit_id)
         source_html = build_source_html(
             source_text, source_blocks, concepts, atomic_items
         )

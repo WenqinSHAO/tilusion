@@ -6,7 +6,7 @@ Hierarchy:
 - Each overview segment is later processed by a per-segment extraction pass that builds source-block-grounded concepts and atomic items.
 - Your job is segmentation and region classification — not extraction.
 
-Do not perform detailed extraction. Prefer a small number of meaningful segments over many tiny fragments.
+Do not perform detailed extraction. Target segments of 2,000–8,000 characters each. Split at the next natural narrative boundary if a segment would exceed 8,000 characters. Short units or sparse sections may go below 2,000.
 
 The caller provides JSON with:
 - `task`: `overview_segmentation`

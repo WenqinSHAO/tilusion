@@ -1,5 +1,7 @@
 You review one unit's merged concepts and atomic items, emit optional concept corrections, and build logical groups with optional graph structure.
 
+**CRITICAL — Language:** Write ALL text fields (summary, rationale, warnings, uncertainty, changes descriptions, node labels, edge summaries) in the same language as the source text. If the source is Chinese, write in Chinese. If the source is English, write in English. Never translate or mix languages. Group types, delta types, edge types, and node/item/concept IDs are the only fields that use the English vocabulary from the schema.
+
 Hierarchy:
 - A book or long document is split into extraction units (chapters, sections).
 - Each unit is split into segments for per-segment extraction.
@@ -64,8 +66,8 @@ Minimum shape:
             "target": "node-0002",
             "edge_type": "precedes|causes|enables|explains|follows_from|continues|resolves|supports|contradicts|qualifies|contrasts|elaborates|part_of|refers_to|exemplifies|defines|uses_method|produces_result|has_limitation|raises_question|answers_question|aliases|same_as_candidate|related_to|other|custom",
             "summary": "short description of this edge",
-            "source_block_refs": ["overview-segment-0001-block-0000"],
-            "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"},
+            "source_block_refs": [],
+            "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
             "uncertainty": []
           }
         ]
@@ -132,16 +134,16 @@ Concept delta guidance:
 
 Logical group guidance:
 
-- Group atomic items that naturally belong together. Prefer fewer meaningful groups over many singleton groups.
-- An item may belong to multiple groups (cross-group membership is allowed).
-- Items without natural groups should be left ungrouped. Do not force every item into a group.
+- Group items by their narrative function: what happens (plot events, actions), who characters are (traits, backstory, relationships), what the world is like (setting, history, rules), and what ideas recur (themes, motifs, symbols). Items that serve the same narrative purpose belong together.
+- A group does not need a complex graph. A simple group with just `group_type`, `summary`, and `item_refs` is valid — not every group needs nodes and edges.
+- Prefer fewer meaningful groups over many tiny ones. Aim to place most items in a group — an item should be ungrouped only when it genuinely stands alone with no narrative connection to any other item. Cross-group membership is allowed.
 - `item_refs` must refer to existing input `atomic_items[*].item_id` values.
 - `concept_refs` must refer to existing input `concepts[*].concept_id` values.
 - Graph `nodes[*].item_ref` must refer to an item in `item_refs` for the same group.
 - Graph `edges[*].source` and `edges[*].target` must refer to `node_id` values within the same group's graph.
-- `source_block_refs` on edges must cite existing source block IDs when the edge is source-grounded.
+- `source_block_refs` on edges must cite existing source block IDs when the edge is source-grounded (grounding: "source_grounded"). Most graph edges are synthetic/inferred — use `"grounding": "llm_inferred"` and omit `source_block_refs` unless the relationship is directly stated in a specific source block.
 - `group_type` is schema-light. Use a recommended type when it fits; otherwise use `other` or a concise custom string.
-- A `timeline` or `temporal_sequence` group should use a graph with `precedes`, `causes`, `enables`, `continues`, `resolves`, or `follows_from` edges.
+- A `timeline` or `temporal_sequence` group should use a graph with `precedes`, `causes`, `enables`, `continues`, `resolves`, or `follows_from` edges. **Order `item_refs` in absolute chronological order** (earliest first), not in narrative/appearance order. Use each item's `temporal_attributes` to determine chronological position. Items with explicit dates or absolute time anchors come first; items with only relative temporal hints come after. If two items have ambiguous temporal ordering, place the one appearing earlier in the narrative first and note the uncertainty in `warnings`.
 - A `discourse_graph` or `claim_evidence_map` group should use `supports`, `contradicts`, `qualifies`, `contrasts`, `elaborates`, `raises_question`, or `answers_question` edges.
 
 Unresolved items guidance:

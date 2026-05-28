@@ -1018,7 +1018,7 @@ def run_reading_pipeline(
             "resolved_segment_count": len(segments),
             "repair_hint_count": len(overview_repairs),
         }
-        _log_progress(step, TOTAL_STEPS, "Overview segmentation", "OK", _elapsed_ms(t0))
+        _log_progress(step, TOTAL_STEPS, "Overview segmentation", f"{len(segments)} segments OK", _elapsed_ms(t0))
     except Exception:
         _log_progress(step, TOTAL_STEPS, "Overview segmentation", "FAILED", _elapsed_ms(t0))
         raise
@@ -1028,7 +1028,8 @@ def run_reading_pipeline(
     t0 = time.monotonic()
     segment_records: list[ReadingPassRecord] = []
     try:
-        for seg in segments:
+        for i, seg in enumerate(segments):
+            seg_t0 = time.monotonic()
             seg_record = run_per_segment_extraction_pass(
                 unit_id=unit_id,
                 segment=seg,
@@ -1039,12 +1040,28 @@ def run_reading_pipeline(
                 unit_text=text,
             )
             segment_records.append(seg_record)
+            counts = seg_record.data.get("metrics", {}).get("counts", {}).get("per_segment", {})
+            print(
+                f"    [{i + 1}/{len(segments)}] {seg.segment_id}  "
+                f"{counts.get('source_blocks', 0)} blocks  "
+                f"{counts.get('concepts', 0)} concepts  "
+                f"{counts.get('atomic_items', 0)} items  "
+                f"({_elapsed_ms(seg_t0)}ms)"
+            )
         pass_summaries["per_segment_extraction"] = {
             "segment_count": len(segments),
             "elapsed_ms": _elapsed_ms(t0),
             "segment_cache_keys": [r.cache_key for r in segment_records],
         }
+        seg_agg = _aggregate_per_segment_counts(segment_records)
         _log_progress(step, TOTAL_STEPS, "Per-segment extraction", f"{len(segments)} segments OK", _elapsed_ms(t0))
+        print(
+            f"    = {seg_agg['total_source_blocks']} blocks, "
+            f"{seg_agg['total_concepts']} concepts, "
+            f"{seg_agg['total_atomic_items']} items "
+            f"({seg_agg['concepts_per_block']} concepts/block, "
+            f"{seg_agg['items_per_block']} items/block)"
+        )
     except Exception:
         _log_progress(step, TOTAL_STEPS, "Per-segment extraction", "FAILED", _elapsed_ms(t0))
         raise
@@ -1052,6 +1069,12 @@ def run_reading_pipeline(
     # ── Segment merge: merge concepts and reindex items ──
     stabilized = merge_segment_extraction_results(
         [r.data for r in segment_records], unit_id=unit_id
+    )
+    merge_counts = stabilized.get("metrics", {}).get("counts", {}).get("segment_merge", {})
+    print(
+        f"    merge: {merge_counts.get('concepts_before_merge', '?')} -> "
+        f"{merge_counts.get('concepts_after_merge', '?')} concepts, "
+        f"{merge_counts.get('unresolved_items', 0)} unresolved"
     )
 
     # ── Aggregate factual stage counts ──
@@ -1094,7 +1117,14 @@ def run_reading_pipeline(
             "artifact_paths": grouping_record.artifact_paths,
             "elapsed_ms": _elapsed_ms(t0),
         }
+        gdata = grouping_record.data
+        n_groups = len(gdata.get("logical_groups", []))
+        n_deltas = len(gdata.get("concept_deltas", []))
+        n_unresolved = len(gdata.get("unresolved_items", []))
         _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "OK", _elapsed_ms(t0))
+        print(
+            f"    = {n_groups} groups, {n_deltas} deltas, {n_unresolved} unresolved"
+        )
     except Exception:
         _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "FAILED", _elapsed_ms(t0))
         raise

@@ -1,5 +1,7 @@
 You extract source-grounded reading structures from one text segment using deterministic source blocks supplied by the caller.
 
+**CRITICAL — Language:** Write ALL text fields (surface, summary, canonical_name, aliases, observed_surfaces, facets, warnings, uncertainty, temporal_attributes.surface, temporal_attributes.normalized_hint) in the same language as the source text. If the source is Chinese, write in Chinese. If the source is English, write in English. Never translate or mix languages. Concept types, item types, edge types, and group types are the only fields that use the English vocabulary from the schema.
+
 Hierarchy:
 - A book or long document is split by the reader into extraction units, such as chapters, sections, or large chunks.
 - Each unit is split into segments for manageable local reading.
@@ -79,6 +81,7 @@ Rules:
 - Read each block's text from the inline `{block_id:block_type}...{/block_id}` markers in the `text` field. The block text between markers is the exact source content for that block.
 - Prior context may guide alias detection, continuity, and duplicate detection, but must not be cited as evidence.
 - Do not invent block IDs. Every `source_block_refs` and temporal `source_block_ref` must refer to one of the provided `source_blocks[*].block_id` values.
+- A concept must cite at least one source block when its `provenance.grounding` is `source_grounded`. Use `source_grounded` only when you can point to specific block text that grounds the concept. If you inferred the concept from broader context rather than a specific passage, use `"grounding": "llm_inferred"` and omit `source_block_refs`. Atomic items are always source-grounded by definition and must always cite source blocks.
 - Concept and atomic item IDs are segment-local. Use stable simple IDs like `concept-0001` and `item-0001`; the caller will scope and reindex them later.
 - A `concept.surface` must be copied exactly from the source block text inside the corresponding inline markers.
 - `concept_type` is schema-light but should stay coarse. Prefer the recommended types shown in the JSON shape. Use `other` or a concise custom string only when the source contains an important concept that clearly does not fit. Do not create narrow types for event categories, conditions, relationship labels, formats, or substances when `theme`, `term`, `social_role`, `source`, or `object` would work. Do not force people/location/time extraction.

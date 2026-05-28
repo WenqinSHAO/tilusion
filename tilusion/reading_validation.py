@@ -181,9 +181,10 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
             block_ids,
             f"{path}.source_block_refs",
             issues,
-            require_non_empty=True,
+            require_non_empty=_concept_requires_source_blocks(concept),
             empty_code="missing_source_block_refs",
             empty_message="Source-grounded concepts must cite at least one source block.",
+            strip_invalid=True,
         )
         _validate_string_list(concept.get("aliases", []), f"{path}.aliases", issues)
         _validate_string_list(concept.get("observed_surfaces", []), f"{path}.observed_surfaces", issues)
@@ -202,11 +203,12 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
             block_ids,
             f"{path}.source_block_refs",
             issues,
-            require_non_empty=True,
+            require_non_empty=_concept_requires_source_blocks(item),
             empty_code="missing_source_block_refs",
             empty_message="Source-grounded atomic items must cite at least one source block.",
+            strip_invalid=True,
         )
-        _validate_ref_list(item.get("concept_refs", []), concept_ids, f"{path}.concept_refs", issues)
+        _validate_ref_list(item.get("concept_refs", []), concept_ids, f"{path}.concept_refs", issues, strip_invalid=True)
         _validate_temporal_attributes(item.get("temporal_attributes", []), block_ids, f"{path}.temporal_attributes", issues)
         _validate_string_list(item.get("uncertainty", []), f"{path}.uncertainty", issues)
         _validate_provenance(item.get("provenance"), f"{path}.provenance", issues, allow_missing=True)
@@ -223,8 +225,9 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
             f"{path}.item_refs",
             issues,
             require_non_empty=False,
+            strip_invalid=True,
         )
-        _validate_ref_list(group.get("concept_refs", []), concept_ids, f"{path}.concept_refs", issues)
+        _validate_ref_list(group.get("concept_refs", []), concept_ids, f"{path}.concept_refs", issues, strip_invalid=True)
         _validate_string_list(group.get("uncertainty", []), f"{path}.uncertainty", issues)
         _validate_provenance(group.get("provenance"), f"{path}.provenance", issues, allow_missing=True)
         _validate_group_graph(group.get("graph") or {}, item_ids, block_ids, f"{path}.graph", issues)
@@ -332,17 +335,21 @@ def _validate_group_graph(
         if "label" in node and not isinstance(node.get("label"), str):
             issues.append(_issue("error", "wrong_field_type", f"{node_path}.label", "Node label must be a string."))
 
+    bad_edge_indices: set[int] = set()
     for index, edge in enumerate(edges):
         edge_path = f"{path}.edges[{index}]"
         if not isinstance(edge, dict):
             issues.append(_issue("error", "wrong_item_type", edge_path, "Graph edge must be an object."))
             continue
-        _validate_single_ref(edge.get("source"), node_ids, f"{edge_path}.source", issues)
-        _validate_single_ref(edge.get("target"), node_ids, f"{edge_path}.target", issues)
+        _validate_single_ref(edge.get("source"), node_ids, f"{edge_path}.source", issues, warn_only=True)
+        _validate_single_ref(edge.get("target"), node_ids, f"{edge_path}.target", issues, warn_only=True)
+        if not _is_valid_ref(edge.get("source"), node_ids) or not _is_valid_ref(edge.get("target"), node_ids):
+            bad_edge_indices.add(index)
+            continue
         _require_open_type(edge.get("edge_type"), f"{edge_path}.edge_type", issues)
         if "summary" in edge and not isinstance(edge.get("summary"), str):
             issues.append(_issue("error", "wrong_field_type", f"{edge_path}.summary", "Edge summary must be a string."))
-        _validate_ref_list(edge.get("source_block_refs", []), block_ids, f"{edge_path}.source_block_refs", issues)
+        _validate_ref_list(edge.get("source_block_refs", []), block_ids, f"{edge_path}.source_block_refs", issues, strip_invalid=True)
         grounding = _grounding(edge.get("provenance"))
         if grounding is not None and grounding not in RECOMMENDED_PROVENANCE_VALUES:
             issues.append(_bad_grounding_issue(f"{edge_path}.provenance.grounding"))
@@ -356,6 +363,9 @@ def _validate_group_graph(
                     "Add source_block_refs or mark the edge as synthesis.",
                 )
             )
+    if bad_edge_indices:
+        for i in sorted(bad_edge_indices, reverse=True):
+            del edges[i]
 
 
 def _validate_temporal_attributes(
@@ -446,6 +456,12 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _concept_requires_source_blocks(concept: dict[str, Any]) -> bool:
+    """Only concepts with source_grounded provenance (or missing provenance) must cite source blocks."""
+    grounding = (concept.get("provenance") or {}).get("grounding", "")
+    return grounding != "llm_inferred"
+
+
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
@@ -516,16 +532,23 @@ def _validate_ref_list(
     require_non_empty: bool = False,
     empty_code: str = "empty_ref_list",
     empty_message: str = "Reference list must not be empty.",
+    strip_invalid: bool = False,
 ) -> None:
     if not isinstance(refs, list):
         issues.append(_issue("error", "wrong_field_type", path, "Reference field must be a list."))
         return
+    invalid_indices: set[int] = set()
+    for index, ref in enumerate(refs):
+        ref_path = f"{path}[{index}]"
+        _validate_single_ref(ref, valid_ids, ref_path, issues, warn_only=strip_invalid)
+        if strip_invalid and (not isinstance(ref, str) or not ref or ref not in valid_ids):
+            invalid_indices.add(index)
+    if strip_invalid and invalid_indices:
+        for i in sorted(invalid_indices, reverse=True):
+            del refs[i]
     if require_non_empty and not refs:
         issues.append(_issue("error", empty_code, path, empty_message))
         return
-    for index, ref in enumerate(refs):
-        ref_path = f"{path}[{index}]"
-        _validate_single_ref(ref, valid_ids, ref_path, issues)
 
 
 def _validate_single_ref(
@@ -533,9 +556,12 @@ def _validate_single_ref(
     valid_ids: set[str],
     path: str,
     issues: list[ReadingValidationIssue],
+    *,
+    warn_only: bool = False,
 ) -> None:
+    sev = "warning" if warn_only else "error"
     if not isinstance(ref, str) or not ref:
-        issues.append(_issue("error", "invalid_ref", path, "Reference must be a non-empty string."))
+        issues.append(_issue(sev, "invalid_ref", path, "Reference must be a non-empty string."))
         return
     if _ref_uses_prior_context(ref):
         issues.append(_prior_context_issue(path))
@@ -543,13 +569,18 @@ def _validate_single_ref(
     if ref not in valid_ids:
         issues.append(
             _issue(
-                "error",
+                sev,
                 "unknown_ref",
                 path,
                 f"Reference `{ref}` does not resolve within the package.",
                 "Use an existing source block, concept, atomic item, or graph node id.",
             )
         )
+
+
+def _is_valid_ref(ref: Any, valid_ids: set[str]) -> bool:
+    """Return True if *ref* is a non-empty string that exists in *valid_ids*."""
+    return isinstance(ref, str) and bool(ref) and ref in valid_ids
 
 
 def _validate_string_list(value: Any, path: str, issues: list[ReadingValidationIssue]) -> None:
