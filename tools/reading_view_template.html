@@ -316,7 +316,7 @@
     .graph-svg .edge-line.contradicts { stroke: #9a4a3f; stroke-dasharray: 4 2; }
     .graph-svg .edge-line.elaborates  { stroke: #4a6f8f; }
     .graph-svg .edge-line.related_to  { stroke: rgba(21,19,15,0.24); stroke-dasharray: 3 3; }
-    .graph-svg .edge-label { font-family: var(--mono); font-size: 9px; fill: var(--muted); pointer-events: none; }
+    .graph-svg .edge-label { font-family: var(--mono); font-size: 9px; fill: var(--muted); pointer-events: none; stroke: var(--bg); stroke-width: 3; paint-order: stroke fill; stroke-linejoin: round; }
     .graph-svg .node-rect {
       fill: rgba(255,250,240,0.94); stroke: rgba(21,19,15,0.16);
       stroke-width: 1.5; rx: 10; cursor: pointer;
@@ -860,7 +860,7 @@ function renderGraph(group) {
 
   const containerWidth = Math.max(graphScroll.clientWidth, 600);
   const containerHeight = Math.max(graphScroll.clientHeight, 500);
-  const margin = { top: 40, right: 60, left: 60, bottom: 40 };
+  const margin = { top: 40, right: 80, left: 100, bottom: 40 };
   const layerSpacing = 200;
   const nodeSpacing = 110;
   const nodeWidth = 170;
@@ -908,12 +908,20 @@ function renderGraph(group) {
     const ctrlOffset = Math.min(Math.abs(dx) * 0.4, 60);
     path.setAttribute('d', `M ${sx} ${sy} C ${sx + ctrlOffset} ${sy}, ${tx - ctrlOffset} ${ty}, ${tx} ${ty}`);
     path.setAttribute('class', `edge-line ${e.edge_type || 'related_to'}`);
+    // Native SVG tooltip for edge label — always visible on hover
+    if (e.summary) {
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = e.summary;
+      path.appendChild(title);
+    }
     edgeGroup.appendChild(path);
     if (e.summary) {
+      const midX = (sx + tx) / 2, midY = (sy + ty) / 2;
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.setAttribute('x', (sx + tx) / 2); label.setAttribute('y', (sy + ty) / 2 - 6);
+      label.setAttribute('x', midX);
+      label.setAttribute('y', midY - 18);
       label.setAttribute('class', 'edge-label'); label.setAttribute('text-anchor', 'middle');
-      label.textContent = e.summary.slice(0, 20);
+      label.textContent = e.summary.slice(0, 24);
       edgeGroup.appendChild(label);
     }
   });
