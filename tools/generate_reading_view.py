@@ -203,8 +203,8 @@ def build_source_html(
                 gap_start = cursor - offset
                 gap_end = start - offset
                 parts.append(
-                    f'<div class="src-gap" data-start="{gap_start}" data-end="{gap_end}">'
-                    f'{html.escape(gap_text)}</div>'
+                    f'<p class="src-block" data-start="{gap_start}" data-end="{gap_end}">'
+                    f'{html.escape(gap_text)}</p>'
                 )
 
         # Build item refs data
@@ -230,8 +230,8 @@ def build_source_html(
             tail_start = cursor - offset
             tail_end = max_end - offset
             parts.append(
-                f'<div class="src-gap" data-start="{tail_start}" data-end="{tail_end}">'
-                f'{html.escape(tail_text)}</div>'
+                f'<p class="src-block" data-start="{tail_start}" data-end="{tail_end}">'
+                f'{html.escape(tail_text)}</p>'
             )
 
     return "\n".join(parts)
