@@ -94,7 +94,19 @@ Rules:
 
 Concept delta guidance:
 
-- `merge`: two or more existing concepts (possibly with different surfaces or types) actually refer to the same entity. Provide `target_refs` (IDs to merge) and `changes` with the merged concept's `surface`, `concept_type`, `canonical_name`, `summary`, and any merged `aliases`/`observed_surfaces`. Be aggressive about merging: if two concepts refer to the same real-world entity or idea, merge them even if surfaces differ. The deterministic merge already groups by canonical_name + type; use merge deltas to catch remaining duplicates the deterministic step missed.
+- `merge`: two or more existing concepts actually refer to the **same real-world entity**. Merge only when the referent is identical — same person, same place, same term, same source text, same time expression. Provide `target_refs` (IDs to merge) and `changes` with the merged concept's `surface`, `concept_type`, `canonical_name`, `summary`, and any merged `aliases`/`observed_surfaces`. The deterministic merge already groups by canonical_name + type; use merge deltas to catch remaining duplicates the deterministic step missed.
+
+  **Merge only for same identity.** Never merge distinct entities into synthetic collection/category concepts. If records are related but not identical, keep them separate and express the relationship through `logical_groups`.
+
+  **Do not merge in these cases:**
+  - Multiple dates or time expressions → each temporal reference is a distinct `time_anchor`. Do not merge them into a "biography timeline" or "date collection" concept.
+  - Multiple places → each place is a distinct `place`. Do not merge them into a "route" or "place series" concept.
+  - Multiple terms, sources, or works → each is a distinct `term` or `source`. Do not merge them into a "terminology group" or "anthology" concept.
+  - Multiple people, organizations, or objects → keep distinct unless you have clear evidence they are the same referent.
+
+  **`canonical_name`** must be the standard name of the same entity (e.g., the historical figure's standard name, the full form of a term, the normalized title of a source). It must not be a summary label, category name, or collection title.
+
+  **If in doubt, do not merge.** Group related items through `logical_groups` instead.
 - `split`: a merged concept actually refers to different entities (e.g., same surface used for distinct referents). Provide the concept to split as `target_refs[0]` and `changes.split_into` with an array of new concept objects, each with `surface`, `concept_type`, `canonical_name`, `summary`, and the `source_block_refs` that belong to each.
 - `refine`: update `canonical_name`, `summary`, `aliases`, `observed_surfaces`, `facets`, or `uncertainty` without changing identity or type.
 - `reclassify`: change `concept_type` only. Use this to consolidate overly fine-grained types. Prefer fewer, coarser categories:
