@@ -222,9 +222,10 @@ def merge_segment_extraction_results(
 
     for (_cname, _ctype), related_keys in cname_to_keys.items():
         if len(related_keys) > 1:
-            primary = next(iter(related_keys))
-            for other_key in related_keys:
-                if other_key != primary and other_key in groups:
+            sorted_keys = sorted(related_keys)
+            primary = sorted_keys[0]
+            for other_key in sorted_keys[1:]:
+                if other_key in groups:
                     groups[primary].extend(groups.pop(other_key))
 
     # ── Phase 3: merge groups and detect ambiguous surfaces ──
@@ -299,6 +300,24 @@ def merge_segment_extraction_results(
     }
 
 
+def _pick_canonical_name(members: list[dict[str, Any]]) -> str:
+    """Pick a deterministic canonical name from merged concept members.
+
+    Returns the longest non-empty ``canonical_name`` across *members*,
+    breaking ties alphabetically so the result does not depend on
+    member list order (which is affected by Phase 2.5 set iteration).
+    """
+    candidates: set[str] = set()
+    for m in members:
+        v = m.get("canonical_name")
+        if v:
+            candidates.add(str(v))
+    if not candidates:
+        return ""
+    # longest first, then alphabetically first on tie
+    return sorted(candidates, key=lambda n: (-len(n), n))[0]
+
+
 def _merge_concept_group(
     merged_id: str,
     surface: str,
@@ -325,7 +344,7 @@ def _merge_concept_group(
                 return v
         return default
 
-    canonical = _first_nonempty("canonical_name")
+    canonical = _pick_canonical_name(members)
 
     return {
         "concept_id": merged_id,
