@@ -57,6 +57,7 @@
 - Commit 12 done 2026-05-28: CLI now exposes `run-reading` for the v0.3 reading pipeline and `split-blocks` for deterministic source-block inspection.
 - Commit 13 done 2026-05-28: `unit_package.json` output path is now content-addressed from pass cache keys, with a `latest` pointer file for convenience.
 - Before the next LLM-backed run: execute the quality cleanup sequence now documented in `docs/source_grounded_reading_pipeline.md` — align coarse concept types, add deterministic type normalization for merges, and dedupe concepts after unit-level deltas.
+- Quality cleanup step 1 done: per-segment and unit-grouping prompts now share the coarse schema concept vocabulary, with tests guarding against the previous fine-grained prompt shape.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
 

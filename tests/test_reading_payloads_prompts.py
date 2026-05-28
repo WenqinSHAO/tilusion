@@ -9,7 +9,7 @@ from tilusion.reading_payloads import (
     merge_segment_extraction_results,
     render_text_with_block_markers,
 )
-from tilusion.reading_schema import SourceBlock
+from tilusion.reading_schema import RECOMMENDED_CONCEPT_TYPES, SourceBlock
 from tilusion.reading_prompts import (
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
@@ -47,6 +47,31 @@ def test_unit_logical_grouping_composition_loads_static_contract() -> None:
     assert "logical_groups" in composition.content
     assert "merge|split|refine|reclassify" in composition.content
     assert "unresolved_items" in composition.content
+
+
+def test_per_segment_prompt_advertises_coarse_concept_types() -> None:
+    composition = build_per_segment_extraction_composition()
+    content = composition.content
+
+    for concept_type in RECOMMENDED_CONCEPT_TYPES:
+        assert concept_type in content
+
+    old_fine_grained_shape = (
+        "person|place|term|method|theme|time_anchor|event_type|object|"
+        "organization|work|concept|phenomenon|condition|relationship|role|"
+        "metric|component|format|substance|other|custom"
+    )
+    assert old_fine_grained_shape not in content
+    assert "person|group|organization|place|object|term|method|theme" in content
+
+
+def test_unit_grouping_prompt_prefers_schema_concept_types() -> None:
+    composition = build_unit_logical_grouping_composition()
+    content = composition.content
+
+    assert "work`/`collection` (use `source`)" in content
+    assert "source`, `other`" in content
+    assert "`work`/`collection`, `motif`" not in content
 
 
 def test_per_segment_extraction_payload_includes_source_blocks_and_marked_text() -> None:

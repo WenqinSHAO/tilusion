@@ -99,11 +99,11 @@ Concept delta guidance:
 - `refine`: update `canonical_name`, `summary`, `aliases`, `observed_surfaces`, `facets`, or `uncertainty` without changing identity or type.
 - `reclassify`: change `concept_type` only. Use this to consolidate overly fine-grained types. Prefer fewer, coarser categories:
 
-  **Merge these types:** `substance`, `thing`, `object` → `object`. `work`, `collection` → `collection`. `condition`, `phenomenon` → `theme`. `custom`, `event_type` → `theme` or `other`.
+  **Merge these types:** `substance`, `thing`, `format`, `component` → `object` or `technical_component` when technical. `work`, `collection`, `source_statement` → `source`. `condition`, `phenomenon`, `event_type`, `concept` → `theme` or `term`. `role`, `relationship` → `social_role` when it names a social/relational role.
 
-  **Avoid these types:** `event_type` (misleading — these are abstract event categories, not atomic items/events). `thing` (too vague; use `object`). `substance` (use `object` unless truly a material/substance with distinct identity).
+  **Avoid these types:** `event_type` (misleading — these are abstract event categories, not atomic items/events). `thing` (too vague; use `object`). `substance` (use `object` unless truly a material/substance with distinct identity). `work`/`collection` (use `source`). `relationship`/`role` (use `social_role` only when the role itself is the concept).
 
-  **Prefer:** `person`, `place`, `object`, `term`, `theme`, `method`, `time_anchor`, `organization`, `work`/`collection`, `motif`, `emotion`, `other`.
+  **Prefer:** `person`, `group`, `organization`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `emotion`, `social_role`, `institution`, `symbol`, `scene_element`, `technical_component`, `dataset`, `metric`, `source`, `other`.
 
 - Do not emit no-op deltas. If nothing needs changing, return an empty `concept_deltas` list.
 - The caller will apply deltas after your response. You only declare the edits.

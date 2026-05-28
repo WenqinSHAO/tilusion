@@ -37,7 +37,7 @@ Minimum shape:
     {
       "concept_id": "concept-0001",
       "surface": "exact source surface",
-      "concept_type": "person|place|term|method|theme|time_anchor|event_type|object|organization|work|concept|phenomenon|condition|relationship|role|metric|component|format|substance|other|custom",
+      "concept_type": "person|group|organization|place|object|term|method|theme|motif|time_anchor|emotion|social_role|institution|symbol|scene_element|technical_component|dataset|metric|source|other",
       "canonical_name": "",
       "summary": "brief source-grounded note",
       "aliases": [],
@@ -81,7 +81,7 @@ Rules:
 - Do not invent block IDs. Every `source_block_refs` and temporal `source_block_ref` must refer to one of the provided `source_blocks[*].block_id` values.
 - Concept and atomic item IDs are segment-local. Use stable simple IDs like `concept-0001` and `item-0001`; the caller will scope and reindex them later.
 - A `concept.surface` must be copied exactly from the source block text inside the corresponding inline markers.
-- `concept_type` is schema-light. Use a recommended type when it fits; otherwise use `other` or a concise custom string. Do not force people/location/time extraction.
+- `concept_type` is schema-light but should stay coarse. Prefer the recommended types shown in the JSON shape. Use `other` or a concise custom string only when the source contains an important concept that clearly does not fit. Do not create narrow types for event categories, conditions, relationship labels, formats, or substances when `theme`, `term`, `social_role`, `source`, or `object` would work. Do not force people/location/time extraction.
 - Use `observed_surfaces` for exact forms found in this segment. Use `aliases` only for aliases directly supported by this segment.
 - Atomic items should be compact source-grounded compressions. Prefer fewer meaningful items over one item per sentence.
 - An atomic item may cite multiple non-contiguous source blocks when one meaning unit is distributed across the segment.
@@ -97,5 +97,5 @@ Region guidance:
 - Dialogue-heavy segments: capture speakers, addressed persons, salient actions, emotional/social roles, and any relationship-changing exchanges.
 - Narrative or scene segments: capture event-like items, scene descriptions, participants, places, objects, motifs, and time anchors when present.
 - Expository or argumentative segments: capture terms, claims, arguments, evidence statements, methods, examples, limitations, and questions.
-- Technical/paper-like segments: capture methods, datasets, metrics, technical components, results, usecaes, scenarios, conditions, limitations, and source statements.
+- Technical/paper-like segments: capture methods, datasets, metrics, technical components, results, use cases, scenarios, limitations, and source statements. Keep concept types coarse; put narrower details in summaries, facets, or atomic item attributes.
 - Sparse/front-matter/table/note-only segments: return minimal concepts/items, avoid over-extraction, and explain in `warnings`.
