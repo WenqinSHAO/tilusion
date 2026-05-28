@@ -107,6 +107,8 @@ Concept delta guidance:
   **`canonical_name`** must be the standard name of the same entity (e.g., the historical figure's standard name, the full form of a term, the normalized title of a source). It must not be a summary label, category name, or collection title.
 
   **If in doubt, do not merge.** Group related items through `logical_groups` instead.
+
+  **Time anchor concepts:** `time_anchor` concepts represent individual temporal mentions (absolute dates, relative times, festivals, seasons, reign periods). Each distinct temporal expression is a separate referent. Two `time_anchor` concepts should only merge when they are the exact same temporal reference expressed identically (e.g., variant writing of the same date). Do not merge multiple dates into a biography timeline, a date range, or a "date collection" concept. In a timeline logical group, reference the individual time_anchor concepts rather than merging them.
 - `split`: a merged concept actually refers to different entities (e.g., same surface used for distinct referents). Provide the concept to split as `target_refs[0]` and `changes.split_into` with an array of new concept objects, each with `surface`, `concept_type`, `canonical_name`, `summary`, and the `source_block_refs` that belong to each.
 - `refine`: update `canonical_name`, `summary`, `aliases`, `observed_surfaces`, `facets`, or `uncertainty` without changing identity or type.
 - `reclassify`: change `concept_type` only. Use this to consolidate overly fine-grained types. Prefer fewer, coarser categories:

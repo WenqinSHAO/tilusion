@@ -98,6 +98,7 @@ Rules:
 - Multiple atomic items may cite the same source block.
 - `item_type` is schema-light. Use a recommended type when it fits; otherwise use `other` or a concise custom string.
 - Add temporal attributes only when the item has explicit, relative, or clearly implied time structure. Use `kind: "none"` only when a temporal attribute is useful to state absence; otherwise an empty list is fine.
+  - **Temporal mentions (time_anchor concepts):** Extract explicit and relative time expressions when they help event ordering or timeline construction. Cover absolute dates, relative times ("the next day", "that same winter"), festivals, seasons, reign periods, and conventional time references. Keep each distinct temporal expression as a separate `time_anchor` concept — different dates and time expressions are different referents. The only valid merge for two `time_anchor` concepts is when they are the exact same temporal reference expressed identically or with trivial surface variation.
 - `concept_refs` must refer to local concepts returned in this same response.
 - Preserve uncertainty instead of inventing facts.
 - If a provided block is front matter, table-like, note-only, or sparse, extraction may be sparse. Explain skipped content in `warnings`.
