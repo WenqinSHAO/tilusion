@@ -186,7 +186,6 @@ def build_source_html(
 
     for block in sorted_blocks:
         block_id = block["block_id"]
-        block_type = block.get("block_type", "paragraph")
         unit_start = block["start"]
         unit_end = block["end"]
         start = _resolve_pos(unit_start)
@@ -217,14 +216,7 @@ def build_source_html(
 
         # Wrap in block element with unit-level data attributes (matching source_blocks)
         pos_attrs = f' data-start="{unit_start}" data-end="{unit_end}"'
-        if block_type == "paragraph":
-            parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</p>')
-        elif block_type == "line":
-            parts.append(f'<div class="src-line" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</div>')
-        elif block_type == "note":
-            parts.append(f'<div class="src-note" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</div>')
-        else:
-            parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</p>')
+        parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</p>')
 
         cursor = max(cursor, end)
 
