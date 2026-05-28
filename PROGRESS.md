@@ -55,9 +55,10 @@
 - Commits 1–10 reviewed 2026-05-28. Three fixes applied: per-segment `warnings` now propagated through `merge_segment_extraction_results`, dead `elif` branch removed from `_validate_temporal_attributes`, `_list` return type corrected, and unused `alias_candidates` field removed from `Concept` schema.
 - Commit 11 done 2026-05-28: factual stage metrics wired through pass artifacts and final `metrics.validation` / `metrics.counts`, without heuristic quality warnings.
 - Commit 12 done 2026-05-28: CLI now exposes `run-reading` for the v0.3 reading pipeline and `split-blocks` for deterministic source-block inspection.
+- Commit 13 done 2026-05-28: `unit_package.json` output path is now content-addressed from pass cache keys, with a `latest` pointer file for convenience.
+- Before the next LLM-backed run: execute the quality cleanup sequence now documented in `docs/source_grounded_reading_pipeline.md` — align coarse concept types, add deterministic type normalization for merges, and dedupe concepts after unit-level deltas.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
-  - Commit 13 done 2026-05-28: `unit_package.json` output path is now content-addressed — run key derived from all pass cache keys ensures different runs never overwrite each other. Both `write_reading_unit_package` and `write_unit_package` updated. A `latest` pointer file in the unit directory tracks the most recent run.
 
 ## Implementation Status
 

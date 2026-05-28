@@ -582,6 +582,24 @@ Each step is a focused, reviewable commit.
 - Keep old extraction commands working as regression baselines.
 - Ensure mock `run-reading` uses reading-pipeline mock contracts instead of the old extraction mock backend.
 
+### Quality cleanup sequence before next LLM trial
+
+The first real `run-reading` trial showed two quality problems that should be fixed before another backend run:
+
+- concept types drifted into overly fine-grained labels that were not useful for reading or merging;
+- concepts that clearly referred to the same source entity or idea were not always merged after segment flattening and unit grouping.
+
+These fixes should stay small and deterministic where possible:
+
+1. Align the concept-type vocabulary across schema, prompts, and docs. Per-segment extraction should advertise the coarse recommended types only; custom strings remain allowed but exceptional.
+2. Add deterministic concept-type normalization for merge grouping, so known noisy aliases collapse into the coarse vocabulary before comparing concepts.
+3. Add a post-delta dedupe after unit-level concept deltas, so a `reclassify` delta that makes concepts equivalent is not left as duplicate records.
+4. Emit unresolved items for risky same-surface/canonical conflicts that are not safe to auto-merge.
+5. Include deterministic pipeline versioning in unit package run fingerprints, so code-only post-processing changes do not silently reuse the same run output path.
+6. Clean up overview segment de-overlap metadata so debug/UI anchors remain consistent after truncation.
+
+Only the first three are required before the next LLM-backed quality comparison. The rest improve reviewability and cache hygiene.
+
 ### Future: Cross-unit registry delta
 
 Only after unit-level extraction is stable on multiple real units.
