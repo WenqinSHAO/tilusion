@@ -279,6 +279,7 @@ def test_package_top_level_keys():
         "unresolved_items",
         "validation",
         "context_metadata",
+        "metrics",
     }
     assert set(d.keys()) == expected_keys
 

@@ -299,6 +299,7 @@ class ExtractionUnitPackage:
     unresolved_items: list[dict[str, Any]] = field(default_factory=list)
     validation: dict[str, Any] = field(default_factory=dict)
     context_metadata: dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
     schema_version: str = READING_UNIT_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -313,6 +314,7 @@ class ExtractionUnitPackage:
             "unresolved_items": self.unresolved_items,
             "validation": self.validation,
             "context_metadata": self.context_metadata,
+            "metrics": self.metrics,
         }
 
 

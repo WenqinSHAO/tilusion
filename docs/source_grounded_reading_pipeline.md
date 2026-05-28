@@ -577,9 +577,10 @@ Each step is a focused, reviewable commit.
 
 ### Commit 12: Update CLI
 
-- Add `run-reading` command to `cli.py` that runs the full reading pipeline.
-- Add `split-blocks` command to run just the source block splitter and inspect output.
-- Keep old extraction commands working.
+- Add `run-reading` command to `cli.py` that runs the full v0.3 source-grounded reading pipeline.
+- Add `split-blocks` command to run just the deterministic source block splitter and inspect output as text or JSON.
+- Keep old extraction commands working as regression baselines.
+- Ensure mock `run-reading` uses reading-pipeline mock contracts instead of the old extraction mock backend.
 
 ### Future: Cross-unit registry delta
 

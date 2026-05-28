@@ -166,6 +166,9 @@ class ReadingPipelineRecord:
             "validation": self.validation,
         }
 
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
 
 # ── Mock response functions ──────────────────────────────────────────────────
 
@@ -718,7 +721,7 @@ def run_reading_pipeline(
     source block splitting, per-segment concept/item extraction, deterministic
     concept merging, and unit-level logical grouping with optional concept deltas.
     """
-    from .book_reader import build_book_index, extract_unit_text as unit_text
+    from .book_reader import build_book_index, extract_unit_text
 
     total_start = time.monotonic()
     llm = backend or MockReadingBackend()
@@ -730,7 +733,7 @@ def run_reading_pipeline(
     book_path = Path(book_path)
     index = build_book_index(book_path)
     unit = index.unit_map()[unit_id]
-    text = unit_text(unit, book_path)
+    text = extract_unit_text(book_path, unit)
     source = {
         "book_path": str(book_path),
         "book_title": index.title or "",
@@ -750,13 +753,15 @@ def run_reading_pipeline(
             cache_dir=cache_root / "overview",
             use_cache=use_cache,
         )
-        segments = resolve_overview_segments(overview_record.data, text)
+        segments, overview_repairs = resolve_overview_segments(overview_record.data, text)
         pass_summaries["overview_segmentation"] = {
             "cache_key": overview_record.cache_key,
             "cache_dir": overview_record.cache_dir,
             "cache_hit": overview_record.cache_hit,
             "artifact_paths": overview_record.artifact_paths,
             "elapsed_ms": _elapsed_ms(t0),
+            "resolved_segment_count": len(segments),
+            "repair_hint_count": len(overview_repairs),
         }
         _log_progress(step, TOTAL_STEPS, "Overview segmentation", "OK", _elapsed_ms(t0))
     except Exception:
@@ -800,6 +805,7 @@ def run_reading_pipeline(
             "overview": {
                 "segment_count": len(overview_record.data.get("segments", [])) if isinstance(overview_record.data, dict) else 0,
                 "resolved_segment_count": len(segments),
+                "repair_hint_count": len(overview_repairs),
                 "unit_char_count": len(text),
             },
             "per_segment": _aggregate_per_segment_counts(segment_records),
