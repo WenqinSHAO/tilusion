@@ -10,8 +10,11 @@ from tilusion.reading_pipeline import (
     ReadingPassRecord,
     ReadingPipelineRecord,
     _apply_concept_deltas,
+    _build_merge_rejection_items,
+    _classify_merge_risk,
     _compose_concept_remaps,
     _dedupe_equivalent_concepts,
+    _validate_merge_deltas,
     mock_per_segment_extraction_response,
     mock_unit_logical_grouping_response,
     run_per_segment_extraction_pass,
@@ -512,3 +515,302 @@ def test_run_unit_logical_grouping_pass_with_mock(tmp_path: Path) -> None:
     assert Path(record.artifact_paths["result"]).exists()
     assert Path(record.artifact_paths["manifest"]).exists()
     assert Path(record.artifact_paths["validation_report"]).exists()
+
+
+# ── Merge safety validation tests ────────────────────────────────────────────
+
+
+def _concept(cid: str, surface: str, ctype: str, canonical: str = "") -> dict[str, Any]:
+    return {
+        "concept_id": cid,
+        "surface": surface,
+        "concept_type": ctype,
+        "canonical_name": canonical,
+        "source_block_refs": [],
+    }
+
+
+def _merge_delta(
+    delta_id: str,
+    target_refs: list[str],
+    changes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "delta_id": delta_id,
+        "delta_type": "merge",
+        "target_refs": target_refs,
+        "changes": changes or {},
+        "rationale": "test delta",
+        "uncertainty": [],
+        "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+    }
+
+
+# ── Rejection cases ──
+
+
+def test_reject_merge_distinct_time_anchors() -> None:
+    """Two different dates must not merge into one time_anchor."""
+    concepts = [
+        _concept("concept-0001", "乾隆甲寅年", "time_anchor"),
+        _concept("concept-0002", "七月", "time_anchor"),
+        _concept("concept-0003", "七夕", "time_anchor"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002", "concept-0003"],
+            changes={"surface": "重要日期", "concept_type": "time_anchor", "summary": "key dates"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 0
+    assert len(rejected) == 1
+    assert "time_anchor" in rejected[0]["reason"]
+    assert rejected[0]["delta"]["delta_id"] == "delta-0001"
+
+
+def test_reject_merge_distinct_places() -> None:
+    """Two different places must not merge into a region/route concept."""
+    concepts = [
+        _concept("concept-0001", "沧浪亭", "place"),
+        _concept("concept-0002", "拙政园", "place"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002"],
+            changes={"surface": "苏州园林群", "concept_type": "place", "summary": "garden collection"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 0
+    assert len(rejected) == 1
+    assert "place" in rejected[0]["reason"]
+
+
+def test_reject_merge_distinct_sources() -> None:
+    """Two named texts must not merge into one source concept."""
+    concepts = [
+        _concept("concept-0001", "《关雎》", "source"),
+        _concept("concept-0002", "《诗经》", "source"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002"],
+            changes={"surface": "古典文学", "concept_type": "source", "summary": "classical works"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 0
+    assert len(rejected) == 1
+    assert "source" in rejected[0]["reason"]
+
+
+def test_reject_merge_synthetic_collection_label() -> None:
+    """A proposed merged name not matching any target name is rejected."""
+    concepts = [
+        _concept("concept-0001", "古文", "term"),
+        _concept("concept-0002", "诗", "term"),
+        _concept("concept-0003", "赋", "term"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002", "concept-0003"],
+            changes={"surface": "文学与游戏术语", "concept_type": "term", "summary": "terminology group"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 0
+    assert len(rejected) == 1
+    reason = rejected[0]["reason"]
+    assert "synthetic" in reason or "attested" in reason
+
+
+# ── Acceptance cases ──
+
+
+def test_allow_merge_same_person_aliases() -> None:
+    """Same person with different surface forms but shared canonical_name merges."""
+    concepts = [
+        _concept("concept-0001", "相如", "person", canonical="司马相如"),
+        _concept("concept-0002", "长卿", "person", canonical="司马相如"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002"],
+            changes={"surface": "司马相如", "canonical_name": "司马相如", "concept_type": "person"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 1
+    assert len(rejected) == 0
+
+
+def test_allow_merge_same_surface_different_segments() -> None:
+    """Same surface from different segments is a legitimate duplicate merge."""
+    concepts = [
+        _concept("concept-0001", "余", "person", canonical=""),
+        _concept("concept-0002", "余", "person", canonical="沈复"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002"],
+            changes={"surface": "沈复", "canonical_name": "沈复", "concept_type": "person"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 1
+    assert len(rejected) == 0
+
+
+def test_allow_merge_same_source_variant_punctuation() -> None:
+    """Same source title with punctuation variants can merge if canonical matches."""
+    concepts = [
+        _concept("concept-0001", "关雎", "source", canonical="关雎"),
+        _concept("concept-0002", "《关雎》", "source", canonical="关雎"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002"],
+            changes={"surface": "《关雎》", "canonical_name": "关雎", "concept_type": "source"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 1
+    assert len(rejected) == 0
+
+
+def test_allow_merge_single_target_passthrough() -> None:
+    """A single-target merge delta (no-op or self-merge) passes through."""
+    concepts = [
+        _concept("concept-0001", "余", "person"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001"],
+            changes={"surface": "沈复", "canonical_name": "沈复"},
+        )
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 1
+    assert len(rejected) == 0
+
+
+# ── Mixed deltas ──
+
+
+def test_mixed_safe_and_unsafe_merge_deltas() -> None:
+    """Safe and unsafe deltas are correctly partitioned."""
+    concepts = [
+        _concept("concept-0001", "余", "person", canonical=""),
+        _concept("concept-0002", "余", "person", canonical="沈复"),
+        _concept("concept-0003", "乾隆甲寅年", "time_anchor"),
+        _concept("concept-0004", "七月", "time_anchor"),
+    ]
+    deltas = [
+        _merge_delta(
+            "delta-0001",
+            ["concept-0001", "concept-0002"],
+            changes={"surface": "沈复", "canonical_name": "沈复"},
+        ),
+        _merge_delta(
+            "delta-0002",
+            ["concept-0003", "concept-0004"],
+            changes={"surface": "重要日期", "concept_type": "time_anchor"},
+        ),
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 1
+    assert safe[0]["delta_id"] == "delta-0001"
+    assert len(rejected) == 1
+    assert rejected[0]["delta"]["delta_id"] == "delta-0002"
+
+
+# ── Non-merge deltas always pass through ──
+
+
+def test_non_merge_deltas_passthrough() -> None:
+    """Reclassify, refine, and split deltas are not screened by merge validation."""
+    concepts: list[dict[str, Any]] = []
+    deltas = [
+        {"delta_id": "delta-0001", "delta_type": "reclassify", "target_refs": ["concept-0001"], "changes": {"concept_type": "object"}},
+        {"delta_id": "delta-0002", "delta_type": "refine", "target_refs": ["concept-0002"], "changes": {"summary": "better summary"}},
+    ]
+    safe, rejected = _validate_merge_deltas(deltas, concepts)
+    assert len(safe) == 2
+    assert len(rejected) == 0
+
+
+# ── Rejection items building ──
+
+
+def test_build_merge_rejection_items_formats_correctly() -> None:
+    """Rejected merges become well-formed unresolved_items with merge_proposal_rejected kind."""
+    rejected = [
+        {
+            "delta": _merge_delta(
+                "delta-0001",
+                ["concept-0001", "concept-0002"],
+                changes={"surface": "重要日期", "concept_type": "time_anchor"},
+            ),
+            "reason": "merge_rejected: merging distinct time_anchor concepts",
+        }
+    ]
+    items = _build_merge_rejection_items(rejected, [])
+    assert len(items) == 1
+    assert items[0]["kind"] == "merge_proposal_rejected"
+    assert items[0]["target_refs"] == ["concept-0001", "concept-0002"]
+    assert "time_anchor" in items[0]["rejection_reason"]
+    assert "delta-0001" in items[0]["delta_id"]
+
+
+def test_build_merge_rejection_items_offsets_from_existing() -> None:
+    """Rejection item IDs continue from existing unresolved_items count."""
+    existing = [{"item_id": "unresolved-0001"}, {"item_id": "unresolved-0002"}]
+    rejected = [
+        {
+            "delta": _merge_delta("delta-0001", ["concept-0001"], changes={}),
+            "reason": "test reason",
+        }
+    ]
+    items = _build_merge_rejection_items(rejected, existing)
+    assert items[0]["item_id"] == "unresolved-0003"
+
+
+# ── classify_merge_risk edge cases ──
+
+
+def test_classify_merge_risk_shared_canonical_is_safe() -> None:
+    """Targets sharing the same non-empty canonical_name are safe to merge."""
+    targets = [
+        _concept("concept-0001", "相如", "person", canonical="司马相如"),
+        _concept("concept-0002", "长卿", "person", canonical="司马相如"),
+    ]
+    assert _classify_merge_risk(targets, {}) is None
+
+
+def test_classify_merge_risk_same_surface_is_safe() -> None:
+    """Targets with identical surface are safe to merge (probable duplicates)."""
+    targets = [
+        _concept("concept-0001", "余", "person"),
+        _concept("concept-0002", "余", "person", canonical="沈复"),
+    ]
+    assert _classify_merge_risk(targets, {}) is None
+
+
+def test_classify_merge_risk_distinct_terms_no_identity_signal() -> None:
+    """Different terms with no shared canonical_name or surface are rejected."""
+    targets = [
+        _concept("concept-0001", "古文", "term"),
+        _concept("concept-0002", "诗", "term"),
+    ]
+    reason = _classify_merge_risk(targets, {})
+    assert reason is not None
+    assert "distinct surfaces" in reason
