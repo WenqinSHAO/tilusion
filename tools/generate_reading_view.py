@@ -144,13 +144,24 @@ def build_source_html(
 
     concept_surfaces = _build_concept_surfaces(concepts)
 
-    # Sort blocks by start position so rendering follows source order
-    sorted_blocks = sorted(source_blocks, key=lambda b: b["start"])
+    # Sort blocks by (start, -end) so that for duplicate/overlapping blocks
+    # from different segments, we keep the longest one first and skip the rest.
+    sorted_blocks = sorted(source_blocks, key=lambda b: (b["start"], -b["end"]))
+
+    # Dedup: skip blocks that are fully contained within an already-rendered block
+    deduped_blocks: list[dict[str, Any]] = []
+    for block in sorted_blocks:
+        if any(
+            block["start"] >= kept["start"] and block["end"] <= kept["end"]
+            for kept in deduped_blocks
+        ):
+            continue
+        deduped_blocks.append(block)
 
     parts: list[str] = []
-    cursor = sorted_blocks[0]["start"] if sorted_blocks else 0
+    cursor = deduped_blocks[0]["start"] if deduped_blocks else 0
 
-    for block in sorted_blocks:
+    for block in deduped_blocks:
         block_id = block["block_id"]
         block_type = block.get("block_type", "paragraph")
         start = block["start"]
@@ -193,7 +204,7 @@ def build_source_html(
         cursor = max(cursor, end)
 
     # Render any trailing text after the last block
-    max_end = sorted_blocks[-1]["end"] if sorted_blocks else 0
+    max_end = deduped_blocks[-1]["end"] if deduped_blocks else 0
     if cursor < max_end:
         tail_text = source_text[cursor:max_end]
         if tail_text.strip():
