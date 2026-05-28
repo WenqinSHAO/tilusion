@@ -118,6 +118,31 @@ def _annotate_text(
     return "".join(parts)
 
 
+def _resolve_source_offset(
+    sorted_blocks: list[dict[str, Any]],
+    source_text: str,
+) -> int:
+    """Return the book-level offset that aligns block positions to source_text.
+
+    Block start/end offsets are unit-relative (0 = unit start).  The source
+    file may include front-matter before the unit text, so we find the first
+    block whose text is unambiguous in the source and compute the delta.
+    """
+    if not sorted_blocks or not source_text:
+        return 0
+
+    # Try the first few blocks with substantial text, preferring longer unique text
+    for block in sorted_blocks[:10]:
+        text = block.get("text", "")
+        if len(text) < 20:
+            continue
+        pos = source_text.find(text)
+        if pos != -1:
+            return pos - block["start"]
+
+    return 0
+
+
 def build_source_html(
     source_text: str,
     source_blocks: list[dict[str, Any]],
@@ -129,6 +154,9 @@ def build_source_html(
     Blocks are rendered in source position order (sorted by start offset).
     Gaps between blocks are rendered as unannotated raw text so no source
     content is silently dropped.
+
+    Block offsets are unit-relative; the function auto-detects the book-level
+    offset so rendering works against both unit-scoped and full-book source text.
     """
     # Index: block_id -> concepts that reference it
     block_concepts: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -147,17 +175,25 @@ def build_source_html(
     # Sort blocks by start position so rendering follows source order
     sorted_blocks = sorted(source_blocks, key=lambda b: b["start"])
 
+    # Auto-detect the book-level offset (e.g. front matter before unit text)
+    offset = _resolve_source_offset(sorted_blocks, source_text)
+
+    def _resolve_pos(pos: int) -> int:
+        return pos + offset
+
     parts: list[str] = []
-    cursor = sorted_blocks[0]["start"] if sorted_blocks else 0
+    cursor = _resolve_pos(sorted_blocks[0]["start"]) if sorted_blocks else 0
 
     for block in sorted_blocks:
         block_id = block["block_id"]
         block_type = block.get("block_type", "paragraph")
-        start = block["start"]
-        end = block["end"]
+        unit_start = block["start"]
+        unit_end = block["end"]
+        start = _resolve_pos(unit_start)
+        end = _resolve_pos(unit_end)
         block_text = source_text[start:end]
 
-        # Verify round-trip
+        # Verify round-trip against block's stored text
         if block_text != block["text"]:
             block_text = block["text"]
 
@@ -179,8 +215,8 @@ def build_source_html(
         ref_concepts = block_concepts.get(block_id, [])
         inner = _annotate_text(block_text, block_id, ref_concepts, concept_surfaces)
 
-        # Wrap in block element with source position data
-        pos_attrs = f' data-start="{start}" data-end="{end}"'
+        # Wrap in block element with unit-level data attributes (matching source_blocks)
+        pos_attrs = f' data-start="{unit_start}" data-end="{unit_end}"'
         if block_type == "paragraph":
             parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</p>')
         elif block_type == "line":
@@ -193,7 +229,7 @@ def build_source_html(
         cursor = max(cursor, end)
 
     # Render any trailing text after the last block
-    max_end = sorted_blocks[-1]["end"] if sorted_blocks else 0
+    max_end = _resolve_pos(sorted_blocks[-1]["end"]) if sorted_blocks else 0
     if cursor < max_end:
         tail_text = source_text[cursor:max_end]
         if tail_text.strip():
