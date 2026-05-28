@@ -71,7 +71,11 @@ The core unit package (schema version `reading-unit-v0.3`):
   "logical_groups": [],
   "unresolved_items": [],
   "validation": {},
-  "context_metadata": {}
+  "context_metadata": {},
+  "metrics": {
+    "validation": {},
+    "counts": {}
+  }
 }
 ```
 
@@ -434,32 +438,54 @@ New module to create:
 - `tilusion/book_reader.py` — stable.
 - `tilusion/book_context.py` — needs eventual alignment with the new concept model, but not yet. Per-segment extraction works without context initially.
 
-## Quality Metrics (Built-In, Not Bolted-On)
+## Metrics (Factual Stage Telemetry)
 
-Each module reports metrics as part of its output. Validation reports surface issues as warnings (not hard errors unless structural integrity is broken).
+Each stage reports factual counts as part of its cached output. The final unit package aggregates these counts under:
 
-Source block splitter:
-- Block count per segment
-- Coverage % (characters covered / total segment characters)
-- Average block size
-- Oversized block count (blocks still > 800 chars after sentence splitting)
+```json
+"metrics": {
+  "validation": {},
+  "counts": {
+    "overview": {},
+    "per_segment": {},
+    "segment_merge": {},
+    "grouping": {}
+  }
+}
+```
 
-Per-segment extraction:
-- Concepts per block ratio
-- Atomic items per block ratio
-- Unreferenced source block count (blocks with no items citing them)
-- Average source blocks per atomic item
+Metrics are not quality judgments. Validation checks structural correctness and only records validation counts under `metrics.validation`; it does not interpret thresholds such as "low density" or "weak grouping" at this stage.
 
-Unit stabilization:
-- Duplicate concept merge count
-- ID collision count (segment-local IDs that would collide without scoping)
-- Unresolved ref count
+Overview counts:
+- Segment count requested by the overview pass
+- Resolved segment count after deterministic reconstruction
+- Unit character count
 
-Unit logical grouping:
-- Singleton group rate (groups with only one item — suggests weak grouping)
-- Graph edges per group (groups with 0 edges are just lists, which is fine but worth noting)
-- Event-like items with temporal hints vs. missing timeline group
-- Unreferenced item count (items that appear in no logical group)
+Per-segment counts:
+- Source block count
+- Concept count
+- Atomic item count
+- Source block references emitted by atomic items
+- Simple ratios such as concepts/items per block and average source blocks per item
+- Source block splitter counts for the segment, including coverage and oversized block data
+
+Segment merge counts:
+- Source block count
+- Concepts before/after same-surface merge
+- Concept merge count
+- Atomic item count
+- Unresolved item count
+- Ambiguous surface count
+- Propagated warning count
+
+Grouping counts:
+- Logical group count
+- Singleton group count
+- Group count with graph edges
+- Graph edge count
+- Atomic items grouped/ungrouped
+- Event-like items with temporal hints
+- Timeline or temporal-sequence group count
 
 ## Implementation Sequence
 
@@ -539,13 +565,15 @@ Each step is a focused, reviewable commit.
 - Update mock backend for grouping responses.
 - Tests: valid groups pass validation, graph edges resolve, source-grounded edges cite blocks.
 
-### Commit 11: Quality metrics wiring
+### Commit 11: Metrics wiring
 
-- Wire source block metrics into splitter output and validation report.
-- Wire per-segment metrics into extraction pass output.
-- Wire stabilization metrics into reindexer output.
-- Wire grouping metrics into grouping pass output.
-- All metrics reported as warnings in validation, not hard errors.
+- Wire source block splitter counts into per-segment pass artifacts.
+- Wire per-segment counts into extraction pass output.
+- Rename the segment merge helper to match the `metrics.counts.segment_merge` stage.
+- Wire segment-merge counts into the merge helper output.
+- Wire grouping counts into grouping pass output.
+- Aggregate final factual telemetry under top-level `metrics.validation` and `metrics.counts`.
+- Keep validation focused on structural correctness; do not turn metric thresholds into warnings yet.
 
 ### Commit 12: Update CLI
 

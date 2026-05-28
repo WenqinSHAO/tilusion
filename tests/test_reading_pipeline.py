@@ -128,6 +128,8 @@ def test_run_per_segment_extraction_pass_with_mock(tmp_path: Path) -> None:
     assert record.pass_name == "per-segment-extraction"
     assert record.cache_hit is False
     assert len(record.data["source_blocks"]) == 1
+    assert record.data["metrics"]["counts"]["per_segment"]["source_blocks"] == 1
+    assert record.data["metrics"]["counts"]["per_segment"]["concepts"] == 1
     assert len(record.data["concepts"]) == 1
     assert len(record.data["atomic_items"]) == 1
     assert record.validation_report.passed
@@ -173,6 +175,7 @@ def test_write_reading_unit_package(tmp_path: Path) -> None:
         "unresolved_items": [],
         "validation": {},
         "context_metadata": {},
+        "metrics": {"validation": {}, "counts": {}},
     }
     package_path = write_reading_unit_package(
         unit_id="unit-0001",
@@ -189,6 +192,7 @@ def test_write_reading_unit_package(tmp_path: Path) -> None:
     assert written["schema_version"] == READING_UNIT_SCHEMA_VERSION
     assert written["logical_groups"] == []
     assert written["passes"]["per_segment"]["elapsed_ms"] == 42
+    assert written["metrics"] == {"validation": {}, "counts": {}}
     assert "data" not in written
 
 
@@ -412,6 +416,8 @@ def test_run_unit_logical_grouping_pass_with_mock(tmp_path: Path) -> None:
     assert record.cache_hit is False
     assert record.data["unit_id"] == "unit-0001"
     assert record.data["source_blocks"] == source_blocks
+    assert record.data["metrics"]["counts"]["grouping"]["logical_groups"] == 1
+    assert record.data["metrics"]["counts"]["grouping"]["atomic_items_grouped"] == 1
     assert len(record.data["logical_groups"]) == 1
     assert record.data["logical_groups"][0]["group_id"] == "group-0001"
     assert record.validation_report.passed

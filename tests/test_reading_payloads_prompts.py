@@ -6,7 +6,7 @@ from tilusion.extraction_prompts import generated_prompt_part
 from tilusion.reading_payloads import (
     _source_block_meta,
     build_per_segment_extraction_payload,
-    flatten_and_stabilize_segment_results,
+    merge_segment_extraction_results,
     render_text_with_block_markers,
 )
 from tilusion.reading_schema import SourceBlock
@@ -202,12 +202,12 @@ def test_source_block_meta_drops_text_and_hash() -> None:
 
 
 
-# ── flatten_and_stabilize_segment_results tests ────────────────────────────────
+# ── merge_segment_extraction_results tests ────────────────────────────────
 
 
-def test_stabilize_merges_duplicate_concepts() -> None:
+def test_segment_merge_merges_duplicate_concepts() -> None:
     """Same surface + same type across two segments → one merged concept."""
-    result = flatten_and_stabilize_segment_results(
+    result = merge_segment_extraction_results(
         [
             {
                 "segment_id": "seg-0001",
@@ -248,11 +248,21 @@ def test_stabilize_merges_duplicate_concepts() -> None:
     assert c["summary"] == "narrator"  # first non-empty
     assert c["provenance"] == {"grounding": "synthesis", "created_by": "deterministic"}
     assert result["unresolved_items"] == []
+    assert result["metrics"]["counts"]["segment_merge"] == {
+        "source_blocks": 2,
+        "concepts_before_merge": 2,
+        "concepts_after_merge": 1,
+        "concept_merge_count": 1,
+        "atomic_items": 0,
+        "unresolved_items": 0,
+        "ambiguous_surface_count": 0,
+        "warning_count": 0,
+    }
 
 
-def test_stabilize_preserves_different_types() -> None:
+def test_segment_merge_preserves_different_types() -> None:
     """Same surface but different types → separate concepts."""
-    result = flatten_and_stabilize_segment_results(
+    result = merge_segment_extraction_results(
         [
             {
                 "segment_id": "seg-0001",
@@ -290,9 +300,9 @@ def test_stabilize_preserves_different_types() -> None:
     assert set(u["candidate_types"]) == {"person", "plant"}
 
 
-def test_stabilize_remaps_item_concept_refs() -> None:
+def test_segment_merge_remaps_item_concept_refs() -> None:
     """After merge, item concept_refs point to merged concept IDs."""
-    result = flatten_and_stabilize_segment_results(
+    result = merge_segment_extraction_results(
         [
             {
                 "segment_id": "seg-0001",
@@ -340,17 +350,18 @@ def test_stabilize_remaps_item_concept_refs() -> None:
     assert result["atomic_items"][1]["concept_refs"] == ["concept-0001"]
 
 
-def test_stabilize_empty_input() -> None:
-    result = flatten_and_stabilize_segment_results([], unit_id="unit-0001")
+def test_segment_merge_empty_input() -> None:
+    result = merge_segment_extraction_results([], unit_id="unit-0001")
     assert result["source_blocks"] == []
     assert result["concepts"] == []
     assert result["atomic_items"] == []
     assert result["unresolved_items"] == []
+    assert result["metrics"]["counts"]["segment_merge"]["source_blocks"] == 0
 
 
-def test_stabilize_single_segment_no_merge_needed() -> None:
+def test_segment_merge_single_segment_no_merge_needed() -> None:
     """Single segment with one concept — gets clean ID, merged_from with single entry."""
-    result = flatten_and_stabilize_segment_results(
+    result = merge_segment_extraction_results(
         [
             {
                 "segment_id": "seg-0001",

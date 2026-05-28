@@ -51,20 +51,12 @@ class ReadingValidationReport:
         }
 
 
-def validate_extraction_unit_package(
-    package: Any,
-    *,
-    metrics: dict[str, Any] | None = None,
-) -> ReadingValidationReport:
+def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
     """Validate a reading-unit-v0.3 package.
 
     This validator checks structural integrity and source-grounding rules. It
-    does not judge extraction quality except for lightweight warnings; semantic
-    quality belongs to later deterministic metrics and LLM repair/review passes.
-
-    *metrics* is an optional dict of quality metrics from earlier pipeline
-    stages (per-segment extraction, stabilization, logical grouping). Threshold
-    violations are emitted as warnings, never errors.
+    does not judge extraction quality; factual stage metrics are carried in the
+    optional top-level `metrics` object and are not interpreted here.
     """
 
     data = _as_dict(package)
@@ -237,7 +229,9 @@ def validate_extraction_unit_package(
         _validate_provenance(group.get("provenance"), f"{path}.provenance", issues, allow_missing=True)
         _validate_group_graph(group.get("graph", {}), item_ids, block_ids, f"{path}.graph", issues)
 
-    _add_quality_warnings(block_ids, concepts, atomic_items, groups, issues, metrics or {})
+    if "metrics" in data and not isinstance(data.get("metrics"), dict):
+        issues.append(_issue("error", "wrong_field_type", "metrics", "Metrics must be an object."))
+
     return ReadingValidationReport(subject_id=subject_id, issues=issues)
 
 
@@ -440,179 +434,6 @@ def _grounding(provenance: Any) -> str | None:
         value = provenance.get("grounding")
         return value if isinstance(value, str) else None
     return None
-
-
-def _add_quality_warnings(
-    block_ids: set[str],
-    concepts: list[Any],
-    atomic_items: list[Any],
-    groups: list[Any],
-    issues: list[ReadingValidationIssue],
-    metrics: dict[str, Any],
-) -> None:
-    # ── Unreferenced source blocks ──
-    cited_blocks: set[str] = set()
-    for item in atomic_items:
-        if isinstance(item, dict):
-            cited_blocks.update(ref for ref in _list(item.get("source_block_refs")) if isinstance(ref, str))
-    unreferenced = sorted(block_ids - cited_blocks)
-    if block_ids and unreferenced:
-        issues.append(
-            _issue(
-                "warning",
-                "unreferenced_source_blocks",
-                "source_blocks",
-                f"{len(unreferenced)} source block(s) are not cited by any atomic item.",
-                "This may be fine for sparse/front-matter text; otherwise check extraction coverage.",
-            )
-        )
-
-    # ── All-singleton logical groups ──
-    singleton_count = 0
-    group_count = 0
-    for group in groups:
-        if isinstance(group, dict):
-            refs = _list(group.get("item_refs"))
-            group_count += 1
-            if len(refs) == 1:
-                singleton_count += 1
-    if group_count and singleton_count == group_count and group_count > 1:
-        issues.append(
-            _issue(
-                "warning",
-                "all_singleton_logical_groups",
-                "logical_groups",
-                "All logical groups contain only one atomic item.",
-                "This may indicate that unit-level grouping is too weak.",
-            )
-        )
-
-    # ── Stabilization: high duplicate merge rate ──
-    stab = metrics.get("stabilization", {})
-    concepts_before = stab.get("concepts_before_merge")
-    concepts_after = stab.get("concepts_after_merge")
-    if isinstance(concepts_before, int) and isinstance(concepts_after, int) and concepts_before > 0:
-        merge_count = concepts_before - concepts_after
-        merge_pct = merge_count / concepts_before * 100
-        if merge_pct > 30:
-            issues.append(
-                _issue(
-                    "warning",
-                    "high_duplicate_concept_merge_rate",
-                    "concepts",
-                    f"{merge_count}/{concepts_before} ({merge_pct:.0f}%) per-segment concepts merged during stabilization.",
-                    "The LLM may be over-producing similar concepts across segments. Consider tightening the per-segment prompt.",
-                )
-            )
-
-    # ── Extraction density: items per block ──
-    block_count = len(block_ids)
-    item_count = len(atomic_items)
-    if block_count > 0 and item_count > 0:
-        items_per_block = item_count / block_count
-        if items_per_block < 0.3:
-            issues.append(
-                _issue(
-                    "warning",
-                    "low_extraction_density",
-                    "atomic_items",
-                    f"{items_per_block:.1f} atomic items per source block ({item_count} items / {block_count} blocks).",
-                    "Extraction may be too sparse. Check whether the segment region classification is too conservative.",
-                )
-            )
-
-    # ── Unreferenced atomic items (present in no logical group) ──
-    if groups:
-        items_in_groups: set[str] = set()
-        for group in groups:
-            if isinstance(group, dict):
-                for ref in _list(group.get("item_refs")):
-                    if isinstance(ref, str):
-                        items_in_groups.add(ref)
-        all_item_ids = set()
-        for item in atomic_items:
-            if isinstance(item, dict):
-                iid = item.get("item_id")
-                if isinstance(iid, str):
-                    all_item_ids.add(iid)
-        ungrouped = all_item_ids - items_in_groups
-        if len(ungrouped) > 0 and len(ungrouped) == len(all_item_ids):
-            issues.append(
-                _issue(
-                    "warning",
-                    "all_items_ungrouped",
-                    "logical_groups",
-                    f"All {len(ungrouped)} atomic item(s) are absent from logical groups.",
-                    "Groups may be too selective or the grouping pass may have failed to produce meaningful clusters.",
-                )
-            )
-        elif len(ungrouped) > max(len(all_item_ids) * 0.5, 3):
-            issues.append(
-                _issue(
-                    "warning",
-                    "many_ungrouped_items",
-                    "logical_groups",
-                    f"{len(ungrouped)}/{len(all_item_ids)} atomic items are not referenced by any logical group.",
-                    "Consider grouping more items or marking sparse regions explicitly.",
-                )
-            )
-
-    # ── Event-like items with temporal hints but no timeline group ──
-    has_timeline = any(
-        isinstance(g, dict) and g.get("group_type") in ("timeline", "temporal_sequence")
-        for g in groups
-    )
-    if not has_timeline:
-        temporal_event_count = 0
-        for item in atomic_items:
-            if not isinstance(item, dict):
-                continue
-            if item.get("item_type") not in ("event", "action", "scene"):
-                continue
-            tas = item.get("temporal_attributes")
-            if isinstance(tas, list) and any(
-                isinstance(ta, dict) and ta.get("kind") in ("explicit", "implicit", "relative")
-                for ta in tas
-            ):
-                temporal_event_count += 1
-        if temporal_event_count >= 3:
-            issues.append(
-                _issue(
-                    "warning",
-                    "event_items_missing_timeline",
-                    "logical_groups",
-                    f"{temporal_event_count} event-like atomic items have temporal hints but no timeline group exists.",
-                    "Consider adding a timeline or temporal_sequence logical group.",
-                )
-            )
-
-    # ── Graphless groups (informational) ──
-    groups_with_graph = 0
-    total_edges = 0
-    for group in groups:
-        if isinstance(group, dict):
-            graph = group.get("graph")
-            if isinstance(graph, dict):
-                edges = _list(graph.get("edges"))
-                if edges:
-                    groups_with_graph += 1
-                    total_edges += len(edges)
-    if group_count > 0 and groups_with_graph == 0 and any(
-        isinstance(g, dict) and g.get("group_type") in ("timeline", "temporal_sequence", "discourse_graph", "claim_evidence_map")
-        for g in groups
-    ):
-        issues.append(
-            _issue(
-                "warning",
-                "graphless_structural_groups",
-                "logical_groups",
-                "Timeline, discourse, or claim-evidence groups present but none contain graph edges.",
-                "These group types are most useful with graph structure. Add edges or change the group_type.",
-            )
-        )
-
-    # ── Metrics snapshot (always included, never a warning by itself) ──
-    # No warning emitted — metrics are available in the validation dict for tooling.
 
 
 def _as_dict(value: Any) -> dict[str, Any]:

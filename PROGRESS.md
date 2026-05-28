@@ -45,15 +45,15 @@
 
 **Updated plan**
 - `docs/source_grounded_reading_pipeline.md` revised with v0.3 model, clarified naming, splitter spec, and 12-commit implementation sequence.
-- Key design decisions: no backward compat with v0.1, source_spans/ConceptMention/GroupLink/DerivedStructure removed, links moved into logical group graphs, cross-group item membership allowed, quality metrics built into each module from the start.
+- Key design decisions: no backward compat with v0.1, source_spans/ConceptMention/GroupLink/DerivedStructure removed, links moved into logical group graphs, cross-group item membership allowed, factual metrics built into each module from the start.
 
 ## Ongoing
 
 - **Current goal:** Rebuild the reading pipeline from scratch following the 12-commit sequence in `docs/source_grounded_reading_pipeline.md`.
 - **Immediate next step:** Commit 12 — Update CLI.
 - **Branch:** `cross-unit-refactor`. Old extraction pipeline (`extraction*.py`) stays untouched as regression baseline. Reading modules (`reading_*.py`) rewritten in-place.
-- Commits 1–10 reviewed 2026-05-28. Three fixes applied: per-segment `warnings` now propagated through `flatten_and_stabilize_segment_results`, dead `elif` branch removed from `_validate_temporal_attributes`, `_list` return type corrected, and unused `alias_candidates` field removed from `Concept` schema.
-- Commit 11 done 2026-05-28: quality metrics wired through all pipeline stages into validation warnings.
+- Commits 1–10 reviewed 2026-05-28. Three fixes applied: per-segment `warnings` now propagated through `merge_segment_extraction_results`, dead `elif` branch removed from `_validate_temporal_attributes`, `_list` return type corrected, and unused `alias_candidates` field removed from `Concept` schema.
+- Commit 11 done 2026-05-28: factual stage metrics wired through pass artifacts and final `metrics.validation` / `metrics.counts`, without heuristic quality warnings.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
 
@@ -71,5 +71,5 @@
 | 8 | Unit-level concept unification and item stabilization | done |
 | 9 | Unit-level logical grouping prompt | done |
 | 10 | Unit-level logical grouping pass | done |
-| 11 | Quality metrics wiring | done |
+| 11 | Metrics wiring | done |
 | 12 | Update CLI | pending |

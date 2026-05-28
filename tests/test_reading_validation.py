@@ -218,7 +218,7 @@ def test_reading_validation_rejects_source_block_round_trip_mismatch_when_unit_t
     assert "source_block_round_trip_mismatch" in _codes(report)
 
 
-def test_reading_validation_warns_for_uncited_source_blocks() -> None:
+def test_reading_validation_does_not_judge_uncited_source_blocks() -> None:
     data = _valid_package().to_dict()
     data["atomic_items"] = data["atomic_items"][:1]
     data["logical_groups"] = []
@@ -226,8 +226,7 @@ def test_reading_validation_warns_for_uncited_source_blocks() -> None:
     report = validate_extraction_unit_package(data)
 
     assert report.passed
-    assert "unreferenced_source_blocks" in _codes(report)
-    assert report.warning_count == 1
+    assert report.warning_count == 0
 
 
 def test_reading_validation_rejects_schema_version_mismatch() -> None:
@@ -301,7 +300,7 @@ def test_reading_validation_rejects_invalid_type_string() -> None:
     assert "invalid_type_string" in _codes(report)
 
 
-def test_reading_validation_warns_for_all_singleton_logical_groups() -> None:
+def test_reading_validation_does_not_judge_all_singleton_logical_groups() -> None:
     data = _valid_package().to_dict()
     data["logical_groups"] = [
         {
@@ -329,8 +328,27 @@ def test_reading_validation_warns_for_all_singleton_logical_groups() -> None:
     report = validate_extraction_unit_package(data)
 
     assert report.passed
-    assert "all_singleton_logical_groups" in _codes(report)
+    assert report.warning_count == 0
 
+
+
+def test_reading_validation_accepts_top_level_metrics_object() -> None:
+    data = _valid_package().to_dict()
+    data["metrics"] = {"validation": {}, "counts": {}}
+
+    report = validate_extraction_unit_package(data)
+
+    assert report.passed
+
+
+def test_reading_validation_rejects_non_object_metrics() -> None:
+    data = _valid_package().to_dict()
+    data["metrics"] = []
+
+    report = validate_extraction_unit_package(data)
+
+    assert not report.passed
+    assert "wrong_field_type" in _codes(report)
 
 def test_reading_validation_allows_context_like_temporal_surface_without_source_ref() -> None:
     data = _valid_package().to_dict()

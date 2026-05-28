@@ -22,7 +22,7 @@ from .extraction_pipeline import (
 from .reading_payloads import (
     build_per_segment_extraction_payload,
     build_unit_logical_grouping_payload,
-    flatten_and_stabilize_segment_results,
+    merge_segment_extraction_results,
 )
 from .reading_prompts import (
     build_per_segment_extraction_composition,
@@ -71,37 +71,39 @@ def _log_progress(step: int, total: int, description: str, status: str, elapsed_
     print(f"  [{step}/{total}] {description}: {status} ({elapsed_ms}ms)", file=sys.stderr)
 
 
-def _aggregate_per_segment_metrics(
+def _aggregate_per_segment_counts(
     segment_records: list[ReadingPassRecord],
 ) -> dict[str, Any]:
-    """Aggregate per-segment extraction metrics across all segments."""
+    """Aggregate factual per-segment extraction counts across all segments."""
     total_blocks = 0
     total_concepts = 0
     total_items = 0
-    total_sb_refs = 0
-    segment_metrics: list[dict[str, Any]] = []
+    total_source_block_refs = 0
+    per_segment: list[dict[str, Any]] = []
 
     for record in segment_records:
-        m = record.data.get("metrics", {})
-        sb = m.get("source_blocks", {})
-        ex = m.get("extraction", {})
-        total_blocks += ex.get("block_count", 0)
-        total_concepts += ex.get("concept_count", 0)
-        total_items += ex.get("item_count", 0)
-        segment_metrics.append({
-            "segment_id": record.data.get("segment_id", ""),
-            "source_block_metrics": sb,
-            "extraction_metrics": ex,
-        })
+        counts = record.data.get("metrics", {}).get("counts", {})
+        local = counts.get("per_segment", {})
+        source_blocks = int(local.get("source_blocks", 0) or 0)
+        concepts = int(local.get("concepts", 0) or 0)
+        atomic_items = int(local.get("atomic_items", 0) or 0)
+        source_block_refs = int(local.get("source_block_refs", 0) or 0)
+        total_blocks += source_blocks
+        total_concepts += concepts
+        total_items += atomic_items
+        total_source_block_refs += source_block_refs
+        per_segment.append(dict(local))
 
     return {
-        "total_blocks": total_blocks,
+        "segment_count": len(segment_records),
+        "total_source_blocks": total_blocks,
         "total_concepts": total_concepts,
-        "total_items": total_items,
+        "total_atomic_items": total_items,
+        "total_source_block_refs": total_source_block_refs,
         "concepts_per_block": round(total_concepts / total_blocks, 2) if total_blocks else 0.0,
         "items_per_block": round(total_items / total_blocks, 2) if total_blocks else 0.0,
-        "segment_count": len(segment_records),
-        "per_segment": segment_metrics,
+        "avg_source_blocks_per_item": round(total_source_block_refs / total_items, 2) if total_items else 0.0,
+        "per_segment": per_segment,
     }
 
 
@@ -348,32 +350,32 @@ def run_per_segment_extraction_pass(
     validation_report = validate_extraction_unit_package(validation_subject)
     _raise_on_validation_errors("per-segment-extraction", validation_report)
 
-    # Compute per-segment extraction metrics
+    # Compute factual per-segment counts for logging and final aggregation.
     llm_concepts = data.get("concepts", [])
     llm_items = data.get("atomic_items", [])
     n_blocks = len(blocks)
     n_concepts = len(llm_concepts)
     n_items = len(llm_items)
-    total_sb_refs = sum(
+    total_source_block_refs = sum(
         len(_as_list(it.get("source_block_refs"))) for it in llm_items if isinstance(it, dict)
     )
 
-    extraction_metrics = {
-        "block_count": n_blocks,
-        "concept_count": n_concepts,
-        "item_count": n_items,
+    per_segment_counts = {
+        "segment_id": segment.segment_id,
+        "source_blocks": n_blocks,
+        "concepts": n_concepts,
+        "atomic_items": n_items,
+        "source_block_refs": total_source_block_refs,
         "concepts_per_block": round(n_concepts / n_blocks, 2) if n_blocks else 0.0,
         "items_per_block": round(n_items / n_blocks, 2) if n_blocks else 0.0,
-        "avg_source_blocks_per_item": round(total_sb_refs / n_items, 2) if n_items else 0.0,
+        "avg_source_blocks_per_item": round(total_source_block_refs / n_items, 2) if n_items else 0.0,
+        "source_block_splitter": block_metrics.to_dict(),
     }
 
     enriched_data = {
         **data,
         "source_blocks": [b.to_dict() for b in blocks],
-        "metrics": {
-            "source_blocks": block_metrics.to_dict(),
-            "extraction": extraction_metrics,
-        },
+        "metrics": {"counts": {"per_segment": per_segment_counts}},
     }
 
     record = ReadingPassRecord(
@@ -502,11 +504,11 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _compute_grouping_metrics(
+def _compute_grouping_counts(
     groups: list[dict[str, Any]],
     items: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Compute quality metrics from the logical grouping pass output."""
+    """Compute factual counts from the logical grouping pass output."""
     group_count = len(groups)
     singleton_count = 0
     groups_with_graph = 0
@@ -545,19 +547,17 @@ def _compute_grouping_metrics(
         ):
             temporal_event_count += 1
 
-    has_timeline = any(
-        g.get("group_type") in ("timeline", "temporal_sequence") for g in groups
-    )
-
     return {
-        "group_count": group_count,
-        "singleton_group_count": singleton_count,
-        "groups_with_graph_count": groups_with_graph,
-        "total_graph_edges": total_edges,
-        "items_in_any_group": len(items_in_groups),
-        "ungrouped_item_count": ungrouped_count,
-        "event_items_with_temporal_hints": temporal_event_count,
-        "has_timeline_group": has_timeline,
+        "logical_groups": group_count,
+        "singleton_groups": singleton_count,
+        "groups_with_graph": groups_with_graph,
+        "graph_edges": total_edges,
+        "atomic_items_grouped": len(items_in_groups),
+        "atomic_items_ungrouped": ungrouped_count,
+        "event_like_items_with_temporal_hints": temporal_event_count,
+        "timeline_or_temporal_sequence_groups": sum(
+            1 for g in groups if g.get("group_type") in ("timeline", "temporal_sequence")
+        ),
     }
 
 
@@ -659,8 +659,8 @@ def run_unit_logical_grouping_pass(
     validation_report = validate_extraction_unit_package(validation_subject)
     _raise_on_validation_errors("unit-logical-grouping", validation_report)
 
-    # ── Compute grouping metrics ──
-    grouping_metrics = _compute_grouping_metrics(updated_groups, updated_items)
+    # ── Compute factual grouping counts ──
+    grouping_counts = _compute_grouping_counts(updated_groups, updated_items)
 
     record = ReadingPassRecord(
         pass_name="unit-logical-grouping",
@@ -679,7 +679,7 @@ def run_unit_logical_grouping_pass(
             "logical_groups": updated_groups,
             "validation": validation_report.to_dict(),
             "context_metadata": {"context_injection": context is not None},
-            "metrics": {"grouping": grouping_metrics},
+            "metrics": {"counts": {"grouping": grouping_counts}},
         },
         validation_report=validation_report,
         artifact_paths=paths,
@@ -788,15 +788,23 @@ def run_reading_pipeline(
         _log_progress(step, TOTAL_STEPS, "Per-segment extraction", "FAILED", _elapsed_ms(t0))
         raise
 
-    # ── Stabilize: merge concepts and reindex items ──
-    stabilized = flatten_and_stabilize_segment_results(
+    # ── Segment merge: merge concepts and reindex items ──
+    stabilized = merge_segment_extraction_results(
         [r.data for r in segment_records], unit_id=unit_id
     )
 
-    # ── Aggregate pipeline metrics ──
-    pipeline_metrics: dict[str, Any] = {
-        "per_segment": _aggregate_per_segment_metrics(segment_records),
-        "stabilization": stabilized.get("metrics", {}).get("stabilization", {}),
+    # ── Aggregate factual stage counts ──
+    metrics: dict[str, Any] = {
+        "validation": {},
+        "counts": {
+            "overview": {
+                "segment_count": len(overview_record.data.get("segments", [])) if isinstance(overview_record.data, dict) else 0,
+                "resolved_segment_count": len(segments),
+                "unit_char_count": len(text),
+            },
+            "per_segment": _aggregate_per_segment_counts(segment_records),
+            "segment_merge": stabilized.get("metrics", {}).get("counts", {}).get("segment_merge", {}),
+        },
     }
 
     # ── Step 3: Unit logical grouping ──
@@ -829,7 +837,7 @@ def run_reading_pipeline(
         _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "FAILED", _elapsed_ms(t0))
         raise
 
-    pipeline_metrics["grouping"] = grouping_record.data.get("metrics", {}).get("grouping", {})
+    metrics["counts"]["grouping"] = grouping_record.data.get("metrics", {}).get("counts", {}).get("grouping", {})
 
     final_data = {
         "schema_version": READING_UNIT_SCHEMA_VERSION,
@@ -842,11 +850,18 @@ def run_reading_pipeline(
         "unresolved_items": grouping_record.data.get("unresolved_items", []),
         "validation": grouping_record.validation_report.to_dict(),
         "context_metadata": {"context_injection": context is not None},
+        "metrics": metrics,
     }
-    final_validation_report = validate_extraction_unit_package(final_data, metrics=pipeline_metrics)
+    final_validation_report = validate_extraction_unit_package(final_data)
     _raise_on_validation_errors("reading-unit-package", final_validation_report)
-    final_data["validation"] = final_validation_report.to_dict()
     final_validation = final_validation_report.to_dict()
+    metrics["validation"] = {
+        "error_count": final_validation["error_count"],
+        "warning_count": final_validation["warning_count"],
+        "issue_count": final_validation["issue_count"],
+    }
+    final_data["metrics"] = metrics
+    final_data["validation"] = final_validation
 
     # ── Write unit package ──
     package_path = write_reading_unit_package(

@@ -115,7 +115,7 @@ def build_unit_logical_grouping_payload(
     }
 
 
-def flatten_and_stabilize_segment_results(
+def merge_segment_extraction_results(
     segment_results: list[dict[str, Any]],
     unit_id: str,
 ) -> dict[str, list[dict[str, Any]]]:
@@ -222,16 +222,20 @@ def flatten_and_stabilize_segment_results(
         stabilized["item_id"] = f"item-{i + 1:04d}"
         stabilized_items.append(stabilized)
 
-    # ── Phase 5: compute stabilization metrics ──
+    # ── Phase 5: compute factual segment-merge counts ──
     concepts_before = len(concepts)
     concepts_after = len(merged_concepts)
-    stabilization_metrics = {
+    segment_merge_counts = {
+        "source_blocks": len(source_blocks),
         "concepts_before_merge": concepts_before,
         "concepts_after_merge": concepts_after,
-        "merge_count": concepts_before - concepts_after,
+        "concept_merge_count": concepts_before - concepts_after,
+        "atomic_items": len(stabilized_items),
+        "unresolved_items": len(unresolved_items),
         "ambiguous_surface_count": sum(
             1 for u in unresolved_items if u.get("kind") == "ambiguous_concept_surface"
         ),
+        "warning_count": len(warnings),
     }
 
     return {
@@ -240,7 +244,7 @@ def flatten_and_stabilize_segment_results(
         "atomic_items": stabilized_items,
         "unresolved_items": unresolved_items,
         "warnings": warnings,
-        "metrics": {"stabilization": stabilization_metrics},
+        "metrics": {"counts": {"segment_merge": segment_merge_counts}},
     }
 
 
