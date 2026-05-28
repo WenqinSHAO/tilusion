@@ -227,7 +227,7 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
         _validate_ref_list(group.get("concept_refs", []), concept_ids, f"{path}.concept_refs", issues)
         _validate_string_list(group.get("uncertainty", []), f"{path}.uncertainty", issues)
         _validate_provenance(group.get("provenance"), f"{path}.provenance", issues, allow_missing=True)
-        _validate_group_graph(group.get("graph", {}), item_ids, block_ids, f"{path}.graph", issues)
+        _validate_group_graph(group.get("graph") or {}, item_ids, block_ids, f"{path}.graph", issues)
 
     if "metrics" in data and not isinstance(data.get("metrics"), dict):
         issues.append(_issue("error", "wrong_field_type", "metrics", "Metrics must be an object."))

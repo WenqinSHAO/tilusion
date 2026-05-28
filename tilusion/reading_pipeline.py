@@ -656,9 +656,9 @@ def _normalize_uncertainty_fields(data: dict[str, Any]) -> dict[str, Any]:
 
     for group in _as_list(data.get("logical_groups")):
         group["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(group.get("uncertainty"))]
-        for node in _as_list(group.get("graph", {}).get("nodes")):
+        for node in _as_list((group.get("graph") or {}).get("nodes")):
             node["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(node.get("uncertainty"))]
-        for edge in _as_list(group.get("graph", {}).get("edges")):
+        for edge in _as_list((group.get("graph") or {}).get("edges")):
             edge["uncertainty"] = [_uncertainty_to_str(v) for v in _as_list(edge.get("uncertainty"))]
 
     for unresolved in _as_list(data.get("unresolved_items")):
