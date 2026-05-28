@@ -65,6 +65,93 @@ def test_full_coverage():
     assert metrics.covered_chars == len(text)
 
 
+# ── Contiguity invariants ─────────────────────────────────────────────────────
+
+
+def test_blocks_are_contiguous_no_gaps():
+    """Blocks within a segment must cover every character with no gaps."""
+    text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    sorted_blocks = sorted(blocks, key=lambda b: b.start)
+    for i in range(len(sorted_blocks) - 1):
+        assert sorted_blocks[i].end == sorted_blocks[i + 1].start, (
+            f"Gap between {sorted_blocks[i].block_id} (end={sorted_blocks[i].end}) "
+            f"and {sorted_blocks[i + 1].block_id} (start={sorted_blocks[i + 1].start})"
+        )
+
+
+def test_blocks_are_contiguous_no_overlaps():
+    """Blocks within a segment must not overlap."""
+    text = "A paragraph.\n\nAnother paragraph.\n\nA third paragraph."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    sorted_blocks = sorted(blocks, key=lambda b: b.start)
+    for i in range(len(sorted_blocks) - 1):
+        assert sorted_blocks[i].end <= sorted_blocks[i + 1].start, (
+            f"Overlap between {sorted_blocks[i].block_id} and {sorted_blocks[i + 1].block_id}"
+        )
+
+
+def test_blocks_cover_all_segment_text():
+    """Sum of block text lengths must equal segment text length."""
+    text = "First para.\n\nSecond para with more content here.\n\nThird."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    total = sum(b.end - b.start for b in blocks)
+    assert total == len(text), f"Block coverage {total} != text length {len(text)}"
+
+
+def test_blocks_contiguity_with_offset():
+    """Contiguity holds even with a non-zero unit_offset."""
+    unit_text = "PREFIX--First paragraph.\n\nSecond paragraph.---SUFFIX"
+    offset = len("PREFIX--")
+    seg_text = unit_text[offset : offset + len("First paragraph.\n\nSecond paragraph.")]
+    blocks, _ = split_source_blocks(
+        seg_text,
+        segment_id="seg-0001",
+        unit_id="unit-0001",
+        unit_text=unit_text,
+        unit_offset=offset,
+    )
+    sorted_blocks = sorted(blocks, key=lambda b: b.start)
+    for i in range(len(sorted_blocks) - 1):
+        assert sorted_blocks[i].end == sorted_blocks[i + 1].start
+
+
+def test_contiguity_with_oversized_split():
+    """Contiguity holds even when sentence splitting kicks in."""
+    sentence = "这是第{}个测试句子，包含足够的内容来测试分句功能。"
+    text = "".join(sentence.format(i) for i in range(50))
+    assert len(text) > MAX_BLOCK_CHARS
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert len(blocks) > 1
+    sorted_blocks = sorted(blocks, key=lambda b: b.start)
+    for i in range(len(sorted_blocks) - 1):
+        assert sorted_blocks[i].end == sorted_blocks[i + 1].start
+    total = sum(b.end - b.start for b in blocks)
+    assert total == len(text)
+
+
+def test_contiguity_with_notes_and_paragraphs():
+    """Contiguity holds with mixed block types (notes + paragraphs)."""
+    text = "[1] This is a note.\n\nA regular paragraph here.\n\n[2] Another note.\n\nFinal paragraph."
+    blocks, _ = split_source_blocks(
+        text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
+    )
+    assert len(blocks) == 4
+    sorted_blocks = sorted(blocks, key=lambda b: b.start)
+    for i in range(len(sorted_blocks) - 1):
+        assert sorted_blocks[i].end == sorted_blocks[i + 1].start
+    total = sum(b.end - b.start for b in blocks)
+    assert total == len(text)
+
+
 def test_round_trip_every_block():
     text = "First paragraph.\n\nSecond paragraph with more text.\n\nThird."
     blocks, _ = split_source_blocks(

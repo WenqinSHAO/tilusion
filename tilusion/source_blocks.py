@@ -146,6 +146,7 @@ def split_source_blocks(
         pos += len(chunk)
 
     metrics = _compute_metrics(segment_id, blocks, segment_text)
+    _validate_contiguity(segment_id, blocks, segment_text)
     return blocks, metrics
 
 
@@ -394,6 +395,50 @@ def _make_block(
             "splitter": SOURCE_BLOCK_SPLITTER_VERSION,
         },
     )
+
+
+def _validate_contiguity(
+    segment_id: str,
+    blocks: list[SourceBlock],
+    segment_text: str,
+) -> None:
+    """Assert blocks are contiguous, non-overlapping, and cover all segment text."""
+    if not blocks:
+        if len(segment_text) > 0:
+            raise ValueError(
+                f"Block contiguity failure for {segment_id}: "
+                f"non-empty segment text ({len(segment_text)} chars) produced zero blocks"
+            )
+        return
+
+    # Sort by start position for validation
+    sorted_blocks = sorted(blocks, key=lambda b: b.start)
+
+    for i in range(len(sorted_blocks) - 1):
+        curr = sorted_blocks[i]
+        nxt = sorted_blocks[i + 1]
+        if curr.end > nxt.start:
+            raise ValueError(
+                f"Block overlap in {segment_id}: "
+                f"{curr.block_id} [{curr.start}:{curr.end}] overlaps "
+                f"{nxt.block_id} [{nxt.start}:{nxt.end}] "
+                f"by {curr.end - nxt.start} chars"
+            )
+        if curr.end < nxt.start:
+            raise ValueError(
+                f"Block gap in {segment_id}: "
+                f"{curr.block_id} ends at {curr.end}, "
+                f"{nxt.block_id} starts at {nxt.start} "
+                f"({nxt.start - curr.end} chars uncovered)"
+            )
+
+    total_block_chars = sum(b.end - b.start for b in sorted_blocks)
+    if total_block_chars != len(segment_text):
+        raise ValueError(
+            f"Block coverage mismatch for {segment_id}: "
+            f"blocks cover {total_block_chars} chars, "
+            f"segment_text is {len(segment_text)} chars"
+        )
 
 
 def _compute_metrics(
