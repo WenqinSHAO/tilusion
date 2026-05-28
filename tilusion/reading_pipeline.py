@@ -23,6 +23,7 @@ from .reading_payloads import (
     build_per_segment_extraction_payload,
     build_unit_logical_grouping_payload,
     merge_segment_extraction_results,
+    normalize_concept_type,
 )
 from .reading_prompts import (
     build_per_segment_extraction_composition,
@@ -507,6 +508,71 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _dedupe_equivalent_concepts(
+    concepts: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Merge concepts that became equivalent after unit-level deltas."""
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    deduped: list[dict[str, Any]] = []
+    remap: dict[str, str] = {}
+
+    for concept in concepts:
+        current = dict(concept)
+        concept_id = current.get("concept_id", "")
+        normalized_type = normalize_concept_type(current.get("concept_type", ""))
+        current["concept_type"] = normalized_type
+        identity = str(current.get("canonical_name") or current.get("surface") or "").strip()
+        if not identity or not concept_id:
+            deduped.append(current)
+            continue
+
+        key = (identity, normalized_type)
+        existing = by_key.get(key)
+        if existing is None:
+            by_key[key] = current
+            deduped.append(current)
+            continue
+
+        target_id = existing.get("concept_id", "")
+        if target_id:
+            remap[concept_id] = target_id
+        _merge_concept_into(existing, current)
+
+    return deduped, remap
+
+
+def _merge_concept_into(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """In-place union for deterministic post-delta concept dedupe."""
+    for field in ("canonical_name", "surface", "summary"):
+        if not target.get(field) and source.get(field):
+            target[field] = source[field]
+
+    for field in ("aliases", "observed_surfaces", "source_block_refs", "facets", "uncertainty", "merged_from"):
+        values = list(_as_list(target.get(field)))
+        if field == "merged_from" and not values and target.get("concept_id"):
+            values = [target["concept_id"]]
+        seen = set(values)
+        source_values = _as_list(source.get(field))
+        if field == "merged_from" and not source_values and source.get("concept_id"):
+            source_values = [source["concept_id"]]
+        for value in source_values:
+            if value not in seen:
+                seen.add(value)
+                values.append(value)
+        if values:
+            target[field] = values
+
+
+def _compose_concept_remaps(
+    first: dict[str, str], second: dict[str, str]
+) -> dict[str, str]:
+    """Compose LLM-delta remaps with deterministic dedupe remaps."""
+    composed = dict(second)
+    for old, mid in first.items():
+        composed[old] = second.get(mid, mid)
+    return composed
+
+
 def _compute_grouping_counts(
     groups: list[dict[str, Any]],
     items: list[dict[str, Any]],
@@ -622,11 +688,15 @@ def run_unit_logical_grouping_pass(
         raw_response = backend.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
 
-    # Apply concept deltas, then build validation subject
+    # Apply concept deltas, then dedupe any concepts that became equivalent
+    # after reclassification/refinement. This catches common LLM repair output
+    # where the model fixes types but forgets to emit a separate merge delta.
     deltas = data.get("concept_deltas", [])
     updated_concepts, concept_remap = _apply_concept_deltas(
         concepts, deltas, unit_id=unit_id
     )
+    updated_concepts, dedupe_remap = _dedupe_equivalent_concepts(updated_concepts)
+    final_concept_remap = _compose_concept_remaps(concept_remap, dedupe_remap)
     groups = data.get("logical_groups", [])
 
     # Remap item concept_refs for any concept IDs that were merged/renamed
@@ -634,7 +704,7 @@ def run_unit_logical_grouping_pass(
     for item in atomic_items:
         updated = dict(item)
         updated["concept_refs"] = [
-            concept_remap.get(ref, ref) for ref in item.get("concept_refs", [])
+            final_concept_remap.get(ref, ref) for ref in item.get("concept_refs", [])
         ]
         updated_items.append(updated)
 
@@ -643,7 +713,7 @@ def run_unit_logical_grouping_pass(
     for group in groups:
         updated = dict(group)
         updated["concept_refs"] = [
-            concept_remap.get(ref, ref) for ref in group.get("concept_refs", [])
+            final_concept_remap.get(ref, ref) for ref in group.get("concept_refs", [])
         ]
         updated_groups.append(updated)
 

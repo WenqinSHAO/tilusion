@@ -10,6 +10,8 @@ from tilusion.reading_pipeline import (
     ReadingPassRecord,
     ReadingPipelineRecord,
     _apply_concept_deltas,
+    _compose_concept_remaps,
+    _dedupe_equivalent_concepts,
     mock_per_segment_extraction_response,
     mock_unit_logical_grouping_response,
     run_per_segment_extraction_pass,
@@ -368,6 +370,47 @@ def test_apply_concept_deltas_reclassify() -> None:
     updated, _remap = _apply_concept_deltas(concepts, deltas, unit_id="unit-0001")
 
     assert updated[0]["concept_type"] == "person"
+
+
+def test_dedupe_equivalent_concepts_after_reclassify() -> None:
+    concepts = [
+        {
+            "concept_id": "concept-0001",
+            "surface": "病",
+            "concept_type": "theme",
+            "canonical_name": "疾病",
+            "source_block_refs": ["b1"],
+            "observed_surfaces": ["病"],
+        },
+        {
+            "concept_id": "concept-0002",
+            "surface": "疾病",
+            "concept_type": "condition",
+            "canonical_name": "疾病",
+            "source_block_refs": ["b2"],
+            "observed_surfaces": ["疾病"],
+        },
+    ]
+
+    updated, remap = _dedupe_equivalent_concepts(concepts)
+
+    assert len(updated) == 1
+    assert updated[0]["concept_id"] == "concept-0001"
+    assert updated[0]["concept_type"] == "theme"
+    assert set(updated[0]["source_block_refs"]) == {"b1", "b2"}
+    assert set(updated[0]["observed_surfaces"]) == {"病", "疾病"}
+    assert updated[0]["merged_from"] == ["concept-0001", "concept-0002"]
+    assert remap == {"concept-0002": "concept-0001"}
+
+
+def test_compose_concept_remaps_chains_delta_and_dedupe_maps() -> None:
+    first = {"concept-0003": "concept-0002"}
+    second = {"concept-0002": "concept-0001"}
+
+    assert _compose_concept_remaps(first, second) == {
+        "concept-0002": "concept-0001",
+        "concept-0003": "concept-0001",
+    }
 
 
 def test_apply_concept_deltas_merge_removes_secondary_and_preserves_evidence() -> None:
