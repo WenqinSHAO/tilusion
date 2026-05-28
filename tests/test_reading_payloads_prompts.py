@@ -7,6 +7,7 @@ from tilusion.reading_payloads import (
     _source_block_meta,
     build_per_segment_extraction_payload,
     merge_segment_extraction_results,
+    normalize_concept_type,
     render_text_with_block_markers,
 )
 from tilusion.reading_schema import RECOMMENDED_CONCEPT_TYPES, SourceBlock
@@ -285,6 +286,15 @@ def test_segment_merge_merges_duplicate_concepts() -> None:
     }
 
 
+def test_normalize_concept_type_collapses_known_noisy_aliases() -> None:
+    assert normalize_concept_type("phenomenon") == "theme"
+    assert normalize_concept_type("event type") == "theme"
+    assert normalize_concept_type("relationship") == "social_role"
+    assert normalize_concept_type("work") == "source"
+    assert normalize_concept_type("technical component") == "technical_component"
+    assert normalize_concept_type("") == "other"
+
+
 def test_canonical_name_merge_across_different_surfaces() -> None:
     """Concepts with different surfaces but same canonical_name + type → merged."""
     result = merge_segment_extraction_results(
@@ -323,6 +333,41 @@ def test_canonical_name_merge_across_different_surfaces() -> None:
     assert len(c["merged_from"]) == 2
     assert "相如" in c["observed_surfaces"]
     assert "长卿" in c["observed_surfaces"]
+
+
+def test_canonical_name_merge_across_normalized_equivalent_types() -> None:
+    """Same canonical_name with noisy equivalent types merges after normalization."""
+    result = merge_segment_extraction_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "病", "concept_type": "condition",
+                     "summary": "illness as a recurring concern", "source_block_refs": ["b1"],
+                     "aliases": [], "observed_surfaces": ["病"], "facets": [],
+                     "uncertainty": [], "canonical_name": "疾病"}
+                ],
+                "atomic_items": [],
+            },
+            {
+                "segment_id": "seg-0002",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "疾病", "concept_type": "phenomenon",
+                     "summary": "illness phenomenon", "source_block_refs": ["b2"],
+                     "aliases": [], "observed_surfaces": ["疾病"], "facets": [],
+                     "uncertainty": [], "canonical_name": "疾病"}
+                ],
+                "atomic_items": [],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    assert len(result["concepts"]) == 1
+    c = result["concepts"][0]
+    assert c["concept_type"] == "theme"
+    assert c["canonical_name"] == "疾病"
+    assert set(c["source_block_refs"]) == {"b1", "b2"}
 
 
 def test_segment_merge_preserves_different_types() -> None:

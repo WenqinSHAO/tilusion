@@ -2,7 +2,36 @@ from __future__ import annotations
 
 from typing import Any
 
+import re
+
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
+
+
+_CONCEPT_TYPE_NORMALIZATION = {
+    "thing": "object",
+    "substance": "object",
+    "format": "object",
+    "component": "technical_component",
+    "technical_component": "technical_component",
+    "work": "source",
+    "collection": "source",
+    "source_statement": "source",
+    "condition": "theme",
+    "phenomenon": "theme",
+    "event_type": "theme",
+    "concept": "theme",
+    "role": "social_role",
+    "relationship": "social_role",
+}
+
+
+def normalize_concept_type(value: Any) -> str:
+    """Normalize known noisy concept type aliases into the coarse schema vocabulary."""
+    raw = str(value or "").strip()
+    if not raw:
+        return "other"
+    key = re.sub(r"[\s-]+", "_", raw.lower())
+    return _CONCEPT_TYPE_NORMALIZATION.get(key, key)
 
 
 def render_text_with_block_markers(
@@ -122,7 +151,7 @@ def merge_segment_extraction_results(
     """Flatten per-segment results, merge duplicate concepts, and stabilize IDs.
 
     Segment-local IDs are scoped to ``{segment_id}-concept-NNNN``, then
-    concepts with the same (surface, concept_type) are merged into a
+    concepts with the same (surface, normalized concept_type) are merged into a
     single unit-level concept with a clean sequential ``concept-NNNN`` ID.
     Atomic items get clean sequential ``item-NNNN`` IDs and their
     ``concept_refs`` are remapped to the merged concept IDs.
@@ -170,10 +199,12 @@ def merge_segment_extraction_results(
             ]
             atomic_items.append(scoped)
 
-    # ── Phase 2: group scoped concepts by (surface, concept_type) ──
+    # ── Phase 2: group scoped concepts by (surface, normalized concept_type) ──
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for concept in concepts:
-        key = (concept.get("surface", ""), concept.get("concept_type", ""))
+        normalized_type = normalize_concept_type(concept.get("concept_type", ""))
+        concept["concept_type"] = normalized_type
+        key = (concept.get("surface", ""), normalized_type)
         groups.setdefault(key, []).append(concept)
 
     # ── Phase 2.5: merge groups that share the same canonical_name ──
@@ -274,7 +305,7 @@ def _merge_concept_group(
     concept_type: str,
     members: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Merge a group of concepts sharing the same (surface, concept_type)."""
+    """Merge a group of concepts sharing the same (surface, normalized concept_type)."""
     merged_from = [m["concept_id"] for m in members]
 
     def _union(field: str) -> list[str]:
