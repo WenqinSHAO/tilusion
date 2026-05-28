@@ -66,15 +66,69 @@ def _build_concept_surfaces(concepts: list[dict[str, Any]]) -> dict[str, list[st
     return result
 
 
+def _annotate_text(
+    text: str,
+    block_id: str,
+    ref_concepts: list[dict[str, Any]],
+    concept_surfaces: dict[str, list[str]],
+) -> str:
+    """Build annotated HTML for a single block of text."""
+    annotations: list[dict[str, Any]] = []
+    for c in ref_concepts:
+        cid = c["concept_id"]
+        surfaces = concept_surfaces.get(cid, [])
+        for surf in surfaces:
+            for s, e in _find_all(text, surf):
+                annotations.append({
+                    "start": s, "end": e,
+                    "concept_id": cid,
+                    "concept_type": c.get("concept_type", ""),
+                    "canonical_name": c.get("canonical_name", surf),
+                })
+
+    # Remove overlapping annotations (keep longer surface match)
+    annotations.sort(key=lambda a: (a["start"], -(a["end"] - a["start"])))
+    filtered: list[dict[str, Any]] = []
+    for ann in annotations:
+        overlaps = any(
+            ann["start"] < f["end"] and ann["end"] > f["start"]
+            for f in filtered
+        )
+        if not overlaps:
+            filtered.append(ann)
+    filtered.sort(key=lambda a: a["start"])
+
+    parts = []
+    cursor = 0
+    for ann in filtered:
+        if ann["start"] > cursor:
+            parts.append(html.escape(text[cursor:ann["start"]]))
+        surface_text = text[ann["start"]:ann["end"]]
+        ctype = ann["concept_type"]
+        parts.append(
+            f'<mark class="concept-mark {html.escape(ctype)}" '
+            f'data-concept="{html.escape(ann["concept_id"])}" '
+            f'data-name="{html.escape(ann["canonical_name"])}">'
+            f'{html.escape(surface_text)}</mark>'
+        )
+        cursor = ann["end"]
+    if cursor < len(text):
+        parts.append(html.escape(text[cursor:]))
+
+    return "".join(parts)
+
+
 def build_source_html(
     source_text: str,
     source_blocks: list[dict[str, Any]],
     concepts: list[dict[str, Any]],
     atomic_items: list[dict[str, Any]],
 ) -> str:
-    """Build annotated source HTML from source blocks.
+    """Build annotated source HTML.
 
-    Each block is rendered with concept surface highlights and item evidence data.
+    Blocks are rendered in source position order (sorted by start offset).
+    Gaps between blocks are rendered as unannotated raw text so no source
+    content is silently dropped.
     """
     # Index: block_id -> concepts that reference it
     block_concepts: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -90,46 +144,31 @@ def build_source_html(
 
     concept_surfaces = _build_concept_surfaces(concepts)
 
+    # Sort blocks by start position so rendering follows source order
+    sorted_blocks = sorted(source_blocks, key=lambda b: b["start"])
+
     parts: list[str] = []
-    for block in source_blocks:
+    cursor = sorted_blocks[0]["start"] if sorted_blocks else 0
+
+    for block in sorted_blocks:
         block_id = block["block_id"]
         block_type = block.get("block_type", "paragraph")
         start = block["start"]
         end = block["end"]
-        text = source_text[start:end]
+        block_text = source_text[start:end]
 
         # Verify round-trip
-        if text != block["text"]:
-            text = block["text"]
+        if block_text != block["text"]:
+            block_text = block["text"]
 
-        # Find concept surface annotations in this block
-        annotations: list[dict[str, Any]] = []
-        ref_concepts = block_concepts.get(block_id, [])
-        for c in ref_concepts:
-            cid = c["concept_id"]
-            surfaces = concept_surfaces.get(cid, [])
-            for surf in surfaces:
-                for s, e in _find_all(text, surf):
-                    annotations.append({
-                        "start": s, "end": e,
-                        "concept_id": cid,
-                        "concept_type": c.get("concept_type", ""),
-                        "canonical_name": c.get("canonical_name", surf),
-                    })
-
-        # Remove overlapping annotations (keep longer surface match)
-        annotations.sort(key=lambda a: (a["start"], -(a["end"] - a["start"])))
-        filtered: list[dict[str, Any]] = []
-        for ann in annotations:
-            # Check if this annotation overlaps with any already added
-            overlaps = False
-            for f in filtered:
-                if ann["start"] < f["end"] and ann["end"] > f["start"]:
-                    overlaps = True
-                    break
-            if not overlaps:
-                filtered.append(ann)
-        filtered.sort(key=lambda a: a["start"])
+        # Render any uncovered text between cursor and this block
+        if start > cursor:
+            gap_text = source_text[cursor:start]
+            if gap_text.strip():
+                parts.append(
+                    f'<div class="src-gap" data-start="{cursor}" data-end="{start}">'
+                    f'{html.escape(gap_text)}</div>'
+                )
 
         # Build item refs data
         item_ids = sorted({it["item_id"] for it in block_items.get(block_id, [])})
@@ -137,35 +176,31 @@ def build_source_html(
         if item_ids:
             item_data = f' data-items="{html.escape(",".join(item_ids))}"'
 
-        # Build annotated HTML for this block
-        block_html_parts = []
-        cursor = 0
-        for ann in filtered:
-            if ann["start"] > cursor:
-                block_html_parts.append(html.escape(text[cursor:ann["start"]]))
-            surface_text = text[ann["start"]:ann["end"]]
-            ctype = ann["concept_type"]
-            block_html_parts.append(
-                f'<mark class="concept-mark {html.escape(ctype)}" '
-                f'data-concept="{html.escape(ann["concept_id"])}" '
-                f'data-name="{html.escape(ann["canonical_name"])}">'
-                f'{html.escape(surface_text)}</mark>'
-            )
-            cursor = ann["end"]
-        if cursor < len(text):
-            block_html_parts.append(html.escape(text[cursor:]))
+        ref_concepts = block_concepts.get(block_id, [])
+        inner = _annotate_text(block_text, block_id, ref_concepts, concept_surfaces)
 
-        inner = "".join(block_html_parts)
-
-        # Wrap in block element
+        # Wrap in block element with source position data
+        pos_attrs = f' data-start="{start}" data-end="{end}"'
         if block_type == "paragraph":
-            parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}>{inner}</p>')
+            parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</p>')
         elif block_type == "line":
-            parts.append(f'<div class="src-line" data-block="{html.escape(block_id)}"{item_data}>{inner}</div>')
+            parts.append(f'<div class="src-line" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</div>')
         elif block_type == "note":
-            parts.append(f'<div class="src-note" data-block="{html.escape(block_id)}"{item_data}>{inner}</div>')
+            parts.append(f'<div class="src-note" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</div>')
         else:
-            parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}>{inner}</p>')
+            parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</p>')
+
+        cursor = max(cursor, end)
+
+    # Render any trailing text after the last block
+    max_end = sorted_blocks[-1]["end"] if sorted_blocks else 0
+    if cursor < max_end:
+        tail_text = source_text[cursor:max_end]
+        if tail_text.strip():
+            parts.append(
+                f'<div class="src-gap" data-start="{cursor}" data-end="{max_end}">'
+                f'{html.escape(tail_text)}</div>'
+            )
 
     return "\n".join(parts)
 

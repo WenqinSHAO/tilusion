@@ -19,35 +19,17 @@
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       --serif: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
       --sans: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
-
-      /* concept type colors */
-      --c-person: #6f4b2a;
-      --c-place: #395e4a;
-      --c-time: #9c6a2f;
-      --c-work: #5b4a6f;
-      --c-theme: #4a6f6f;
-      --c-term: #6f4a5b;
-      --c-object: #4a5b6f;
-      --c-other: #7a715f;
-
-      /* edge type colors */
-      --e-precedes: #395e4a;
-      --e-supports: #2d6a4f;
-      --e-contradicts: #9a4a3f;
-      --e-elaborates: #4a6f8f;
-      --e-related: #7a715f;
+      --select-glow: rgba(215, 135, 51, 0.18);
     }
 
     * { box-sizing: border-box; }
 
     html, body {
-      height: 100%;
-      margin: 0;
+      height: 100%; margin: 0;
       color: var(--ink);
-      background:
-        radial-gradient(circle at 24% 18%, rgba(215, 85, 51, 0.10), transparent 28%),
-        radial-gradient(circle at 80% 4%, rgba(57, 94, 74, 0.10), transparent 25%),
-        linear-gradient(135deg, #f7f0df 0%, #eee1c5 100%);
+      background: radial-gradient(circle at 24% 18%, rgba(215,85,51,0.10), transparent 28%),
+                  radial-gradient(circle at 80% 4%, rgba(57,94,74,0.10), transparent 25%),
+                  linear-gradient(135deg, #f7f0df 0%, #eee1c5 100%);
       font-family: var(--sans);
       overflow: hidden;
     }
@@ -56,54 +38,32 @@
       height: 100vh;
       display: grid;
       grid-template-rows: auto 1fr auto;
-      padding: 14px;
-      gap: 10px;
+      padding: 14px; gap: 10px;
     }
 
     /* ── top bar ── */
     .topbar {
-      display: flex;
-      align-items: center;
-      gap: 14px;
+      display: flex; align-items: center; gap: 14px;
       padding: 10px 16px;
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      background: rgba(255, 250, 240, 0.76);
-      backdrop-filter: blur(18px);
-      box-shadow: var(--shadow);
+      border: 1px solid var(--line); border-radius: 22px;
+      background: rgba(255,250,240,0.76);
+      backdrop-filter: blur(18px); box-shadow: var(--shadow);
     }
     .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
     .brand h1 {
-      margin: 0;
-      font-family: var(--serif);
-      font-size: clamp(20px, 3vw, 28px);
-      letter-spacing: -0.03em;
-      white-space: nowrap;
+      margin: 0; font-family: var(--serif);
+      font-size: clamp(20px, 3vw, 28px); letter-spacing: -0.03em; white-space: nowrap;
     }
     .subtitle {
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 11px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      color: var(--muted); font-family: var(--mono); font-size: 11px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .spacer { flex: 1; }
-
-    .stats-row {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
+    .stats-row { display: flex; gap: 6px; flex-wrap: wrap; }
     .stat-chip {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 4px 10px;
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-      background: rgba(255,255,255,0.36);
-      white-space: nowrap;
+      border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px;
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+      background: rgba(255,255,255,0.36); white-space: nowrap;
     }
     .stat-chip strong { color: var(--ink); }
 
@@ -117,109 +77,156 @@
 
     .panel {
       min-height: 0;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--panel);
-      backdrop-filter: blur(16px);
-      box-shadow: var(--shadow);
-      overflow: hidden;
-      display: grid;
-      grid-template-rows: auto 1fr;
+      border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--panel); backdrop-filter: blur(16px);
+      box-shadow: var(--shadow); overflow: hidden;
+      display: grid; grid-template-rows: auto 1fr;
     }
 
     .panel-header {
-      height: 52px;
-      padding: 0 16px;
+      height: 52px; padding: 0 16px;
       border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
     }
-    .source-header-left { display: flex; flex-direction: column; gap: 2px; }
-    .source-header-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .source-header-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .source-header-tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .eyebrow {
-      margin: 0;
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      margin: 0; font-family: var(--mono); font-size: 10px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
     }
     .panel-title h2 {
-      margin: 0;
-      font-family: var(--serif);
-      font-size: 18px;
-      letter-spacing: -0.03em;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      margin: 0; font-family: var(--serif); font-size: 18px;
+      letter-spacing: -0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .chapter-label {
-      color: var(--muted);
-      font-style: italic;
-      font-size: 13px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      color: var(--muted); font-style: italic; font-size: 13px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
     .tool-btn {
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.36);
-      color: var(--ink);
-      border-radius: 999px;
-      padding: 5px 10px;
-      font-family: var(--mono);
-      font-size: 10px;
-      cursor: pointer;
-      transition: background 140ms ease;
-      white-space: nowrap;
+      border: 1px solid var(--line); background: rgba(255,255,255,0.36);
+      color: var(--ink); border-radius: 999px; padding: 5px 10px;
+      font-family: var(--mono); font-size: 10px; cursor: pointer;
+      transition: background 140ms ease; white-space: nowrap;
     }
     .tool-btn:hover { background: rgba(255,255,255,0.58); }
     .tool-btn.active { background: var(--ink); color: var(--bg); }
 
-    /* ── source pane ── */
+    /* ── source pane body: concept sidebar + text ── */
+    .source-body {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      min-height: 0; overflow: hidden;
+    }
+    .source-body.concepts-hidden {
+      grid-template-columns: 1fr;
+    }
+
+    /* concept side panel */
+    .concept-panel {
+      width: 220px; min-height: 0; overflow-y: auto;
+      border-right: 1px solid var(--line);
+      background: rgba(255,250,240,0.30);
+      display: flex; flex-direction: column;
+    }
+    .source-body.concepts-hidden .concept-panel { display: none; }
+
+    .concept-panel-header {
+      padding: 10px 12px;
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--soft-line);
+      position: sticky; top: 0; background: rgba(255,250,240,0.90);
+      backdrop-filter: blur(6px); z-index: 2;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+
+    .concept-type-section { border-bottom: 1px solid var(--soft-line); }
+    .concept-type-head {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; cursor: pointer;
+      font-size: 11px; color: var(--ink);
+      transition: background 140ms ease;
+    }
+    .concept-type-head:hover { background: rgba(255,255,255,0.35); }
+    .concept-type-head .type-count {
+      font-family: var(--mono); font-size: 9px; color: var(--muted);
+      margin-left: auto;
+    }
+    .concept-type-head .type-toggle {
+      width: 14px; height: 14px; border-radius: 4px;
+      border: 1px solid var(--line);
+      display: inline-grid; place-items: center;
+      font-size: 10px; flex-shrink: 0;
+    }
+    .concept-type-head .type-toggle.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .concept-type-head .type-arrow { font-size: 9px; color: var(--muted); width: 12px; text-align: center; flex-shrink: 0; }
+
+    .concept-list { display: none; padding: 0 0 6px; }
+    .concept-type-section.expanded .concept-list { display: block; }
+    .concept-item {
+      display: block; width: 100%; text-align: left;
+      padding: 4px 12px 4px 36px; border: 0; background: transparent;
+      font-size: 12px; color: var(--ink); cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      transition: background 140ms ease;
+      font-family: var(--sans);
+    }
+    .concept-item:hover { background: rgba(255,255,255,0.45); }
+    .concept-item.active { background: var(--ink); color: var(--bg); }
+
+    /* source scroll */
     .source-scroll {
-      min-height: 0;
-      overflow-y: auto;
-      scroll-behavior: smooth;
+      min-height: 0; overflow-y: auto; scroll-behavior: smooth;
       padding: 24px clamp(20px, 3vw, 48px) 120px;
     }
     .source-text {
-      font-family: var(--serif);
-      font-size: 18px;
-      line-height: 1.9;
-      letter-spacing: 0.01em;
-      text-align: justify;
+      font-family: var(--serif); font-size: 18px;
+      line-height: 1.9; letter-spacing: 0.01em; text-align: justify;
     }
+
+    /* source blocks */
     .src-block { margin: 0 0 1em; text-indent: 2em; }
     .src-block:first-child { text-indent: 0; }
     .src-line {
-      margin: 0 0 0.3em;
-      padding-left: 1em;
+      margin: 0 0 0.3em; padding-left: 1em;
       border-left: 2px solid var(--soft-line);
     }
     .src-note {
-      margin: 0 0 0.6em;
-      padding: 4px 10px;
-      font-size: 14px;
-      color: var(--muted);
-      border-left: 2px solid rgba(156,106,47,0.25);
-      background: rgba(156,106,47,0.04);
+      margin: 0 0 0.6em; padding: 4px 10px; font-size: 14px;
+      color: var(--muted); border-left: 2px solid rgba(156,106,47,0.25);
+      background: rgba(156,106,47,0.04); border-radius: 0 6px 6px 0;
+    }
+    .src-gap {
+      margin: 0 0 1em; padding: 8px 12px; font-size: 15px;
+      color: var(--muted); opacity: 0.55;
+      border: 1px dashed var(--line); border-radius: 8px;
+      background: rgba(255,255,255,0.18);
+      font-style: italic;
+    }
+
+    /* block selection highlight */
+    .src-block.block-selected,
+    .src-line.block-selected {
+      background: var(--select-glow);
+      border-radius: 10px;
+      box-shadow: 0 0 0 6px var(--select-glow);
+      transition: background 200ms ease, box-shadow 200ms ease;
+    }
+    .src-block.evidence-highlight,
+    .src-line.evidence-highlight {
+      background: rgba(215,85,51,0.08);
+      border-left: 3px solid rgba(215,85,51,0.35);
+      padding-left: 12px;
       border-radius: 0 6px 6px 0;
     }
 
     /* concept marks */
     mark.concept-mark {
-      background: transparent;
-      color: inherit;
-      padding: 1px 2px 2px;
-      border-radius: 5px;
-      box-decoration-break: clone;
-      -webkit-box-decoration-break: clone;
-      cursor: pointer;
-      transition: background 140ms ease, box-shadow 140ms ease;
+      background: transparent; color: inherit;
+      padding: 1px 2px 2px; border-radius: 5px;
+      box-decoration-break: clone; -webkit-box-decoration-break: clone;
+      cursor: pointer; transition: background 140ms ease, box-shadow 140ms ease;
     }
     mark.concept-mark.person    { background: rgba(111,75,42,0.11);  box-shadow: inset 0 -2px rgba(111,75,42,0.22); }
     mark.concept-mark.place     { background: rgba(57,94,74,0.13);  box-shadow: inset 0 -2px rgba(57,94,74,0.22); }
@@ -228,6 +235,7 @@
     mark.concept-mark.theme     { background: rgba(74,111,111,0.11); box-shadow: inset 0 -2px rgba(74,111,111,0.22); }
     mark.concept-mark.term      { background: rgba(111,74,91,0.11);  box-shadow: inset 0 -2px rgba(111,74,91,0.22); }
     mark.concept-mark.object    { background: rgba(74,91,111,0.11);  box-shadow: inset 0 -2px rgba(74,91,111,0.22); }
+    mark.concept-mark.event_type { background: rgba(156,106,47,0.10); box-shadow: inset 0 -2px rgba(156,106,47,0.20); }
     mark.concept-mark.other     { background: rgba(122,113,95,0.10); box-shadow: inset 0 -2px rgba(122,113,95,0.18); }
     mark.concept-mark.custom    { background: rgba(122,113,95,0.10); box-shadow: inset 0 -2px rgba(122,113,95,0.18); }
     mark.concept-mark.default   { background: rgba(122,113,95,0.10); box-shadow: inset 0 -2px rgba(122,113,95,0.18); }
@@ -237,358 +245,192 @@
       box-shadow: 0 0 0 4px var(--accent-soft), inset 0 -2px rgba(215,85,51,0.52) !important;
     }
     mark.concept-mark.hidden-mark {
-      background: transparent !important;
-      box-shadow: none !important;
-    }
-
-    .src-block.evidence-highlight {
-      background: rgba(215,85,51,0.08);
-      border-left: 3px solid rgba(215,85,51,0.35);
-      padding-left: 12px;
-      border-radius: 0 6px 6px 0;
+      background: transparent !important; box-shadow: none !important;
     }
 
     /* ── right pane ── */
     .right-pane-body {
       display: grid;
       grid-template-columns: 200px 1fr;
-      min-height: 0;
-      overflow: hidden;
+      min-height: 0; overflow: hidden;
     }
-
-    /* sidebar */
     .sidebar-nav {
-      min-height: 0;
-      overflow-y: auto;
+      min-height: 0; overflow-y: auto;
       border-right: 1px solid var(--line);
       background: rgba(255,250,240,0.35);
     }
     .nav-section { padding: 0; }
     .nav-section + .nav-section { border-top: 1px solid var(--soft-line); }
     .nav-section-header {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      padding: 12px 14px 6px;
-      position: sticky;
-      top: 0;
-      background: rgba(255,250,240,0.92);
-      backdrop-filter: blur(6px);
-      z-index: 2;
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 12px 14px 6px; position: sticky; top: 0;
+      background: rgba(255,250,240,0.92); backdrop-filter: blur(6px); z-index: 2;
     }
     .nav-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      border: 1px solid transparent;
-      border-radius: 10px;
-      padding: 8px 10px;
-      margin: 2px 8px;
-      font-size: 11px;
-      color: var(--ink);
-      background: transparent;
-      cursor: pointer;
-      transition: background 140ms ease, border-color 140ms ease;
-      text-align: left;
-      width: calc(100% - 16px);
-      line-height: 1.3;
+      display: flex; align-items: center; gap: 6px;
+      border: 1px solid transparent; border-radius: 10px;
+      padding: 8px 10px; margin: 2px 8px;
+      font-size: 11px; color: var(--ink); background: transparent;
+      cursor: pointer; transition: background 140ms ease, border-color 140ms ease;
+      text-align: left; width: calc(100% - 16px); line-height: 1.3;
     }
     .nav-item:hover { background: rgba(255,255,255,0.52); border-color: var(--line); }
     .nav-item.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
-    .nav-item .nav-dot {
-      display: inline-block;
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      flex-shrink: 0;
+    .nav-dot {
+      display: inline-block; width: 7px; height: 7px;
+      border-radius: 50%; flex-shrink: 0;
     }
     .nav-dot.has-graph { background: #395e4a; }
     .nav-dot.no-graph { background: #9c6a2f; }
-    .nav-item .nav-summary {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+    .nav-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    /* right content */
+    /* ── right content ── */
     .right-content {
-      min-height: 0;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
+      min-height: 0; overflow: hidden;
+      display: flex; flex-direction: column;
     }
     .group-header {
-      padding: 12px 18px;
-      border-bottom: 1px solid var(--soft-line);
-      flex-shrink: 0;
+      padding: 12px 18px; border-bottom: 1px solid var(--soft-line); flex-shrink: 0;
     }
     .group-header h3 {
-      margin: 0;
-      font-family: var(--serif);
-      font-size: 20px;
-      letter-spacing: -0.03em;
+      margin: 0; font-family: var(--serif); font-size: 20px; letter-spacing: -0.03em;
     }
     .group-header .group-meta {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-      margin-top: 4px;
+      font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 4px;
     }
 
+    /* graph */
     .graph-scroll {
-      flex: 1;
-      min-height: 0;
-      overflow: auto;
-      cursor: grab;
-      background:
-        radial-gradient(circle at 8% 4%, rgba(215,85,51,0.04), transparent 18%),
-        linear-gradient(180deg, rgba(255,250,240,0.20), rgba(255,250,240,0.04));
+      flex: 1; min-height: 0; overflow: auto; cursor: grab;
+      background: radial-gradient(circle at 8% 4%, rgba(215,85,51,0.04), transparent 18%),
+                  linear-gradient(180deg, rgba(255,250,240,0.20), rgba(255,250,240,0.04));
     }
     .graph-scroll.dragging { cursor: grabbing; user-select: none; }
-
-    .graph-svg {
-      display: block;
-      min-width: 800px;
-      min-height: 600px;
-    }
+    .graph-svg { display: block; min-width: 800px; min-height: 600px; }
     .graph-svg .pan-surface { fill: transparent; pointer-events: all; cursor: grab; }
     .graph-scroll.dragging .pan-surface { cursor: grabbing; }
-
-    .graph-svg .edge-line {
-      stroke: rgba(21,19,15,0.20);
-      stroke-width: 2;
-      fill: none;
-      stroke-linecap: round;
-    }
+    .graph-svg .edge-line { stroke: rgba(21,19,15,0.20); stroke-width: 2; fill: none; stroke-linecap: round; }
     .graph-svg .edge-line.precedes    { stroke: #395e4a; stroke-dasharray: 6 3; }
     .graph-svg .edge-line.supports    { stroke: #2d6a4f; }
     .graph-svg .edge-line.contradicts { stroke: #9a4a3f; stroke-dasharray: 4 2; }
     .graph-svg .edge-line.elaborates  { stroke: #4a6f8f; }
     .graph-svg .edge-line.related_to  { stroke: rgba(21,19,15,0.24); stroke-dasharray: 3 3; }
-    .graph-svg .edge-label {
-      font-family: var(--mono);
-      font-size: 9px;
-      fill: var(--muted);
-      pointer-events: none;
-    }
-
+    .graph-svg .edge-label { font-family: var(--mono); font-size: 9px; fill: var(--muted); pointer-events: none; }
     .graph-svg .node-rect {
-      fill: rgba(255,250,240,0.94);
-      stroke: rgba(21,19,15,0.16);
-      stroke-width: 1.5;
-      rx: 10;
-      cursor: pointer;
+      fill: rgba(255,250,240,0.94); stroke: rgba(21,19,15,0.16);
+      stroke-width: 1.5; rx: 10; cursor: pointer;
       transition: stroke 160ms ease, fill 160ms ease;
     }
-    .graph-svg .node-rect:hover {
-      stroke: rgba(215,85,51,0.45);
-      fill: #fffaf0;
-    }
-    .graph-svg .node-rect.selected {
-      stroke: var(--accent);
-      stroke-width: 2.5;
-      fill: rgba(255,240,230,0.95);
-    }
-
-    .graph-svg .node-label {
-      font-family: var(--serif);
-      font-size: 13px;
-      fill: var(--ink);
-      pointer-events: none;
-      text-anchor: middle;
-    }
-    .graph-svg .node-time-label {
-      font-family: var(--mono);
-      font-size: 10px;
-      fill: var(--muted);
-      pointer-events: none;
-      text-anchor: middle;
-    }
-    .graph-svg .node-id-label {
-      font-family: var(--mono);
-      font-size: 9px;
-      fill: var(--muted);
-      pointer-events: none;
-      text-anchor: middle;
-    }
+    .graph-svg .node-rect:hover { stroke: rgba(215,85,51,0.45); fill: #fffaf0; }
+    .graph-svg .node-rect.selected { stroke: var(--accent); stroke-width: 2.5; fill: rgba(255,240,230,0.95); }
+    .graph-svg .node-rect.item-highlight { stroke: rgba(215,135,51,0.55); stroke-width: 2.5; }
+    .graph-svg .node-label { font-family: var(--serif); font-size: 13px; fill: var(--ink); pointer-events: none; text-anchor: middle; }
+    .graph-svg .node-time-label { font-family: var(--mono); font-size: 10px; fill: var(--muted); pointer-events: none; text-anchor: middle; }
+    .graph-svg .node-id-label { font-family: var(--mono); font-size: 9px; fill: var(--muted); pointer-events: none; text-anchor: middle; }
 
     /* card stack */
-    .card-stack-scroll {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 12px 16px 80px;
-    }
+    .card-stack-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 80px; }
     .item-card {
-      padding: 12px 14px;
-      margin-bottom: 8px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
+      padding: 12px 14px; margin-bottom: 8px;
+      border: 1px solid var(--line); border-radius: 16px;
       background: rgba(255,250,240,0.82);
       box-shadow: 0 6px 18px rgba(38,31,23,0.05);
       cursor: pointer;
       transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
     }
-    .item-card:hover {
-      transform: translateX(3px);
-      border-color: rgba(215,85,51,0.45);
-      background: #fffaf0;
-    }
-    .item-card.active {
-      border-color: var(--accent);
-      background: #fffaf0;
-      box-shadow: 0 8px 24px rgba(215,85,51,0.10);
-    }
-    .item-card .card-head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 5px;
-    }
-    .item-card .card-type {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-    }
-    .item-card .card-summary {
-      font-family: var(--serif);
-      font-size: 17px;
-      letter-spacing: -0.02em;
-      margin: 0 0 6px;
-    }
-    .item-card .card-tags {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-    }
+    .item-card:hover { transform: translateX(3px); border-color: rgba(215,85,51,0.45); background: #fffaf0; }
+    .item-card.active { border-color: var(--accent); background: #fffaf0; box-shadow: 0 8px 24px rgba(215,85,51,0.10); }
+    .item-card.item-highlight { border-color: rgba(215,135,51,0.55); background: rgba(255,245,235,0.88); }
+    .item-card .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+    .item-card .card-type { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+    .item-card .card-summary { font-family: var(--serif); font-size: 17px; letter-spacing: -0.02em; margin: 0 0 6px; }
+    .item-card .card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
     .tag {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 3px 8px;
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-      background: rgba(255,255,255,0.42);
-      cursor: pointer;
-      white-space: nowrap;
+      border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px;
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+      background: rgba(255,255,255,0.42); cursor: pointer; white-space: nowrap;
       transition: background 140ms ease;
     }
     .tag:hover { background: rgba(255,255,255,0.68); }
-    .tag.concept-tag { color: var(--c-person); border-color: rgba(111,75,42,0.24); }
-    .tag.time-tag { color: var(--c-time); border-color: rgba(156,106,47,0.24); }
+    .tag.concept-tag { color: rgba(111,75,42,0.80); border-color: rgba(111,75,42,0.24); }
+    .tag.time-tag { color: rgba(156,106,47,0.80); border-color: rgba(156,106,47,0.24); }
+
+    /* block info toast */
+    .block-info {
+      position: fixed; bottom: 60px; right: 24px; z-index: 45;
+      max-width: 340px; padding: 12px 14px;
+      border: 1px solid var(--line); border-radius: 14px;
+      background: rgba(255,250,240,0.96);
+      box-shadow: 0 12px 32px rgba(38,31,23,0.15);
+      display: none; font-size: 12px; line-height: 1.45;
+    }
+    .block-info.visible { display: block; }
+    .block-info h4 {
+      margin: 0 0 6px; font-family: var(--mono); font-size: 10px;
+      color: var(--muted); text-transform: uppercase;
+    }
+    .block-info .info-item {
+      padding: 3px 0; cursor: pointer; color: var(--ink);
+      font-family: var(--serif); font-size: 13px;
+    }
+    .block-info .info-item:hover { color: var(--accent); }
 
     /* popover */
     .popover {
-      position: fixed;
-      z-index: 50;
-      max-width: 400px;
-      padding: 14px 16px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: rgba(255,250,240,0.97);
+      position: fixed; z-index: 50; max-width: 400px;
+      padding: 14px 16px; border: 1px solid var(--line);
+      border-radius: 14px; background: rgba(255,250,240,0.97);
       box-shadow: 0 16px 42px rgba(38,31,23,0.18);
-      color: var(--ink);
-      pointer-events: none;
-      display: none;
-      font-size: 13px;
-      line-height: 1.5;
+      pointer-events: none; display: none;
+      font-size: 13px; line-height: 1.5; color: var(--ink);
     }
-    .popover strong {
-      display: block;
-      font-family: var(--serif);
-      font-size: 20px;
-      margin-bottom: 4px;
-    }
-    .popover .pop-muted {
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 10px;
-      margin-bottom: 6px;
-    }
+    .popover strong { display: block; font-family: var(--serif); font-size: 20px; margin-bottom: 4px; }
+    .popover .pop-muted { color: var(--muted); font-family: var(--mono); font-size: 10px; margin-bottom: 6px; }
 
-    /* chat panel */
+    /* chat */
     .chat-panel {
-      display: flex;
-      flex-direction: column;
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      background: rgba(255,250,240,0.76);
-      backdrop-filter: blur(16px);
-      box-shadow: var(--shadow);
-      overflow: hidden;
-      min-height: 44px;
-      max-height: 220px;
+      display: flex; flex-direction: column;
+      border: 1px solid var(--line); border-radius: 22px;
+      background: rgba(255,250,240,0.76); backdrop-filter: blur(16px);
+      box-shadow: var(--shadow); overflow: hidden;
+      min-height: 44px; max-height: 220px;
       transition: min-height 200ms ease, max-height 200ms ease;
     }
     .chat-panel.collapsed { min-height: 44px; max-height: 44px; }
     .chat-panel.collapsed .chat-messages,
     .chat-panel.collapsed .chat-input-area { display: none; }
     .chat-panel-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 16px;
-      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 16px; flex-shrink: 0;
     }
     .chat-panel-title {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
     }
     .chat-panel-toggle {
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      font-size: 16px;
-      cursor: pointer;
-      padding: 2px 6px;
-      line-height: 1;
-      border-radius: 6px;
-      transition: background 140ms ease;
+      border: 0; background: transparent; color: var(--muted);
+      font-size: 16px; cursor: pointer; padding: 2px 6px;
+      line-height: 1; border-radius: 6px; transition: background 140ms ease;
     }
     .chat-panel-toggle:hover { background: rgba(0,0,0,0.06); }
     .chat-messages {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 4px 14px 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
+      flex: 1; min-height: 0; overflow-y: auto;
+      padding: 4px 14px 8px; display: flex; flex-direction: column; gap: 6px;
     }
     .chat-input-area {
-      display: flex;
-      gap: 6px;
-      padding: 6px 12px;
-      border-top: 1px solid var(--soft-line);
-      background: rgba(255,250,240,0.45);
+      display: flex; gap: 6px; padding: 6px 12px;
+      border-top: 1px solid var(--soft-line); background: rgba(255,250,240,0.45);
     }
     .chat-input-area input {
-      flex: 1;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 14px;
-      font-family: var(--sans);
-      font-size: 11pt;
-      color: var(--ink);
-      background: rgba(255,255,255,0.55);
-      outline: none;
+      flex: 1; border: 1px solid var(--line); border-radius: 999px;
+      padding: 6px 14px; font-family: var(--sans); font-size: 11pt;
+      color: var(--ink); background: rgba(255,255,255,0.55); outline: none;
     }
-    .chat-input-area input:focus { border-color: rgba(215,85,51,0.40); }
     .chat-input-area button {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 16px;
-      font-family: var(--sans);
-      font-size: 11pt;
-      color: var(--ink);
-      background: rgba(255,255,255,0.55);
-      cursor: pointer;
-      white-space: nowrap;
+      border: 1px solid var(--line); border-radius: 999px;
+      padding: 6px 16px; font-family: var(--sans); font-size: 11pt;
+      color: var(--ink); background: rgba(255,255,255,0.55); cursor: pointer;
     }
 
     @media (max-width: 980px) {
@@ -596,6 +438,9 @@
       .app { height: auto; min-height: 100vh; }
       .workspace { grid-template-columns: 1fr; min-height: 1000px; }
       .panel { min-height: 500px; }
+      .source-body { grid-template-columns: 1fr; }
+      .concept-panel { width: 200px; }
+      .source-body.concepts-hidden .concept-panel { display: none; }
     }
   </style>
 </head>
@@ -623,12 +468,18 @@
           <p class="eyebrow">Source text</p>
           <span class="chapter-label">{{UNIT_LABEL}}</span>
         </div>
-        <div class="source-header-tools" id="conceptFilters">
-          <!-- populated by JS -->
+        <div class="source-header-tools">
+          <button class="tool-btn active" id="conceptPanelToggle" title="Toggle concept panel">Concepts</button>
+          <button class="tool-btn" id="clearSelectionBtn" title="Clear selection">Clear</button>
         </div>
       </div>
-      <div class="source-scroll" id="sourceScroll">
-        <!-- SOURCE_HTML -->
+      <div class="source-body" id="sourceBody">
+        <div class="concept-panel" id="conceptPanel">
+          <div class="concept-panel-header">Concepts</div>
+        </div>
+        <div class="source-scroll" id="sourceScroll">
+          <!-- SOURCE_HTML -->
+        </div>
       </div>
     </section>
 
@@ -641,9 +492,7 @@
         </div>
       </div>
       <div class="right-pane-body">
-        <nav class="sidebar-nav" id="sidebarNav">
-          <!-- populated by JS -->
-        </nav>
+        <nav class="sidebar-nav" id="sidebarNav"></nav>
         <div class="right-content" id="rightContent">
           <div class="group-header" id="groupHeader">
             <h3>Select a group</h3>
@@ -652,9 +501,7 @@
           <div class="graph-scroll" id="graphScroll" style="display:none">
             <svg class="graph-svg" id="graphSvg"></svg>
           </div>
-          <div class="card-stack-scroll" id="cardStackScroll" style="display:none">
-            <!-- populated by JS -->
-          </div>
+          <div class="card-stack-scroll" id="cardStackScroll" style="display:none"></div>
         </div>
       </div>
     </aside>
@@ -674,6 +521,7 @@
 </main>
 
 <div class="popover" id="popover"></div>
+<div class="block-info" id="blockInfo"></div>
 
 <!-- DATA_SCRIPT -->
 
@@ -696,59 +544,156 @@ const graphSvg = document.getElementById('graphSvg');
 const cardStackScroll = document.getElementById('cardStackScroll');
 const groupHeader = document.getElementById('groupHeader');
 const popover = document.getElementById('popover');
-const conceptFilters = document.getElementById('conceptFilters');
+const blockInfo = document.getElementById('blockInfo');
+const conceptPanel = document.getElementById('conceptPanel');
+const sourceBody = document.getElementById('sourceBody');
 
 // ── State ──
 let activeGroupId = null;
 let activeItemId = null;
 let activeConceptId = null;
-const activeConceptTypes = new Set();
+let selectedBlockId = null;
+let conceptsVisible = true;
+const hiddenConceptTypes = new Set();
 
-// ── Concept type filter buttons ──
-function buildConceptFilters() {
-  const typeCounts = {};
+// ── Concept panel ──
+function buildConceptPanel() {
+  // Group concepts by type
+  const byType = {};
   CONCEPTS.forEach(c => {
     const t = c.concept_type || 'other';
-    typeCounts[t] = (typeCounts[t] || 0) + 1;
+    if (!byType[t]) byType[t] = [];
+    byType[t].push(c);
   });
-  const types = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+  const types = Object.entries(byType).sort((a, b) => b[1].length - a[1].length);
 
   let html = '';
-  types.forEach(([t, n]) => {
-    activeConceptTypes.add(t);
-    html += `<button class="tool-btn active" data-ctype="${t}">${t} (${n})</button>`;
+  types.forEach(([t, concepts]) => {
+    html += `<div class="concept-type-section expanded">`;
+    html += `<div class="concept-type-head" data-ctype="${t}">`;
+    html += `<span class="type-arrow">▾</span>`;
+    html += `<span class="type-toggle on" data-ctype="${t}">✓</span>`;
+    html += `${t}`;
+    html += `<span class="type-count">${concepts.length}</span>`;
+    html += `</div>`;
+    html += `<div class="concept-list">`;
+    concepts.sort((a, b) => (a.canonical_name || a.surface).localeCompare(b.canonical_name || b.surface));
+    concepts.forEach(c => {
+      const name = c.canonical_name || c.surface || c.concept_id;
+      html += `<button class="concept-item" data-concept="${c.concept_id}" title="${c.summary || ''}">${name}</button>`;
+    });
+    html += `</div></div>`;
   });
-  html += '<button class="tool-btn" data-ctype="clear">Clear</button>';
-  conceptFilters.innerHTML = html;
+  conceptPanel.innerHTML = '<div class="concept-panel-header">Concepts</div>' + html;
 
-  conceptFilters.querySelectorAll('[data-ctype]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const ctype = btn.dataset.ctype;
-      if (ctype === 'clear') {
-        activeConceptTypes.clear();
-        conceptFilters.querySelectorAll('[data-ctype]').forEach(b => {
-          if (b.dataset.ctype !== 'clear') b.classList.remove('active');
-        });
-      } else if (activeConceptTypes.has(ctype)) {
-        activeConceptTypes.delete(ctype);
-        btn.classList.remove('active');
+  // Wire events
+  conceptPanel.querySelectorAll('.concept-type-head').forEach(head => {
+    head.addEventListener('click', (e) => {
+      // Don't toggle section if clicking the type toggle
+      if (e.target.classList.contains('type-toggle')) return;
+      const section = head.parentElement;
+      section.classList.toggle('expanded');
+      head.querySelector('.type-arrow').textContent = section.classList.contains('expanded') ? '▾' : '▸';
+    });
+  });
+
+  conceptPanel.querySelectorAll('.type-toggle').forEach(toggle => {
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ctype = toggle.dataset.ctype;
+      if (hiddenConceptTypes.has(ctype)) {
+        hiddenConceptTypes.delete(ctype);
+        toggle.classList.add('on');
+        toggle.textContent = '✓';
       } else {
-        activeConceptTypes.add(ctype);
-        btn.classList.add('active');
+        hiddenConceptTypes.add(ctype);
+        toggle.classList.remove('on');
+        toggle.textContent = '';
       }
-      applyConceptFilters();
+      applyConceptVisibility();
+    });
+  });
+
+  conceptPanel.querySelectorAll('.concept-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const cid = item.dataset.concept;
+      document.querySelectorAll('.concept-item').forEach(i => i.classList.remove('active'));
+      item.classList.add('active');
+      focusConcept(cid);
     });
   });
 }
 
-function applyConceptFilters() {
+function applyConceptVisibility() {
   document.querySelectorAll('mark.concept-mark').forEach(m => {
     const cid = m.dataset.concept;
     const c = CONCEPT_BY_ID[cid];
     const ctype = c ? c.concept_type : 'other';
-    m.classList.toggle('hidden-mark', !activeConceptTypes.has(ctype));
+    m.classList.toggle('hidden-mark', hiddenConceptTypes.has(ctype));
   });
 }
+
+function focusConcept(cid) {
+  const c = CONCEPT_BY_ID[cid];
+  if (!c) return;
+  activeConceptId = cid;
+  clearSourceHighlights();
+
+  // Highlight all surfaces of this concept
+  document.querySelectorAll(`mark[data-concept="${cid}"]`).forEach(m => {
+    m.classList.add('active-span');
+  });
+
+  // Show concept summary as popover in center of first match
+  const firstMark = document.querySelector(`mark[data-concept="${cid}"]`);
+  if (firstMark) {
+    firstMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const rect = firstMark.getBoundingClientRect();
+    showConceptPopover(cid, rect.left, rect.bottom + 4);
+  }
+
+  // Highlight items referencing this concept in right pane
+  highlightItemsForConcept(cid);
+
+  // Navigate to a group that references this concept
+  for (const g of GROUPS) {
+    if ((g.concept_refs || []).includes(cid)) {
+      activateGroupSilent(g.group_id);
+      document.querySelectorAll(`#sidebarNav .nav-item[data-group="${g.group_id}"]`).forEach(n => n.classList.add('active'));
+      break;
+    }
+  }
+}
+
+function highlightItemsForConcept(cid) {
+  const matchingItems = ITEMS.filter(it => (it.concept_refs || []).includes(cid));
+  const matchingIds = new Set(matchingItems.map(it => it.item_id));
+
+  // Highlight cards
+  document.querySelectorAll('.item-card').forEach(card => {
+    card.classList.toggle('item-highlight', matchingIds.has(card.dataset.item));
+  });
+
+  // Highlight graph nodes
+  document.querySelectorAll('.graph-node').forEach(node => {
+    node.classList.toggle('item-highlight', matchingIds.has(node.dataset.item));
+  });
+  document.querySelectorAll('.graph-svg .node-rect').forEach(rect => {
+    const parent = rect.closest('.graph-node');
+    if (parent) {
+      rect.classList.toggle('item-highlight', matchingIds.has(parent.dataset.item));
+    }
+  });
+}
+
+// ── Concept panel toggle ──
+document.getElementById('conceptPanelToggle').addEventListener('click', () => {
+  conceptsVisible = !conceptsVisible;
+  sourceBody.classList.toggle('concepts-hidden', !conceptsVisible);
+  document.getElementById('conceptPanelToggle').classList.toggle('active', conceptsVisible);
+});
+
+document.getElementById('clearSelectionBtn').addEventListener('click', clearAll);
 
 // ── Sidebar navigation ──
 function buildSidebar() {
@@ -758,11 +703,9 @@ function buildSidebar() {
     if (!sections[gt]) sections[gt] = [];
     sections[gt].push(g);
   });
-
-  let html = '';
-  const typeOrder = ['timeline', 'temporal_sequence', 'theme_set', 'claim_evidence_map',
-    'discourse_graph', 'contrast_set', 'method_example_set', 'open_thread_list',
-    'concept_map', 'viewpoint_evolution', 'motif_development', 'other'];
+  const typeOrder = ['timeline','temporal_sequence','theme_set','claim_evidence_map',
+    'discourse_graph','contrast_set','method_example_set','open_thread_list',
+    'concept_map','viewpoint_evolution','motif_development','other'];
   const ordered = Object.entries(sections).sort((a, b) => {
     const ai = typeOrder.indexOf(a[0]), bi = typeOrder.indexOf(b[0]);
     if (ai >= 0 && bi >= 0) return ai - bi;
@@ -771,16 +714,15 @@ function buildSidebar() {
     return a[0].localeCompare(b[0]);
   });
 
+  let html = '';
   ordered.forEach(([gt, groups]) => {
-    html += `<div class="nav-section">`;
-    html += `<div class="nav-section-header">${gt.replace(/_/g, ' ')}</div>`;
+    html += `<div class="nav-section"><div class="nav-section-header">${gt.replace(/_/g, ' ')}</div>`;
     groups.forEach(g => {
       const hasGraph = g.graph ? 'has-graph' : 'no-graph';
       const summary = (g.summary || g.group_id).slice(0, 40);
       html += `<button class="nav-item" data-group="${g.group_id}">`;
       html += `<span class="nav-dot ${hasGraph}"></span>`;
-      html += `<span class="nav-summary" title="${g.summary || ''}">${summary}</span>`;
-      html += `</button>`;
+      html += `<span class="nav-summary" title="${g.summary || ''}">${summary}</span></button>`;
     });
     html += `</div>`;
   });
@@ -797,11 +739,16 @@ function buildSidebar() {
 
 // ── Group activation ──
 function activateGroup(groupId) {
+  clearAll();
+  activateGroupSilent(groupId);
+}
+
+let _inhibitGroupNavHighlight = false;
+function activateGroupSilent(groupId) {
+  if (activeGroupId === groupId) return;
   activeGroupId = groupId;
   const group = GROUPS.find(g => g.group_id === groupId);
   if (!group) return;
-
-  clearActive();
 
   const itemCount = (group.item_refs || []).length;
   const conceptCount = (group.concept_refs || []).length;
@@ -813,8 +760,7 @@ function activateGroup(groupId) {
       ${group.group_id} · ${group.group_type.replace(/_/g, ' ')} ·
       ${itemCount} items · ${conceptCount} concepts
       ${hasGraph ? ` · ${group.graph.nodes.length} nodes · ${(group.graph.edges || []).length} edges` : ''}
-    </div>
-  `;
+    </div>`;
 
   if (hasGraph) {
     graphScroll.style.display = 'block';
@@ -827,46 +773,30 @@ function activateGroup(groupId) {
   }
 }
 
-// ── Card stack rendering ──
+// ── Card stack ──
 function renderCardStack(group) {
   const itemRefs = group.item_refs || [];
-  const items = itemRefs
-    .map(ref => ITEM_BY_ID[ref])
-    .filter(Boolean);
-
-  // Sort by source order (earliest source block first)
+  const items = itemRefs.map(ref => ITEM_BY_ID[ref]).filter(Boolean);
   items.sort((a, b) => {
-    const aMin = Math.min(...(a.source_block_refs || []).map(r => {
-      const blk = BLOCK_BY_ID[r]; return blk ? blk.start : Infinity;
-    }));
-    const bMin = Math.min(...(b.source_block_refs || []).map(r => {
-      const blk = BLOCK_BY_ID[r]; return blk ? blk.start : Infinity;
-    }));
+    const aMin = Math.min(...(a.source_block_refs || []).map(r => BLOCK_BY_ID[r]?.start ?? Infinity));
+    const bMin = Math.min(...(b.source_block_refs || []).map(r => BLOCK_BY_ID[r]?.start ?? Infinity));
     return aMin - bMin;
   });
 
   let html = '';
   items.forEach(item => {
-    const timeStr = (item.temporal_attributes || [])
-      .map(t => t.surface || t.normalized_hint || '')
-      .filter(Boolean)
-      .join(' · ');
+    const timeStr = (item.temporal_attributes || []).map(t => t.surface || t.normalized_hint || '').filter(Boolean).join(' · ');
     const conceptTags = (item.concept_refs || []).map(cid => {
       const c = CONCEPT_BY_ID[cid];
-      return c ? `<span class="tag concept-tag">${c.canonical_name || c.surface}</span>` : '';
+      return c ? `<span class="tag concept-tag" data-concept="${cid}">${c.canonical_name || c.surface}</span>` : '';
     }).join('');
 
-    html += `
-      <article class="item-card" data-item="${item.item_id}">
-        <div class="card-head">
-          <span class="card-type">${item.item_type}</span>
-          ${timeStr ? `<span class="card-type">${timeStr}</span>` : ''}
-        </div>
-        <div class="card-summary">${item.summary || item.item_id}</div>
-        ${conceptTags ? `<div class="card-tags">${conceptTags}</div>` : ''}
-      </article>`;
+    html += `<article class="item-card" data-item="${item.item_id}">
+      <div class="card-head"><span class="card-type">${item.item_type}</span>${timeStr ? `<span class="card-type">${timeStr}</span>` : ''}</div>
+      <div class="card-summary">${item.summary || item.item_id}</div>
+      ${conceptTags ? `<div class="card-tags">${conceptTags}</div>` : ''}
+    </article>`;
   });
-
   cardStackScroll.innerHTML = html;
 
   cardStackScroll.querySelectorAll('.item-card').forEach(card => {
@@ -876,10 +806,16 @@ function renderCardStack(group) {
       activateItem(card.dataset.item);
     });
     card.addEventListener('mouseenter', (e) => showItemPopover(card.dataset.item, e.clientX, e.clientY));
-    card.addEventListener('mousemove', (e) => {
-      if (popover.style.display === 'block') showItemPopover(card.dataset.item, e.clientX, e.clientY);
-    });
+    card.addEventListener('mousemove', (e) => { if (popover.style.display === 'block') showItemPopover(card.dataset.item, e.clientX, e.clientY); });
     card.addEventListener('mouseleave', hidePopover);
+  });
+
+  // Wire concept tags in cards
+  cardStackScroll.querySelectorAll('.concept-tag').forEach(tag => {
+    tag.addEventListener('click', (e) => {
+      e.stopPropagation();
+      focusConcept(tag.dataset.concept);
+    });
   });
 }
 
@@ -888,31 +824,18 @@ function computeGraphLayout(group) {
   const graph = group.graph;
   const nodes = graph.nodes || [];
   const edges = graph.edges || [];
-
-  // Build adjacency from edges
   const nodeIds = new Set(nodes.map(n => n.node_id));
-  const adj = {};
-  const inDegree = {};
+  const adj = {}; const inDegree = {};
   nodeIds.forEach(nid => { adj[nid] = []; inDegree[nid] = 0; });
-
   edges.forEach(e => {
     if (nodeIds.has(e.source) && nodeIds.has(e.target)) {
       adj[e.source].push(e.target);
       inDegree[e.target] = (inDegree[e.target] || 0) + 1;
     }
   });
-
-  // Topological sort with layers
-  const layers = {};
-  const queue = [];
-  nodeIds.forEach(nid => {
-    if (inDegree[nid] === 0) {
-      layers[nid] = 0;
-      queue.push(nid);
-    }
-  });
-
-  while (queue.length > 0) {
+  const layers = {}; const queue = [];
+  nodeIds.forEach(nid => { if (inDegree[nid] === 0) { layers[nid] = 0; queue.push(nid); } });
+  while (queue.length) {
     const nid = queue.shift();
     (adj[nid] || []).forEach(child => {
       layers[child] = Math.max(layers[child] || 0, (layers[nid] || 0) + 1);
@@ -920,19 +843,12 @@ function computeGraphLayout(group) {
       if (inDegree[child] === 0) queue.push(child);
     });
   }
-
-  // Default layer for any disconnected nodes
-  nodeIds.forEach(nid => {
-    if (!(nid in layers)) layers[nid] = 0;
-  });
-
-  // Group nodes by layer
+  nodeIds.forEach(nid => { if (!(nid in layers)) layers[nid] = 0; });
   const layerGroups = {};
   Object.entries(layers).forEach(([nid, layer]) => {
     if (!layerGroups[layer]) layerGroups[layer] = [];
     layerGroups[layer].push(nid);
   });
-
   return { nodes, edges, layers, layerGroups, adj };
 }
 
@@ -943,18 +859,13 @@ function renderGraph(group) {
 
   const containerWidth = Math.max(graphScroll.clientWidth, 600);
   const containerHeight = Math.max(graphScroll.clientHeight, 500);
-
   const margin = { top: 40, right: 60, left: 60, bottom: 40 };
   const layerSpacing = 200;
   const nodeSpacing = 110;
   const nodeWidth = 170;
   const nodeHeight = 70;
-  const nodeRx = 10;
-  const fontSize = 13;
-
   const maxLayer = Math.max(...Object.values(layers), 0);
   const maxNodesInLayer = Math.max(...Object.values(layerGroups).map(a => a.length), 1);
-
   const svgWidth = Math.max(containerWidth * 1.4, margin.left + (maxLayer + 1) * layerSpacing + margin.right);
   const svgHeight = Math.max(containerHeight * 1.2, margin.top + maxNodesInLayer * nodeSpacing + margin.bottom);
 
@@ -963,17 +874,13 @@ function renderGraph(group) {
   graphSvg.setAttribute('height', svgHeight);
   graphSvg.innerHTML = '';
 
-  // Pan surface
   const panSurface = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   panSurface.setAttribute('class', 'pan-surface');
-  panSurface.setAttribute('x', '0');
-  panSurface.setAttribute('y', '0');
-  panSurface.setAttribute('width', svgWidth);
-  panSurface.setAttribute('height', svgHeight);
+  panSurface.setAttribute('x', '0'); panSurface.setAttribute('y', '0');
+  panSurface.setAttribute('width', svgWidth); panSurface.setAttribute('height', svgHeight);
   panSurface.addEventListener('pointerdown', beginPan);
   graphSvg.appendChild(panSurface);
 
-  // Compute node positions
   const positions = {};
   Object.entries(layerGroups).forEach(([layerStr, nids]) => {
     const layer = parseInt(layerStr);
@@ -985,121 +892,88 @@ function renderGraph(group) {
     });
   });
 
-  // Node ID -> Item lookup
   const nodeItemMap = {};
-  nodes.forEach(n => {
-    nodeItemMap[n.node_id] = ITEM_BY_ID[n.item_ref] || null;
-  });
+  nodes.forEach(n => { nodeItemMap[n.node_id] = ITEM_BY_ID[n.item_ref] || null; });
 
-  // Draw edges
+  // Edges
   const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   edges.forEach(e => {
-    const from = positions[e.source];
-    const to = positions[e.target];
+    const from = positions[e.source], to = positions[e.target];
     if (!from || !to) return;
-
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    // Draw edge from right of source to left of target (left-to-right layout)
-    const sx = from.x + nodeWidth/2;
-    const sy = from.y + nodeHeight/2;
-    const tx = to.x - nodeWidth/2;
-    const ty = to.y + nodeHeight/2;
+    const sx = from.x + nodeWidth/2, sy = from.y + nodeHeight/2;
+    const tx = to.x - nodeWidth/2, ty = to.y + nodeHeight/2;
     const dx = tx - sx;
     const ctrlOffset = Math.min(Math.abs(dx) * 0.4, 60);
-    const d = `M ${sx} ${sy} C ${sx + ctrlOffset} ${sy}, ${tx - ctrlOffset} ${ty}, ${tx} ${ty}`;
-    path.setAttribute('d', d);
+    path.setAttribute('d', `M ${sx} ${sy} C ${sx + ctrlOffset} ${sy}, ${tx - ctrlOffset} ${ty}, ${tx} ${ty}`);
     path.setAttribute('class', `edge-line ${e.edge_type || 'related_to'}`);
     edgeGroup.appendChild(path);
-
     if (e.summary) {
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.setAttribute('x', (sx + tx) / 2);
-      label.setAttribute('y', (sy + ty) / 2 - 6);
-      label.setAttribute('class', 'edge-label');
-      label.setAttribute('text-anchor', 'middle');
+      label.setAttribute('x', (sx + tx) / 2); label.setAttribute('y', (sy + ty) / 2 - 6);
+      label.setAttribute('class', 'edge-label'); label.setAttribute('text-anchor', 'middle');
       label.textContent = e.summary.slice(0, 20);
       edgeGroup.appendChild(label);
     }
   });
   graphSvg.appendChild(edgeGroup);
 
-  // Draw nodes
+  // Nodes
   const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   nodes.forEach(n => {
     const pos = positions[n.node_id];
     if (!pos) return;
     const item = nodeItemMap[n.node_id];
-
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('class', 'graph-node');
     g.setAttribute('data-node', n.node_id);
     g.setAttribute('data-item', n.item_ref || '');
 
     const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('x', pos.x - nodeWidth/2);
-    rect.setAttribute('y', pos.y);
-    rect.setAttribute('width', nodeWidth);
-    rect.setAttribute('height', nodeHeight);
-    rect.setAttribute('rx', nodeRx);
-    rect.setAttribute('class', 'node-rect');
+    rect.setAttribute('x', pos.x - nodeWidth/2); rect.setAttribute('y', pos.y);
+    rect.setAttribute('width', nodeWidth); rect.setAttribute('height', nodeHeight);
+    rect.setAttribute('rx', '10'); rect.setAttribute('class', 'node-rect');
     g.appendChild(rect);
 
     const displayLabel = n.label || (item ? item.summary : n.node_id) || n.node_id;
     const wrapped = wrapText(displayLabel, 14);
     wrapped.forEach((line, i) => {
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      text.setAttribute('x', pos.x);
-      text.setAttribute('y', pos.y + 22 + i * 18);
-      text.setAttribute('class', 'node-label');
-      text.textContent = line;
+      text.setAttribute('x', pos.x); text.setAttribute('y', pos.y + 22 + i * 18);
+      text.setAttribute('class', 'node-label'); text.textContent = line;
       g.appendChild(text);
     });
 
-    // Time label if timeline
     if (isTimeline && item) {
-      const times = (item.temporal_attributes || [])
-        .map(t => t.surface || t.normalized_hint || '')
-        .filter(Boolean);
+      const times = (item.temporal_attributes || []).map(t => t.surface || t.normalized_hint || '').filter(Boolean);
       if (times.length) {
         const timeText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        timeText.setAttribute('x', pos.x);
-        timeText.setAttribute('y', pos.y + 12);
+        timeText.setAttribute('x', pos.x); timeText.setAttribute('y', pos.y + 12);
         timeText.setAttribute('class', 'node-time-label');
         timeText.textContent = times[0].slice(0, 20);
         g.appendChild(timeText);
       }
     }
-
-    // Item ID label
     if (n.item_ref) {
       const idText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      idText.setAttribute('x', pos.x);
-      idText.setAttribute('y', pos.y + nodeHeight - 6);
-      idText.setAttribute('class', 'node-id-label');
-      idText.textContent = n.item_ref;
+      idText.setAttribute('x', pos.x); idText.setAttribute('y', pos.y + nodeHeight - 6);
+      idText.setAttribute('class', 'node-id-label'); idText.textContent = n.item_ref;
       g.appendChild(idText);
     }
 
-    // Interaction
     g.addEventListener('click', (e) => {
       e.stopPropagation();
       document.querySelectorAll('.graph-node .node-rect.selected').forEach(r => r.classList.remove('selected'));
       rect.classList.add('selected');
       if (n.item_ref) activateItem(n.item_ref);
     });
-    g.addEventListener('mouseenter', (e) => {
-      if (n.item_ref) showItemPopover(n.item_ref, e.clientX, e.clientY);
-    });
-    g.addEventListener('mousemove', (e) => {
-      if (popover.style.display === 'block' && n.item_ref) showItemPopover(n.item_ref, e.clientX, e.clientY);
-    });
+    g.addEventListener('mouseenter', (e) => { if (n.item_ref) showItemPopover(n.item_ref, e.clientX, e.clientY); });
+    g.addEventListener('mousemove', (e) => { if (popover.style.display === 'block' && n.item_ref) showItemPopover(n.item_ref, e.clientX, e.clientY); });
     g.addEventListener('mouseleave', hidePopover);
-
     nodeGroup.appendChild(g);
   });
   graphSvg.appendChild(nodeGroup);
 
-  // Scroll to top
   graphScroll.scrollTop = 0;
   graphScroll.scrollLeft = 0;
 }
@@ -1107,132 +981,166 @@ function renderGraph(group) {
 function wrapText(text, maxChars) {
   if (!text || text.length <= maxChars) return [text || ''];
   const lines = [];
-  for (let i = 0; i < text.length && lines.length < 4; i += maxChars) {
-    lines.push(text.slice(i, i + maxChars));
-  }
+  for (let i = 0; i < text.length && lines.length < 4; i += maxChars) lines.push(text.slice(i, i + maxChars));
   return lines;
 }
 
 // ── Drag-to-pan ──
-let isPanning = false, panStartX = 0, panStartY = 0;
-let panScrollLeft = 0, panScrollTop = 0, panMoved = false;
-let suppressClick = false;
-
+let isPanning = false, panStartX = 0, panStartY = 0, panScrollLeft = 0, panScrollTop = 0;
 function beginPan(e) {
-  if (e.button !== 0) return;
-  if (e.target.closest && e.target.closest('.graph-node')) return;
-  e.preventDefault();
-  isPanning = true;
-  panMoved = false;
-  panStartX = e.clientX;
-  panStartY = e.clientY;
-  panScrollLeft = graphScroll.scrollLeft;
-  panScrollTop = graphScroll.scrollTop;
+  if (e.button !== 0 || (e.target.closest && e.target.closest('.graph-node'))) return;
+  e.preventDefault(); isPanning = true;
+  panStartX = e.clientX; panStartY = e.clientY;
+  panScrollLeft = graphScroll.scrollLeft; panScrollTop = graphScroll.scrollTop;
   graphScroll.classList.add('dragging');
 }
 graphScroll.addEventListener('pointerdown', beginPan);
 document.addEventListener('pointermove', (e) => {
   if (!isPanning) return;
-  const dx = e.clientX - panStartX;
-  const dy = e.clientY - panStartY;
-  if (Math.abs(dx) + Math.abs(dy) > 3) panMoved = true;
-  graphScroll.scrollLeft = panScrollLeft - dx;
-  graphScroll.scrollTop = panScrollTop - dy;
+  graphScroll.scrollLeft = panScrollLeft - (e.clientX - panStartX);
+  graphScroll.scrollTop = panScrollTop - (e.clientY - panStartY);
 });
-document.addEventListener('pointerup', () => {
-  if (!isPanning) return;
-  suppressClick = panMoved;
-  isPanning = false;
-  graphScroll.classList.remove('dragging');
-  if (suppressClick) setTimeout(() => { suppressClick = false; }, 0);
-});
+document.addEventListener('pointerup', () => { isPanning = false; graphScroll.classList.remove('dragging'); });
 
 // ── Item activation ──
 function activateItem(itemId) {
   activeItemId = itemId;
   const item = ITEM_BY_ID[itemId];
   if (!item) return;
-
   clearSourceHighlights();
 
-  // Highlight source blocks referenced by this item
   (item.source_block_refs || []).forEach(blockId => {
     const el = document.querySelector(`[data-block="${blockId}"]`);
     if (el) el.classList.add('evidence-highlight');
   });
-
-  // Also highlight concept marks for concepts referenced by this item
   (item.concept_refs || []).forEach(cid => {
-    document.querySelectorAll(`mark[data-concept="${cid}"]`).forEach(m => {
-      m.classList.add('active-span');
-    });
+    document.querySelectorAll(`mark[data-concept="${cid}"]`).forEach(m => m.classList.add('active-span'));
   });
 
-  // Scroll first evidence block into view
   const firstBlock = item.source_block_refs?.[0];
   if (firstBlock) {
     const el = document.querySelector(`[data-block="${firstBlock}"]`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (el) scrollToReading(el);
   }
 }
 
-function clearSourceHighlights() {
-  document.querySelectorAll('.src-block.evidence-highlight, .src-line.evidence-highlight').forEach(el => {
-    el.classList.remove('evidence-highlight');
+// ── Source block click ──
+function handleBlockClick(el) {
+  const blockId = el.dataset.block;
+  if (!blockId) return;
+
+  // Deselect previous
+  document.querySelectorAll('.block-selected').forEach(b => b.classList.remove('block-selected'));
+
+  // Select this block
+  el.classList.add('block-selected');
+  selectedBlockId = blockId;
+
+  // Scroll to reading position (top quarter of viewport)
+  scrollToReading(el);
+
+  // Show block info
+  showBlockInfo(el, blockId);
+}
+
+function scrollToReading(el) {
+  const scrollRect = sourceScroll.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  const targetTop = sourceScroll.scrollTop + elRect.top - scrollRect.top - scrollRect.height * 0.25;
+  sourceScroll.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+}
+
+function showBlockInfo(el, blockId) {
+  // Find items referencing this block
+  const refItems = ITEMS.filter(it => (it.source_block_refs || []).includes(blockId));
+  if (!refItems.length) {
+    blockInfo.classList.remove('visible');
+    return;
+  }
+
+  let html = `<h4>Referenced by ${refItems.length} item${refItems.length > 1 ? 's' : ''}</h4>`;
+  refItems.forEach(it => {
+    const summary = (it.summary || it.item_id).slice(0, 50);
+    html += `<div class="info-item" data-item="${it.item_id}">${it.item_type}: ${summary}</div>`;
   });
-  document.querySelectorAll('mark.concept-mark.active-span').forEach(m => {
-    m.classList.remove('active-span');
+  blockInfo.innerHTML = html;
+  blockInfo.classList.add('visible');
+
+  // Wire info item clicks
+  blockInfo.querySelectorAll('.info-item').forEach(infoItem => {
+    infoItem.addEventListener('click', () => {
+      activateItem(infoItem.dataset.item);
+      // Navigate to a group containing this item
+      for (const g of GROUPS) {
+        if ((g.item_refs || []).includes(infoItem.dataset.item)) {
+          activateGroupSilent(g.group_id);
+          document.querySelectorAll(`#sidebarNav .nav-item[data-group="${g.group_id}"]`).forEach(n => n.classList.add('active'));
+          break;
+        }
+      }
+    });
+  });
+
+  // Highlight items in right pane
+  const refItemIds = new Set(refItems.map(it => it.item_id));
+  document.querySelectorAll('.item-card').forEach(card => {
+    card.classList.toggle('item-highlight', refItemIds.has(card.dataset.item));
+  });
+  document.querySelectorAll('.graph-node .node-rect').forEach(rect => {
+    const parent = rect.closest('.graph-node');
+    if (parent) rect.classList.toggle('item-highlight', refItemIds.has(parent.dataset.item));
   });
 }
 
-function clearActive() {
+// ── Clear functions ──
+function clearSourceHighlights() {
+  document.querySelectorAll('.evidence-highlight').forEach(el => el.classList.remove('evidence-highlight'));
+  document.querySelectorAll('mark.concept-mark.active-span').forEach(m => m.classList.remove('active-span'));
+  document.querySelectorAll('.item-highlight').forEach(el => el.classList.remove('item-highlight'));
+  document.querySelectorAll('.node-rect.item-highlight').forEach(r => r.classList.remove('item-highlight'));
+  document.querySelectorAll('.item-card.item-highlight').forEach(c => c.classList.remove('item-highlight'));
+}
+
+function clearAll() {
   activeItemId = null;
-  activeConceptId = null;
+  selectedBlockId = null;
   clearSourceHighlights();
+  document.querySelectorAll('.block-selected').forEach(b => b.classList.remove('block-selected'));
   document.querySelectorAll('.graph-node .node-rect.selected').forEach(r => r.classList.remove('selected'));
+  document.querySelectorAll('.item-card.active').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.concept-item.active').forEach(i => i.classList.remove('active'));
+  blockInfo.classList.remove('visible');
+  hidePopover();
 }
 
 // ── Popover ──
 function showItemPopover(itemId, cx, cy) {
   const item = ITEM_BY_ID[itemId];
   if (!item) return;
-  const timeStr = (item.temporal_attributes || [])
-    .map(t => t.surface || t.normalized_hint || '')
-    .filter(Boolean)
-    .join(' · ');
+  const timeStr = (item.temporal_attributes || []).map(t => t.surface || t.normalized_hint || '').filter(Boolean).join(' · ');
   const conceptNames = (item.concept_refs || []).map(cid => {
-    const c = CONCEPT_BY_ID[cid];
-    return c ? (c.canonical_name || c.surface) : cid;
+    const c = CONCEPT_BY_ID[cid]; return c ? (c.canonical_name || c.surface) : cid;
   }).join(', ');
-
   let html = `<strong>${item.summary || item.item_id}</strong>`;
   html += `<div class="pop-muted">${item.item_id} · ${item.item_type}</div>`;
   if (timeStr) html += `<div>Time: ${timeStr}</div>`;
   if (conceptNames) html += `<div>Concepts: ${conceptNames}</div>`;
-  if (item.uncertainty && item.uncertainty.length) {
-    html += `<div style="color:#9a4a3f">Uncertainty: ${item.uncertainty.join(', ')}</div>`;
-  }
+  if (item.uncertainty && item.uncertainty.length) html += `<div style="color:#9a4a3f">Uncertainty: ${item.uncertainty.join(', ')}</div>`;
   showPopover(html, cx, cy);
 }
 
-function showConceptPopover(conceptId, cx, cy) {
-  const c = CONCEPT_BY_ID[conceptId];
+function showConceptPopover(cid, cx, cy) {
+  const c = CONCEPT_BY_ID[cid];
   if (!c) return;
   let html = `<strong>${c.canonical_name || c.surface}</strong>`;
   html += `<div class="pop-muted">${c.concept_id} · ${c.concept_type}</div>`;
   if (c.summary) html += `<div>${c.summary}</div>`;
-  if (c.observed_surfaces && c.observed_surfaces.length) {
-    html += `<div>Also: ${c.observed_surfaces.join(', ')}</div>`;
-  }
-  if (c.aliases && c.aliases.length) {
-    html += `<div>Aliases: ${c.aliases.join(', ')}</div>`;
-  }
+  if (c.observed_surfaces && c.observed_surfaces.length) html += `<div>Also: ${c.observed_surfaces.join(', ')}</div>`;
   showPopover(html, cx, cy);
 }
 
 function showPopover(html, cx, cy) {
-  popover.innerHTML = html;
-  popover.style.display = 'block';
+  popover.innerHTML = html; popover.style.display = 'block';
   const pad = 14;
   const x = Math.min(cx + pad, window.innerWidth - popover.offsetWidth - pad);
   const y = Math.min(cy + pad, window.innerHeight - popover.offsetHeight - pad);
@@ -1240,85 +1148,49 @@ function showPopover(html, cx, cy) {
   popover.style.top = `${Math.max(pad, y)}px`;
 }
 
-function hidePopover() {
-  popover.style.display = 'none';
-}
+function hidePopover() { popover.style.display = 'none'; }
 
-// ── Source concept mark interactions ──
-function wireSourceMarks() {
-  document.querySelectorAll('mark.concept-mark').forEach(mark => {
-    mark.addEventListener('mouseenter', (e) => {
-      showConceptPopover(mark.dataset.concept, e.clientX, e.clientY);
-    });
-    mark.addEventListener('mousemove', (e) => {
-      if (popover.style.display === 'block') showConceptPopover(mark.dataset.concept, e.clientX, e.clientY);
-    });
-    mark.addEventListener('mouseleave', hidePopover);
-    mark.addEventListener('click', () => {
-      const cid = mark.dataset.concept;
-      // Toggle: highlight all occurrences of this concept
-      clearSourceHighlights();
-      activeConceptId = cid;
-      document.querySelectorAll(`mark[data-concept="${cid}"]`).forEach(m => {
-        m.classList.add('active-span');
-      });
-      // Also highlight items referencing this concept
-      ITEMS.forEach(item => {
-        if ((item.concept_refs || []).includes(cid)) {
-          (item.source_block_refs || []).forEach(blockId => {
-            const el = document.querySelector(`[data-block="${blockId}"]`);
-            if (el) el.classList.add('evidence-highlight');
-          });
-        }
-      });
-      // Find and activate a group that contains items referencing this concept
-      for (const g of GROUPS) {
-        if ((g.concept_refs || []).includes(cid)) {
-          activateGroup(g.group_id);
-          document.querySelectorAll(`#sidebarNav .nav-item[data-group="${g.group_id}"]`).forEach(n => n.classList.add('active'));
-          break;
-        }
-      }
+// ── Wire source elements ──
+function wireSourceElements() {
+  // Block click on source blocks with items
+  document.querySelectorAll('.src-block[data-items], .src-line[data-items], .src-note[data-items]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('mark.concept-mark')) return;
+      handleBlockClick(el);
     });
   });
-}
 
-// ── Source block item click ──
-function wireSourceBlocks() {
-  document.querySelectorAll('[data-items]').forEach(el => {
-    el.addEventListener('click', (e) => {
-      // Don't trigger on concept mark clicks
-      if (e.target.closest('mark.concept-mark')) return;
-      const itemIds = (el.dataset.items || '').split(',').filter(Boolean);
-      if (itemIds.length === 1) {
-        activateItem(itemIds[0]);
-        // Find and activate the first group containing this item
-        for (const g of GROUPS) {
-          if ((g.item_refs || []).includes(itemIds[0])) {
-            activateGroup(g.group_id);
-            document.querySelectorAll(`#sidebarNav .nav-item[data-group="${g.group_id}"]`).forEach(n => n.classList.add('active'));
-            break;
-          }
-        }
-      }
+  // Concept marks
+  document.querySelectorAll('mark.concept-mark').forEach(mark => {
+    mark.addEventListener('mouseenter', (e) => showConceptPopover(mark.dataset.concept, e.clientX, e.clientY));
+    mark.addEventListener('mousemove', (e) => { if (popover.style.display === 'block') showConceptPopover(mark.dataset.concept, e.clientX, e.clientY); });
+    mark.addEventListener('mouseleave', hidePopover);
+    mark.addEventListener('click', (e) => {
+      e.stopPropagation();
+      focusConcept(mark.dataset.concept);
     });
+  });
+
+  // Click on source scroll background to clear
+  sourceScroll.addEventListener('click', (e) => {
+    if (e.target === sourceScroll || e.target.classList.contains('source-text')) {
+      clearAll();
+    }
   });
 }
 
 // ── Chat ──
 document.getElementById('chatToggle').addEventListener('click', () => {
   const panel = document.getElementById('chatPanel');
-  const btn = document.getElementById('chatToggle');
   panel.classList.toggle('collapsed');
-  btn.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+  document.getElementById('chatToggle').textContent = panel.classList.contains('collapsed') ? '+' : '−';
 });
-
 document.getElementById('chatSendBtn').addEventListener('click', () => {
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text) return;
-  const msgs = document.getElementById('chatMessages');
-  msgs.innerHTML += `<div style="padding:4px 8px;font-size:13px;color:var(--muted)">Q: ${text}</div>`;
+  document.getElementById('chatMessages').innerHTML += `<div style="padding:4px 8px;font-size:13px;color:var(--muted)">Q: ${text}</div>`;
   input.value = '';
   document.getElementById('chatPanel').classList.remove('collapsed');
   document.getElementById('chatToggle').textContent = '−';
@@ -1326,23 +1198,16 @@ document.getElementById('chatSendBtn').addEventListener('click', () => {
 
 // ── Init ──
 function init() {
-  buildConceptFilters();
+  buildConceptPanel();
   buildSidebar();
+  wireSourceElements();
 
-  // Wire source interactions after the DOM is populated by the generator
-  wireSourceMarks();
-  wireSourceBlocks();
-
-  // Auto-activate first group if any
   if (GROUPS.length > 0) {
-    const firstGroup = GROUPS[0];
-    document.querySelector(`#sidebarNav .nav-item[data-group="${firstGroup.group_id}"]`)?.click();
+    document.querySelector(`#sidebarNav .nav-item[data-group="${GROUPS[0].group_id}"]`)?.click();
   }
 }
 
-requestAnimationFrame(() => {
-  requestAnimationFrame(init);
-});
+requestAnimationFrame(() => { requestAnimationFrame(init); });
 </script>
 </body>
 </html>
