@@ -411,6 +411,135 @@ def run_per_segment_extraction_pass(
 # ── Pass: unit logical grouping ────────────────────────────────────────────────
 
 
+def _validate_merge_deltas(
+    deltas: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Screen LLM merge deltas for unsafe patterns before application.
+
+    Returns ``(safe_deltas, rejected_deltas)``. Rejected deltas become
+    ``unresolved_items`` with kind ``merge_proposal_rejected``.
+
+    Rules are generic and data-driven — they do not hardcode specific
+    surface values, languages, or domain concepts.
+    """
+    if not deltas:
+        return deltas, []
+
+    concept_by_id = {c["concept_id"]: c for c in concepts}
+    safe: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+
+    for delta in deltas:
+        if delta.get("delta_type") != "merge":
+            safe.append(delta)
+            continue
+
+        target_refs: list[str] = delta.get("target_refs", [])
+        changes: dict[str, Any] = delta.get("changes", {})
+        targets = [concept_by_id[ref] for ref in target_refs if ref in concept_by_id]
+
+        if len(targets) < 2:
+            safe.append(delta)
+            continue
+
+        reason = _classify_merge_risk(targets, changes)
+        if reason:
+            rejected.append({
+                "delta": delta,
+                "reason": reason,
+            })
+        else:
+            safe.append(delta)
+
+    return safe, rejected
+
+
+def _classify_merge_risk(
+    targets: list[dict[str, Any]],
+    changes: dict[str, Any],
+) -> str | None:
+    """Return rejection reason if merge is unsafe, None if it should proceed.
+
+    A merge is safe when the targets share an identity signal:
+    same canonical_name, same surface, or the proposed merged name
+    matches an attested name of one of the targets.
+
+    A merge is rejected when distinct entities are being collapsed
+    into a synthetic collection or category concept.
+    """
+    surfaces: set[str] = {str(c.get("surface", "")) for c in targets}
+    cnames: set[str] = {
+        str(c.get("canonical_name", "")) for c in targets if c.get("canonical_name")
+    }
+    types: set[str] = {str(c.get("concept_type", "")) for c in targets}
+    proposed_surface = str(changes.get("surface", "")).strip()
+    proposed_cname = str(changes.get("canonical_name", "")).strip()
+
+    known_names: set[str] = surfaces | cnames
+    known_names.discard("")
+
+    # Shared non-empty canonical_name → same identity already established
+    if len(cnames) == 1 and "" not in cnames:
+        return None
+
+    # Same surface across all targets → probable duplicate extraction
+    if len(surfaces) == 1 and "" not in surfaces:
+        return None
+
+    # Proposed name matches a known target name → LLM picking canonical form
+    if proposed_surface and proposed_surface in known_names:
+        return None
+    if proposed_cname and proposed_cname in known_names:
+        return None
+
+    # time_anchor with different surfaces → distinct temporal references
+    if "time_anchor" in types:
+        return "merge_rejected: merging distinct time_anchor concepts with different surfaces"
+
+    # place with different surfaces → distinct locations
+    if "place" in types:
+        return "merge_rejected: merging distinct place concepts with different surfaces"
+
+    # source with different surfaces → distinct cited works
+    if "source" in types:
+        return "merge_rejected: merging distinct source concepts with different surfaces"
+
+    # Proposed name is new (not attested in any target) → synthetic collection
+    if proposed_surface or proposed_cname:
+        return "merge_rejected: proposed merged name does not match any attested target name"
+
+    # Different surfaces, different canonical_names, no proposed name → unclear
+    if len(surfaces) > 1:
+        return "merge_rejected: targets have distinct surfaces and no shared identity signal"
+
+    return None
+
+
+def _build_merge_rejection_items(
+    rejected: list[dict[str, Any]],
+    existing_unresolved: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert rejected merge deltas into unresolved_items entries."""
+    if not rejected:
+        return []
+    start_index = len(existing_unresolved)
+    items: list[dict[str, Any]] = []
+    for i, entry in enumerate(rejected):
+        delta = entry["delta"]
+        items.append({
+            "item_id": f"unresolved-{start_index + i + 1:04d}",
+            "kind": "merge_proposal_rejected",
+            "target_refs": delta.get("target_refs", []),
+            "delta_id": delta.get("delta_id", ""),
+            "changes": delta.get("changes", {}),
+            "rationale": delta.get("rationale", ""),
+            "rejection_reason": entry["reason"],
+            "summary": f"LLM proposed merging concepts but the merge was rejected: {entry['reason']}.",
+        })
+    return items
+
+
 def _apply_concept_deltas(
     concepts: list[dict[str, Any]],
     deltas: list[dict[str, Any]],
@@ -688,12 +817,17 @@ def run_unit_logical_grouping_pass(
         raw_response = backend.complete_json(prompt.content, payload)
         data = parse_json_response(raw_response)
 
+    # Screen LLM merge deltas for unsafe patterns (synthetic collections,
+    # merging distinct time_anchor/place/source concepts, etc.) before
+    # applying them. Rejected merges become unresolved_items.
+    deltas = data.get("concept_deltas", [])
+    safe_deltas, rejected_merges = _validate_merge_deltas(deltas, concepts)
+
     # Apply concept deltas, then dedupe any concepts that became equivalent
     # after reclassification/refinement. This catches common LLM repair output
     # where the model fixes types but forgets to emit a separate merge delta.
-    deltas = data.get("concept_deltas", [])
     updated_concepts, concept_remap = _apply_concept_deltas(
-        concepts, deltas, unit_id=unit_id
+        concepts, safe_deltas, unit_id=unit_id
     )
     updated_concepts, dedupe_remap = _dedupe_equivalent_concepts(updated_concepts)
     final_concept_remap = _compose_concept_remaps(concept_remap, dedupe_remap)
@@ -717,6 +851,11 @@ def run_unit_logical_grouping_pass(
         ]
         updated_groups.append(updated)
 
+    # Fold rejected merge proposals into unresolved_items
+    llm_unresolved = data.get("unresolved_items", [])
+    merge_rejection_items = _build_merge_rejection_items(rejected_merges, llm_unresolved)
+    all_unresolved = list(llm_unresolved) + merge_rejection_items
+
     validation_subject = {
         "schema_version": READING_UNIT_SCHEMA_VERSION,
         "unit_id": unit_id,
@@ -725,7 +864,7 @@ def run_unit_logical_grouping_pass(
         "concepts": updated_concepts,
         "atomic_items": updated_items,
         "logical_groups": updated_groups,
-        "unresolved_items": data.get("unresolved_items", []),
+        "unresolved_items": all_unresolved,
         "validation": {},
         "context_metadata": {},
     }
@@ -750,6 +889,7 @@ def run_unit_logical_grouping_pass(
             "concepts": updated_concepts,
             "atomic_items": updated_items,
             "logical_groups": updated_groups,
+            "unresolved_items": all_unresolved,
             "validation": validation_report.to_dict(),
             "context_metadata": {"context_injection": context is not None},
             "metrics": {"counts": {"grouping": grouping_counts}},
