@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .extraction_prompts import PromptComposition, PromptPart, load_static_prompt_part
+from .pass_utils import PromptComposition, PromptPart, load_static_prompt_part
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tilusion.extraction_pipeline import ResolvedOverviewSegment
+from tilusion.overview import ResolvedOverviewSegment
 from tilusion.extraction_quality import EvidenceLocation
 from tilusion.reading_pipeline import (
     MockReadingBackend,

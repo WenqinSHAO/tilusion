@@ -391,7 +391,7 @@ Optional later behavior:
 
 - `tilusion/book_reader.py` — stable reader/index layer.
 - `tilusion/source_blocks.py` — stable deterministic source block layer.
-- `tilusion/extraction_pipeline.py` and old `extraction*.py` modules — regression baseline.
+- Removed old event/timeline-centered `extraction*.py` modules — do not revive them for new cross-unit work. Reuse `backend.py`, `overview.py`, `pass_utils.py`, and the reading modules instead.
 - Existing unit-level `run-reading --scope unit` behavior — keep as the default path.
 
 ## 4. Open Design Questions

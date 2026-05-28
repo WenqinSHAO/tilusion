@@ -7,17 +7,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .extraction import (
+from .backend import (
     LLMBackend,
     MockExtractionBackend,
     parse_json_response,
 )
-from .extraction_pipeline import (
+from .overview import (
     ResolvedOverviewSegment,
-    build_pass_cache_key,
-    pass_artifact_paths,
     resolve_overview_segments,
     run_overview_segmentation_pass,
+)
+from .pass_utils import (
+    build_pass_cache_key,
+    pass_artifact_paths,
 )
 from .reading_payloads import (
     build_per_segment_extraction_payload,

@@ -16,7 +16,7 @@
 - Multi-pass scaffolding with `.tilusion_cache/extraction_passes/` artifact caching.
 - Chained extraction flow: overview segmentation, deterministic segment-anchor relocation, per-segment extraction with overview hints, aggregate validation, repair-hint artifacts.
 - Validation outputs: full local reports, compact LLM-actionable repair hints, enriched validated results with evidence source locations.
-- Chain cache revalidation without backend calls via `refresh-chain-validation`.
+- Historical old-chain validation/revalidation work was removed when the reading pipeline became the active extraction path.
 
 **Validation refinement and chain trials (old model)**
 - First LLM-backed chain trial (unit-0002, ~15.7K chars): 6/6 segments resolved, 0 errors, surfaced five improvement areas.
@@ -25,7 +25,7 @@
 **Unit finalization, repair, and timeline construction (old model)**
 - KV-cache-aware prompt composition for multi-round refinement.
 - Unit-finalization, repair, timeline construction, and timeline repair passes.
-- `run-all` command: end-to-end orchestration with progress logging and unit package output.
+- Historical `run-all` command was removed with the old event/timeline-centered extraction pipeline.
 
 **Reader view generator**
 - Self-contained HTML demo consuming real extraction data.
@@ -51,7 +51,7 @@
 
 - **Current goal:** Rebuild the reading pipeline from scratch following the 12-commit sequence in `docs/source_grounded_reading_pipeline.md`.
 - **Immediate next step:** Run the new reading CLI on real unit-0002 output and inspect package quality before cross-unit registry work.
-- **Branch:** `cross-unit-refactor`. Old extraction pipeline (`extraction*.py`) stays untouched as regression baseline. Reading modules (`reading_*.py`) rewritten in-place.
+- **Branch:** `cross-unit-refactor`. Old event/timeline-centered `extraction*.py` pipeline has been removed; the active extraction path is the source-grounded reading pipeline plus shared `backend.py`, `overview.py`, and `pass_utils.py` utilities.
 - Commits 1–10 reviewed 2026-05-28. Three fixes applied: per-segment `warnings` now propagated through `merge_segment_extraction_results`, dead `elif` branch removed from `_validate_temporal_attributes`, `_list` return type corrected, and unused `alias_candidates` field removed from `Concept` schema.
 - Commit 11 done 2026-05-28: factual stage metrics wired through pass artifacts and final `metrics.validation` / `metrics.counts`, without heuristic quality warnings.
 - Commit 12 done 2026-05-28: CLI now exposes `run-reading` for the v0.3 reading pipeline and `split-blocks` for deterministic source-block inspection.

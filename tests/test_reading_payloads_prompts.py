@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilusion.extraction_prompts import generated_prompt_part
+from tilusion.pass_utils import generated_prompt_part
 from tilusion.reading_payloads import (
     _source_block_meta,
     build_per_segment_extraction_payload,

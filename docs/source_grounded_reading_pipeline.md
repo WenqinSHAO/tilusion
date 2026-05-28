@@ -43,7 +43,7 @@ The key correction after the unit-0002 reading trial: source blocks must be dete
 **No backward compatibility:**
 
 - No consumers exist for reading-unit-v0.1. The schema is rebuilt from scratch as v0.3.
-- Old extraction pipeline (`extraction*.py`) remains untouched as a working regression baseline.
+- Old event/timeline-centered extraction modules have been removed; source-grounded reading is now the active extraction path. Shared backend, overview, and pass-cache utilities live in dedicated modules.
 - Reading modules (`reading_*.py`) are rewritten in-place.
 
 **No confidence as a core field:**
@@ -413,9 +413,9 @@ Backend: LLM-backed proposal plus deterministic validation and transaction write
 These are well-designed and should be reused or adapted:
 
 - **Prompt composition framework** (`extraction_prompts.py`): `PromptPart` and `PromptComposition` with YAML frontmatter resource loading. The reading pipeline already uses this via `reading_prompts.py`.
-- **Pass artifact caching** (`extraction_pipeline.py`): `build_pass_cache_key`, `pass_artifact_paths`, `write_pass_artifacts`. Inspectable artifacts (prompt composition, system prompt, request payload, raw response, parsed result, validation report, manifest) per pass.
+- **Pass artifact caching** (`pass_utils.py`): `build_pass_cache_key`, `pass_artifact_paths`, and JSON artifact path helpers. Inspectable artifacts (prompt composition, system prompt, request payload, raw response, parsed result, validation report, manifest) per pass.
 - **Reader/index layer** (`book_reader.py`): stable unit IDs, source coordinate extraction, unit text extraction. No changes needed.
-- **Overview segmentation** (`extraction_pipeline.py`): `run_overview_segmentation_pass` and `resolve_overview_segments`. Needs a prompt update for region classification but the pass structure is sound.
+- **Overview segmentation** (`overview.py`): `run_overview_segmentation_pass` and `resolve_overview_segments`. The pass restores source regions, de-overlaps segments, and extends the final segment to the unit end for source completeness.
 - **Context pack hashing** (`book_context.py`): cache key isolation when context injection is enabled.
 
 ## What To Rewrite
@@ -434,7 +434,7 @@ New module to create:
 
 ## What To Leave Untouched
 
-- `tilusion/extraction.py`, `extraction_pipeline.py`, `extraction_prompts.py`, `extraction_payloads.py`, `extraction_quality.py`, `extraction_unit_validation.py` — the old working pipeline stays as the regression baseline.
+- `tilusion/backend.py`, `overview.py`, `pass_utils.py`, `extraction_prompts.py`, and `extraction_quality.py` — shared backend, overview, prompt, pass-cache, and legacy evidence-quality utilities used by the reading pipeline.
 - `tilusion/book_reader.py` — stable.
 - `tilusion/book_context.py` — needs eventual alignment with the new concept model, but not yet. Per-segment extraction works without context initially.
 
@@ -579,7 +579,7 @@ Each step is a focused, reviewable commit.
 
 - Add `run-reading` command to `cli.py` that runs the full v0.3 source-grounded reading pipeline.
 - Add `split-blocks` command to run just the deterministic source block splitter and inspect output as text or JSON.
-- Keep old extraction commands working as regression baselines.
+- Remove old event/timeline-centered extraction commands; keep `index`, `extract`, `run-reading`, `split-blocks`, and `validate-result`.
 - Ensure mock `run-reading` uses reading-pipeline mock contracts instead of the old extraction mock backend.
 
 ### Quality cleanup sequence before next LLM trial

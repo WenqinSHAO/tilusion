@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .extraction import sha256_json, sha256_text
+from .backend import sha256_json, sha256_text
 
 # ── registry building ──────────────────────────────────────────────────
 
