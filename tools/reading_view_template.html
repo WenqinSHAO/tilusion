@@ -316,7 +316,13 @@
     .graph-svg .edge-line.contradicts { stroke: #9a4a3f; stroke-dasharray: 4 2; }
     .graph-svg .edge-line.elaborates  { stroke: #4a6f8f; }
     .graph-svg .edge-line.related_to  { stroke: rgba(21,19,15,0.24); stroke-dasharray: 3 3; }
+    .graph-svg .edge-hit { stroke: transparent; stroke-width: 16; fill: none; cursor: pointer; }
+    .graph-svg .edge-hit:hover + .edge-line { stroke-width: 3.5; filter: brightness(0.85); }
     .graph-svg .edge-label { font-family: var(--mono); font-size: 9px; fill: var(--muted); pointer-events: none; stroke: var(--bg); stroke-width: 3; paint-order: stroke fill; stroke-linejoin: round; }
+    .edge-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 6px 10px; margin: 0; font-size: 11px; color: var(--muted); border-top: 1px solid var(--soft-line); }
+    .edge-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .edge-legend i { display: inline-block; width: 22px; height: 2px; border-radius: 1px; vertical-align: middle; }
+    .edge-legend i.dash { height: 0; border-top: 2px dashed; }
     .graph-svg .node-rect {
       fill: rgba(255,250,240,0.94); stroke: rgba(21,19,15,0.16);
       stroke-width: 1.5; rx: 10; cursor: pointer;
@@ -501,6 +507,7 @@
           <div class="graph-scroll" id="graphScroll" style="display:none">
             <svg class="graph-svg" id="graphSvg"></svg>
           </div>
+          <div class="edge-legend" id="edgeLegend" style="display:none"></div>
           <div class="card-stack-scroll" id="cardStackScroll" style="display:none"></div>
         </div>
       </div>
@@ -542,6 +549,7 @@ const sourceScroll = document.getElementById('sourceScroll');
 const graphScroll = document.getElementById('graphScroll');
 const graphSvg = document.getElementById('graphSvg');
 const cardStackScroll = document.getElementById('cardStackScroll');
+const edgeLegend = document.getElementById('edgeLegend');
 const groupHeader = document.getElementById('groupHeader');
 const popover = document.getElementById('popover');
 const blockInfo = document.getElementById('blockInfo');
@@ -766,10 +774,12 @@ function activateGroupSilent(groupId) {
   if (hasGraph) {
     graphScroll.style.display = 'block';
     cardStackScroll.style.display = 'none';
+    edgeLegend.style.display = 'flex';
     renderGraph(group);
   } else {
     graphScroll.style.display = 'none';
     cardStackScroll.style.display = 'block';
+    edgeLegend.style.display = 'none';
     renderCardStack(group);
   }
 }
@@ -861,14 +871,43 @@ function renderGraph(group) {
   const containerWidth = Math.max(graphScroll.clientWidth, 600);
   const containerHeight = Math.max(graphScroll.clientHeight, 500);
   const margin = { top: 40, right: 80, left: 100, bottom: 40 };
-  const layerSpacing = 200;
-  const nodeSpacing = 110;
-  const nodeWidth = 170;
+  const nodeWidth = 200;
   const nodeHeight = 70;
-  const maxLayer = Math.max(...Object.values(layers), 0);
-  const maxNodesInLayer = Math.max(...Object.values(layerGroups).map(a => a.length), 1);
-  const svgWidth = Math.max(containerWidth * 1.4, margin.left + (maxLayer + 1) * layerSpacing + margin.right);
-  const svgHeight = Math.max(containerHeight * 1.2, margin.top + maxNodesInLayer * nodeSpacing + margin.bottom);
+  const nodeItemMap = {};
+  nodes.forEach(n => { nodeItemMap[n.node_id] = ITEM_BY_ID[n.item_ref] || null; });
+
+  let positions = {};
+  let svgWidth, svgHeight;
+
+  if (isTimeline) {
+    // Vertical layout: nodes stacked top-to-bottom, centered horizontally
+    const sortedNodes = [...nodes];
+    sortedNodes.sort((a, b) => (layers[a.node_id] || 0) - (layers[b.node_id] || 0));
+    const vSpacing = 110;
+    svgWidth = Math.max(containerWidth * 1.2, margin.left + nodeWidth + margin.right + 100);
+    svgHeight = Math.max(containerHeight * 1.2, margin.top + sortedNodes.length * vSpacing + margin.bottom);
+    const cx = svgWidth / 2;
+    sortedNodes.forEach((n, i) => {
+      positions[n.node_id] = { x: cx, y: margin.top + i * vSpacing };
+    });
+  } else {
+    // Horizontal layered layout
+    const layerSpacing = 220;
+    const nodeSpacing = 110;
+    const maxLayer = Math.max(...Object.values(layers), 0);
+    const maxNodesInLayer = Math.max(...Object.values(layerGroups).map(a => a.length), 1);
+    svgWidth = Math.max(containerWidth * 1.4, margin.left + (maxLayer + 1) * layerSpacing + margin.right);
+    svgHeight = Math.max(containerHeight * 1.2, margin.top + maxNodesInLayer * nodeSpacing + margin.bottom);
+    Object.entries(layerGroups).forEach(([layerStr, nids]) => {
+      const layer = parseInt(layerStr);
+      const x = margin.left + layer * layerSpacing;
+      nids.forEach((nid, i) => {
+        const totalInLayer = nids.length;
+        const startY = margin.top + (maxNodesInLayer - totalInLayer) * nodeSpacing / 2;
+        positions[nid] = { x, y: startY + i * nodeSpacing };
+      });
+    });
+  }
 
   graphSvg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
   graphSvg.setAttribute('width', svgWidth);
@@ -882,48 +921,45 @@ function renderGraph(group) {
   panSurface.addEventListener('pointerdown', beginPan);
   graphSvg.appendChild(panSurface);
 
-  const positions = {};
-  Object.entries(layerGroups).forEach(([layerStr, nids]) => {
-    const layer = parseInt(layerStr);
-    const x = margin.left + layer * layerSpacing;
-    nids.forEach((nid, i) => {
-      const totalInLayer = nids.length;
-      const startY = margin.top + (maxNodesInLayer - totalInLayer) * nodeSpacing / 2;
-      positions[nid] = { x, y: startY + i * nodeSpacing };
-    });
-  });
-
-  const nodeItemMap = {};
-  nodes.forEach(n => { nodeItemMap[n.node_id] = ITEM_BY_ID[n.item_ref] || null; });
-
   // Edges
   const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   edges.forEach(e => {
     const from = positions[e.source], to = positions[e.target];
     if (!from || !to) return;
+
+    let sx, sy, tx, ty, ctrlOffset;
+    if (isTimeline) {
+      sx = from.x; sy = from.y + nodeHeight;
+      tx = to.x; ty = to.y;
+      ctrlOffset = 40;
+    } else {
+      sx = from.x + nodeWidth/2; sy = from.y + nodeHeight/2;
+      tx = to.x - nodeWidth/2; ty = to.y + nodeHeight/2;
+      ctrlOffset = Math.min(Math.abs(tx - sx) * 0.4, 60);
+    }
+
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    const sx = from.x + nodeWidth/2, sy = from.y + nodeHeight/2;
-    const tx = to.x - nodeWidth/2, ty = to.y + nodeHeight/2;
-    const dx = tx - sx;
-    const ctrlOffset = Math.min(Math.abs(dx) * 0.4, 60);
-    path.setAttribute('d', `M ${sx} ${sy} C ${sx + ctrlOffset} ${sy}, ${tx - ctrlOffset} ${ty}, ${tx} ${ty}`);
-    path.setAttribute('class', `edge-line ${e.edge_type || 'related_to'}`);
-    // Native SVG tooltip for edge label — always visible on hover
+    path.setAttribute('d', `M ${sx} ${sy} C ${sx + (isTimeline ? 0 : ctrlOffset)} ${sy + ctrlOffset}, ${tx - (isTimeline ? 0 : ctrlOffset)} ${ty - ctrlOffset}, ${tx} ${ty}`);
+    const edgeClass = e.edge_type || 'related_to';
+    path.setAttribute('class', `edge-line ${edgeClass}`);
+
     if (e.summary) {
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = e.summary;
+      title.textContent = `${edgeClass}: ${e.summary}`;
       path.appendChild(title);
     }
-    edgeGroup.appendChild(path);
+
+    // Invisible wide hit area for hover
+    const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    hit.setAttribute('d', path.getAttribute('d'));
+    hit.setAttribute('class', 'edge-hit');
     if (e.summary) {
-      const midX = (sx + tx) / 2, midY = (sy + ty) / 2;
-      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.setAttribute('x', midX);
-      label.setAttribute('y', midY - 18);
-      label.setAttribute('class', 'edge-label'); label.setAttribute('text-anchor', 'middle');
-      label.textContent = e.summary.slice(0, 24);
-      edgeGroup.appendChild(label);
+      hit.addEventListener('mouseenter', (ev) => showEdgePopover(edgeClass, e.summary, ev.clientX, ev.clientY));
+      hit.addEventListener('mousemove', (ev) => showEdgePopover(edgeClass, e.summary, ev.clientX, ev.clientY));
+      hit.addEventListener('mouseleave', hidePopover);
     }
+    edgeGroup.appendChild(hit);
+    edgeGroup.appendChild(path);
   });
   graphSvg.appendChild(edgeGroup);
 
@@ -945,7 +981,7 @@ function renderGraph(group) {
     g.appendChild(rect);
 
     const displayLabel = n.label || (item ? item.summary : n.node_id) || n.node_id;
-    const wrapped = wrapText(displayLabel, 14);
+    const wrapped = wrapText(displayLabel, isTimeline ? 18 : 14);
     wrapped.forEach((line, i) => {
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', pos.x); text.setAttribute('y', pos.y + 22 + i * 18);
@@ -985,6 +1021,40 @@ function renderGraph(group) {
 
   graphScroll.scrollTop = 0;
   graphScroll.scrollLeft = 0;
+
+  buildEdgeLegend(edges);
+}
+
+function showEdgePopover(edgeType, summary, x, y) {
+  popover.style.display = 'block';
+  popover.style.left = (x + 14) + 'px';
+  popover.style.top = (y - 14) + 'px';
+  popover.innerHTML = `<strong>${edgeType}</strong>: ${summary}`;
+}
+
+function buildEdgeLegend(edges) {
+  const types = {};
+  edges.forEach(e => { const t = e.edge_type || 'related_to'; if (!types[t]) types[t] = true; });
+  const typeList = Object.keys(types);
+  if (!typeList.length) { edgeLegend.style.display = 'none'; return; }
+
+  const colors = {
+    precedes: '#395e4a', supports: '#2d6a4f', contradicts: '#9a4a3f',
+    elaborates: '#4a6f8f', causes: '#6a5030', enables: '#4a6f6f',
+    continues: '#395e4a', resolves: '#6a4030', follows_from: '#505a40',
+    qualifies: '#6a5a30', contrasts: '#7a4040', part_of: '#405a6a',
+    refers_to: '#4a5a6a', exemplifies: '#5a6040', defines: '#4a5070',
+    related_to: 'rgba(21,19,15,0.24)',
+  };
+
+  const dashedTypes = { precedes: true, contradicts: true, related_to: true, qualifies: true };
+  const dash = t => dashedTypes[t] ? 'dash' : '';
+
+  edgeLegend.innerHTML = typeList.map(t => {
+    const c = colors[t] || '#999'; const d = dash(t);
+    return `<span><i class="${d}" style="${d ? 'border-top-color:'+c : 'background:'+c}"></i> ${t}</span>`;
+  }).join('');
+  edgeLegend.style.display = 'flex';
 }
 
 function wrapText(text, maxChars) {
