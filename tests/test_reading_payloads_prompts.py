@@ -126,7 +126,7 @@ def test_render_text_with_block_markers_multiple_blocks() -> None:
             unit_id="unit-0001",
             segment_id="seg-0001",
             block_index=1,
-            block_type="line",
+            block_type="paragraph",
             start=28,
             end=39,
             text="Short line.",
@@ -139,7 +139,7 @@ def test_render_text_with_block_markers_multiple_blocks() -> None:
         "{seg-0001-block-0000:paragraph}"
         "First paragraph.\n\n"
         "{/seg-0001-block-0000}"
-        "{seg-0001-block-0001:line}"
+        "{seg-0001-block-0001:paragraph}"
         "Short line."
         "{/seg-0001-block-0001}"
     )

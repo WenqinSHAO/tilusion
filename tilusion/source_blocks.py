@@ -110,7 +110,7 @@ def split_source_blocks(
                     segment_id=segment_id,
                     unit_id=unit_id,
                     block_index=len(blocks),
-                    block_type="other",
+                    block_type="paragraph",
                     start=unit_offset + pos,
                     text=chunk,
                 )
@@ -125,7 +125,7 @@ def split_source_blocks(
                     segment_id=segment_id,
                     unit_id=unit_id,
                     block_index=len(blocks),
-                    block_type="other",
+                    block_type="paragraph",
                     start=unit_offset + pos,
                     text=chunk,
                 )
@@ -205,7 +205,7 @@ def _chunk_to_blocks(
                 segment_id=segment_id,
                 unit_id=unit_id,
                 block_index=start_block_index + len(blocks),
-                block_type="sentence_group",
+                block_type="paragraph",
                 start=unit_offset + local_offset + actual_start,
                 text=actual_text,
             )
@@ -231,7 +231,7 @@ def _chunk_to_blocks(
                     segment_id=segment_id,
                     unit_id=unit_id,
                     block_index=start_block_index,
-                    block_type="other",
+                    block_type="paragraph",
                     start=unit_offset + local_offset + sub_offset,
                     text=chunk[sub_offset:],
                 )
@@ -347,26 +347,7 @@ def _is_horizontal_rule(text: str) -> bool:
 
 
 def _classify_block_type(text: str) -> str:
-    """Heuristic block type classification.
-
-    Classifies into: paragraph, line, note, or other.
-    The classifier avoids overfitting to any specific book format.
-    """
-    stripped = text.strip()
-    if not stripped:
-        return "other"
-
-    if _is_horizontal_rule(stripped):
-        return "other"
-
-    # Annotation / footnote-like: short line starting with bracket or paren marker
-    if len(stripped) < 200 and re.match(r"[\[(（【〈]\d+[\]）)】〉]?", stripped):
-        return "note"
-
-    # Standalone short line (title, byline, section header, standalone sentence)
-    if "\n" not in stripped and len(stripped) < 120:
-        return "line"
-
+    """All blocks are 'paragraph' — type differentiation is deferred to extraction."""
     return "paragraph"
 
 

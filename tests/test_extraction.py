@@ -630,7 +630,7 @@ def test_chained_extraction_runs_overview_then_segment_passes(tmp_path: Path) ->
     assert record.source_length["chars"] == len("Chapter 1\nAlice left home.\n")
     assert record.overview.data["overview_segments"]
     assert len(record.resolved_segments) == 1
-    assert record.resolved_segments[0].to_dict()["length"]["chars"] == len("Chapter 1\nAlice left home.")
+    assert record.resolved_segments[0].to_dict()["length"]["chars"] == len("Chapter 1\nAlice left home.\n")
     assert len(record.segment_passes) == 1
     assert record.validation_report["passed"]
     assert record.validation_report["segment_lengths"][0]["segment_id"] == "overview-segment-0001"

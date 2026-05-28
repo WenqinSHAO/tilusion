@@ -138,13 +138,15 @@ def test_contiguity_with_oversized_split():
     assert total == len(text)
 
 
-def test_contiguity_with_notes_and_paragraphs():
-    """Contiguity holds with mixed block types (notes + paragraphs)."""
+def test_contiguity_with_multiple_blocks():
+    """Contiguity holds for all blocks regardless of content type."""
     text = "[1] This is a note.\n\nA regular paragraph here.\n\n[2] Another note.\n\nFinal paragraph."
     blocks, _ = split_source_blocks(
         text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
     )
     assert len(blocks) == 4
+    for b in blocks:
+        assert b.block_type == "paragraph"
     sorted_blocks = sorted(blocks, key=lambda b: b.start)
     for i in range(len(sorted_blocks) - 1):
         assert sorted_blocks[i].end == sorted_blocks[i + 1].start
@@ -251,20 +253,20 @@ def test_oversized_no_sentence_boundaries():
 # ── Block type classification ─────────────────────────────────────────────────
 
 
-def test_note_classification():
+def test_all_blocks_classified_as_paragraph():
     text = "[1] This is a footnote annotation."
     blocks, _ = split_source_blocks(
         text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
     )
-    assert blocks[0].block_type == "note"
+    assert blocks[0].block_type == "paragraph"
 
 
-def test_line_classification():
+def test_short_line_classified_as_paragraph():
     text = "A short standalone line."
     blocks, _ = split_source_blocks(
         text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
     )
-    assert blocks[0].block_type == "line"
+    assert blocks[0].block_type == "paragraph"
 
 
 def test_multiple_consecutive_blank_lines():
@@ -409,7 +411,7 @@ def test_horizontal_rule_standalone():
         text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
     )
     types = [b.block_type for b in blocks if b.text.strip()]
-    assert "other" in types  # the horizontal rule
+    assert all(t == "paragraph" for t in types)
 
 
 def test_horizontal_rule_dashes():
@@ -453,25 +455,25 @@ def test_mixed_cjk_and_english():
 # ── Note classification (generalised) ────────────────────────────────────────
 
 
-def test_note_with_chinese_bracket():
+def test_chinese_bracket_text_classified_as_paragraph():
     text = "（1）这是一个注释文本。"
     blocks, _ = split_source_blocks(
         text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
     )
-    assert blocks[0].block_type == "note"
+    assert blocks[0].block_type == "paragraph"
 
 
-def test_note_with_japanese_bracket():
+def test_japanese_bracket_text_classified_as_paragraph():
     text = "【2】これは注釈です。"
     blocks, _ = split_source_blocks(
         text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
     )
-    assert blocks[0].block_type == "note"
+    assert blocks[0].block_type == "paragraph"
 
 
-def test_regular_text_not_classified_as_note():
+def test_all_text_classified_as_paragraph():
     text = "This is just a regular paragraph that happens to be somewhat longer."
     blocks, _ = split_source_blocks(
         text, segment_id="seg-0001", unit_id="unit-0001", unit_text=text, unit_offset=0
     )
-    assert blocks[0].block_type != "note"
+    assert blocks[0].block_type == "paragraph"
