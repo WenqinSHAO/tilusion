@@ -182,7 +182,11 @@ def test_write_reading_unit_package(tmp_path: Path) -> None:
         source={"book_path": "test.txt"},
         data=data,
         validation={"passed": True},
-        passes={"per_segment": {"elapsed_ms": 42}},
+        passes={
+            "overview_segmentation": {"cache_key": "abc123"},
+            "per_segment_extraction": {"elapsed_ms": 42, "segment_cache_keys": ["seg1", "seg2"]},
+            "unit_logical_grouping": {"cache_key": "def456"},
+        },
         cache_root=tmp_path / "packages",
     )
 
@@ -191,9 +195,49 @@ def test_write_reading_unit_package(tmp_path: Path) -> None:
     assert written["unit_id"] == "unit-0001"
     assert written["schema_version"] == READING_UNIT_SCHEMA_VERSION
     assert written["logical_groups"] == []
-    assert written["passes"]["per_segment"]["elapsed_ms"] == 42
+    assert written["passes"]["per_segment_extraction"]["elapsed_ms"] == 42
     assert written["metrics"] == {"validation": {}, "counts": {}}
     assert "data" not in written
+    assert "run_key" in written
+
+    # run_key is a 16-char hex string
+    assert len(written["run_key"]) == 16
+
+    # Different passes → different run key
+    package_path2 = write_reading_unit_package(
+        unit_id="unit-0001",
+        source={"book_path": "test.txt"},
+        data=data,
+        validation={"passed": True},
+        passes={
+            "overview_segmentation": {"cache_key": "xyz789"},
+            "per_segment_extraction": {"elapsed_ms": 99, "segment_cache_keys": ["seg3"]},
+            "unit_logical_grouping": {"cache_key": "ghi012"},
+        },
+        cache_root=tmp_path / "packages",
+    )
+    assert package_path2 != package_path
+    written2 = json.loads(Path(package_path2).read_text(encoding="utf-8"))
+    assert written2["run_key"] != written["run_key"]
+
+    # latest pointer points to the most recent run
+    latest_path = tmp_path / "packages" / "units" / "unit-0001" / "latest"
+    assert latest_path.read_text(encoding="utf-8") == written2["run_key"]
+
+    # Same passes → same run key (deterministic)
+    package_path3 = write_reading_unit_package(
+        unit_id="unit-0001",
+        source={"book_path": "test.txt"},
+        data=data,
+        validation={"passed": True},
+        passes={
+            "overview_segmentation": {"cache_key": "xyz789"},
+            "per_segment_extraction": {"elapsed_ms": 99, "segment_cache_keys": ["seg3"]},
+            "unit_logical_grouping": {"cache_key": "ghi012"},
+        },
+        cache_root=tmp_path / "packages",
+    )
+    assert package_path3 == package_path2
 
 
 def test_reading_pass_record_serialization() -> None:

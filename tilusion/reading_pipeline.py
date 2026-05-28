@@ -787,6 +787,7 @@ def run_reading_pipeline(
         pass_summaries["per_segment_extraction"] = {
             "segment_count": len(segments),
             "elapsed_ms": _elapsed_ms(t0),
+            "segment_cache_keys": [r.cache_key for r in segment_records],
         }
         _log_progress(step, TOTAL_STEPS, "Per-segment extraction", f"{len(segments)} segments OK", _elapsed_ms(t0))
     except Exception:
@@ -940,6 +941,27 @@ def _write_reading_pass_artifacts(
     Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
 
 
+def _derive_run_key(passes: dict[str, dict[str, Any]]) -> str:
+    """Derive a stable run fingerprint from pass cache keys.
+
+    Flattens per-segment cache key lists so every cache key that contributed
+    to a run is included in the fingerprint. Different runs → different keys.
+    """
+    import hashlib
+
+    parts: list[str] = []
+    for pass_name in sorted(passes):
+        p = passes[pass_name]
+        cache_key = p.get("cache_key", "")
+        if cache_key:
+            parts.append(f"{pass_name}:{cache_key}")
+        segment_keys = p.get("segment_cache_keys") or []
+        for sk in segment_keys:
+            parts.append(f"{pass_name}:seg:{sk}")
+    canonical = "\n".join(parts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 def write_reading_unit_package(
     *,
     unit_id: str,
@@ -949,8 +971,14 @@ def write_reading_unit_package(
     passes: dict[str, dict[str, Any]],
     cache_root: Path,
 ) -> str:
-    """Write the ExtractionUnitPackage to disk."""
-    package_dir = cache_root / "units" / unit_id
+    """Write the ExtractionUnitPackage to disk under a content-addressed run key.
+
+    The run key is derived from all pass cache keys, so different runs
+    never overwrite each other. A ``latest`` pointer is kept for convenience.
+    """
+    run_key = _derive_run_key(passes)
+    unit_dir = cache_root / "units" / unit_id
+    package_dir = unit_dir / run_key
     package_dir.mkdir(parents=True, exist_ok=True)
     package_path = package_dir / "unit_package.json"
 
@@ -960,5 +988,20 @@ def write_reading_unit_package(
     package["source"] = data.get("source") or source
     package["passes"] = passes
     package["validation"] = validation
+    package["run_key"] = run_key
     package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Write run metadata alongside the package
+    run_info_path = package_dir / "run_info.json"
+    run_info = {
+        "unit_id": unit_id,
+        "run_key": run_key,
+        "passes": passes,
+    }
+    run_info_path.write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Update latest pointer
+    latest_path = unit_dir / "latest"
+    latest_path.write_text(run_key, encoding="utf-8")
+
     return str(package_path)

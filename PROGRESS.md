@@ -57,6 +57,7 @@
 - Commit 12 done 2026-05-28: CLI now exposes `run-reading` for the v0.3 reading pipeline and `split-blocks` for deterministic source-block inspection.
 - Reader remains intentionally neutral about main text vs notes/commentary; separating those is an extraction responsibility.
 - Still untested at true 500MB scale.
+  - Commit 13 done 2026-05-28: `unit_package.json` output path is now content-addressed — run key derived from all pass cache keys ensures different runs never overwrite each other. Both `write_reading_unit_package` and `write_unit_package` updated. A `latest` pointer file in the unit directory tracks the most recent run.
 
 ## Implementation Status
 
@@ -74,3 +75,4 @@
 | 10 | Unit-level logical grouping pass | done |
 | 11 | Metrics wiring | done |
 | 12 | Update CLI | done |
+| 13 | Content-addressable unit package caching | done |
