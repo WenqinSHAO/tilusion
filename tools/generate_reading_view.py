@@ -200,8 +200,10 @@ def build_source_html(
         if start > cursor:
             gap_text = source_text[cursor:start]
             if gap_text.strip():
+                gap_start = cursor - offset
+                gap_end = start - offset
                 parts.append(
-                    f'<div class="src-gap" data-start="{cursor}" data-end="{start}">'
+                    f'<div class="src-gap" data-start="{gap_start}" data-end="{gap_end}">'
                     f'{html.escape(gap_text)}</div>'
                 )
 
@@ -225,8 +227,10 @@ def build_source_html(
     if cursor < max_end:
         tail_text = source_text[cursor:max_end]
         if tail_text.strip():
+            tail_start = cursor - offset
+            tail_end = max_end - offset
             parts.append(
-                f'<div class="src-gap" data-start="{cursor}" data-end="{max_end}">'
+                f'<div class="src-gap" data-start="{tail_start}" data-end="{tail_end}">'
                 f'{html.escape(tail_text)}</div>'
             )
 

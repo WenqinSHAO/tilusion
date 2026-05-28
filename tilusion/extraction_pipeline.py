@@ -1412,6 +1412,15 @@ def resolve_overview_segments(
             resolved[i].end = resolved[i + 1].start
             resolved[i].text = text[resolved[i].start : resolved[i].end]
 
+    # Extend last segment to the end of the unit text so no content is
+    # silently dropped when the LLM end_quote lands before the true end.
+    if resolved:
+        last = resolved[-1]
+        text_end = len(text)
+        if last.end < text_end:
+            last.end = text_end
+            last.text = text[last.start : text_end]
+
     # Drop segments that became empty after de-overlapping.
     resolved = [s for s in resolved if s.start < s.end]
 
