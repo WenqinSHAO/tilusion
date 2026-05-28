@@ -845,6 +845,19 @@ def run_reading_pipeline(
 
     metrics["counts"]["grouping"] = grouping_record.data.get("metrics", {}).get("counts", {}).get("grouping", {})
 
+    # ── Refresh segment_merge counts to reflect any concept deltas
+    #     applied during the logical grouping pass (merges, splits, etc.).
+    final_concepts = grouping_record.data["concepts"]
+    final_unresolved = grouping_record.data.get("unresolved_items", [])
+    segment_merge_before = metrics["counts"]["segment_merge"]["concepts_before_merge"]
+    segment_merge = metrics["counts"]["segment_merge"]
+    segment_merge["concepts_after_merge"] = len(final_concepts)
+    segment_merge["concept_merge_count"] = segment_merge_before - len(final_concepts)
+    segment_merge["unresolved_items"] = len(final_unresolved)
+    segment_merge["ambiguous_surface_count"] = sum(
+        1 for u in final_unresolved if u.get("kind") == "ambiguous_concept_surface"
+    )
+
     final_data = {
         "schema_version": READING_UNIT_SCHEMA_VERSION,
         "unit_id": unit_id,
