@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import json
 import re
-from typing import Any, Callable
+import sys
+import time
+from typing import Any, Callable, TYPE_CHECKING
 
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
+
+if TYPE_CHECKING:
+    from .backend import LLMBackend
+    from .conversation import ConversationContext
+    from .pass_utils import PromptComposition
+    from .reading_validation import ReadingValidationReport
 
 # Error codes that the auto-fixer can correct mechanically (no LLM).
 # Each entry maps error_code → fix function.
@@ -320,3 +329,233 @@ def _default_value(key: str, issue: dict[str, Any]) -> Any:
     if key in ("start", "end", "block_index"):
         return 0
     return None
+
+
+# ── Agentic repair loop ──
+
+DEFAULT_MAX_REPAIR_TURNS = 3
+
+
+def run_agentic_pass(
+    backend: LLMBackend,
+    prompt: PromptComposition,
+    payload: dict[str, Any],
+    validation_subject_builder: Callable[[dict[str, Any]], dict[str, Any]],
+    *,
+    max_repair_turns: int = DEFAULT_MAX_REPAIR_TURNS,
+    pass_name: str = "",
+) -> tuple[dict[str, Any], ConversationContext, ReadingValidationReport]:
+    """Run a pass with an agentic validation-repair loop.
+
+    Turn 1: LLM call → parse → validate.
+    If validation passes, return immediately.
+    Otherwise: auto-fix → re-validate → compact LLM repair with KV-cache
+    reuse → re-validate → loop. On exhaustion, full retry (new conversation).
+
+    Returns ``(data, conversation, final_validation_report)``.
+    """
+    from .backend import parse_json_response
+    from .reading_validation import validate_extraction_unit_package
+
+    # Turn 1: initial LLM call
+    conversation = backend.start_conversation(
+        system_prompt=prompt.content,
+        user_payload=payload,
+        pass_name=pass_name,
+    )
+    assistant_response = _last_assistant_content(conversation)
+    data = parse_json_response(assistant_response)
+
+    validation_subject = validation_subject_builder(data)
+    report = validate_extraction_unit_package(validation_subject)
+
+    if report.passed:
+        _update_conversation_validation(conversation, report)
+        return data, conversation, report
+
+    # Enter repair loop
+    data, conversation, report = _repair_loop(
+        data=data,
+        conversation=conversation,
+        validation_subject_builder=validation_subject_builder,
+        max_repair_turns=max_repair_turns,
+        backend=backend,
+        prompt=prompt,
+        payload=payload,
+        pass_name=pass_name,
+    )
+    return data, conversation, report
+
+
+def _repair_loop(
+    data: dict[str, Any],
+    conversation: ConversationContext,
+    validation_subject_builder: Callable[[dict[str, Any]], dict[str, Any]],
+    max_repair_turns: int,
+    backend: LLMBackend,
+    prompt: PromptComposition,
+    payload: dict[str, Any],
+    pass_name: str,
+) -> tuple[dict[str, Any], ConversationContext, ReadingValidationReport]:
+    """Inner repair loop: auto-fix → LLM repair → re-validate → repeat."""
+    from .backend import parse_json_response
+    from .reading_validation import validate_extraction_unit_package
+
+    fixer = DeterministicAutoFixer()
+    repair_turns = 0
+
+    while repair_turns <= max_repair_turns:
+        # Build validation subject from current data and validate
+        validation_subject = validation_subject_builder(data)
+        report = validate_extraction_unit_package(validation_subject)
+
+        if report.passed:
+            _update_conversation_validation(conversation, report)
+            return data, conversation, report
+
+        # Layer 1: deterministic auto-fix
+        issues_dicts = [issue.to_dict() for issue in report.issues]
+        fixed_codes, remaining_issues = fixer.fix(validation_subject, issues_dicts)
+
+        if fixed_codes:
+            # Propagate auto-fixes from validation_subject back to data
+            _propagate_fixes(data, validation_subject)
+            if not remaining_issues:
+                # Re-validate to confirm all issues resolved
+                final_subject = validation_subject_builder(data)
+                final_report = validate_extraction_unit_package(final_subject)
+                _update_conversation_validation(conversation, final_report)
+                return data, conversation, final_report
+
+        # Layer 2: compact LLM repair (if turns remain)
+        if repair_turns >= max_repair_turns:
+            break
+
+        repair_msg = build_repair_message(remaining_issues)
+        conversation = backend.continue_conversation(conversation, repair_msg)
+        repair_response = _last_assistant_content(conversation)
+        repair_turns += 1
+
+        try:
+            repair_data = parse_json_response(repair_response)
+            repairs = repair_data.get("repairs", [])
+            if repairs:
+                apply_repair_patch(validation_subject, repairs)
+                _propagate_fixes(data, validation_subject)
+        except Exception:
+            # If repair response is unparseable, continue to next turn
+            pass
+
+    # Layer 3: full retry (new conversation)
+    print(
+        f"  {pass_name}: max repair turns ({max_repair_turns}) exhausted, "
+        f"starting full retry with new conversation",
+        file=sys.stderr,
+    )
+    from .backend import parse_json_response
+    from .reading_validation import validate_extraction_unit_package
+
+    conversation = backend.start_conversation(
+        system_prompt=prompt.content,
+        user_payload=payload,
+        pass_name=pass_name,
+    )
+    assistant_response = _last_assistant_content(conversation)
+    data = parse_json_response(assistant_response)
+    validation_subject = validation_subject_builder(data)
+    report = validate_extraction_unit_package(validation_subject)
+    _update_conversation_validation(conversation, report)
+    return data, conversation, report
+
+
+def build_repair_message(errors: list[dict[str, Any]]) -> str:
+    """Build a compact repair message from remaining validation errors.
+
+    The message is intentionally terse (~200 tokens) so that repair turns
+    are cheap and KV-cache reuse pays off.
+    """
+    compact_errors = []
+    for err in errors:
+        compact_errors.append({
+            "code": err.get("code", ""),
+            "path": err.get("path", ""),
+            "message": err.get("message", ""),
+            "repair_hint": err.get("repair_hint", ""),
+        })
+
+    return json.dumps(
+        {
+            "task": "repair_extraction",
+            "errors": compact_errors,
+            "instruction": (
+                "Return a JSON object with a 'repairs' array. Each repair has "
+                "'path' (dot/bracket path to the field), 'operation' (replace/append/remove), "
+                "and 'value'. Fix only the reported errors — keep all other data unchanged."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+def apply_repair_patch(data: dict[str, Any], repairs: list[dict[str, Any]]) -> None:
+    """Apply repair patches to *data* in place.
+
+    Each repair has:
+      - path: dot/bracket path to the field (e.g., "concepts[64].source_block_refs")
+      - operation: "replace" | "append" | "remove"
+      - value: the new value (for replace/append)
+    """
+    for repair in repairs:
+        path = repair.get("path", "")
+        op = repair.get("operation", "replace")
+        value = repair.get("value")
+
+        if not path:
+            continue
+
+        try:
+            if op == "remove":
+                parent_path, index = _parse_index_path(path)
+                if parent_path is not None and index is not None:
+                    parent = _resolve_path(data, parent_path)
+                    if isinstance(parent, list) and 0 <= index < len(parent):
+                        del parent[index]
+                elif path in data:
+                    del data[path]
+            elif op == "append":
+                target = _resolve_path(data, path)
+                if isinstance(target, list):
+                    target.append(value)
+            else:  # replace (default)
+                _set_path(data, path, value)
+        except (IndexError, KeyError, TypeError, ValueError):
+            pass
+
+
+def _last_assistant_content(conversation: ConversationContext) -> str:
+    """Return the content of the last assistant message in the conversation."""
+    for msg in reversed(conversation.messages):
+        if msg.get("role") == "assistant":
+            return str(msg.get("content", ""))
+    return ""
+
+
+def _update_conversation_validation(
+    conversation: ConversationContext,
+    report: ReadingValidationReport,
+) -> None:
+    """Record validation results on the last turn's metadata."""
+    if conversation.turn_metadata:
+        conversation.turn_metadata[-1].validation_report = report.to_dict()
+
+
+def _propagate_fixes(source: dict[str, Any], target: dict[str, Any]) -> None:
+    """Copy key lists from *source* (auto-fixed validation subject) back into *target* (LLM data).
+
+    Only copies list fields that exist in both dicts, handling the common
+    pattern where auto-fixes modify the validation subject's lists (concepts,
+    atomic_items, logical_groups) and we need to sync them back.
+    """
+    for key in ("concepts", "atomic_items", "logical_groups", "source_blocks", "unresolved_items"):
+        if key in source and key in target:
+            target[key] = source[key]
