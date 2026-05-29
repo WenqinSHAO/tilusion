@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1156,31 +1157,38 @@ def run_reading_pipeline(
         _log_progress(step, TOTAL_STEPS, "Overview segmentation", "FAILED", _elapsed_ms(t0))
         raise
 
-    # ── Step 2: Per-segment reading extraction ──
+    # ── Step 2: Per-segment reading extraction (parallel) ──
     step = 2
     t0 = time.monotonic()
     segment_records: list[ReadingPassRecord] = []
+    max_workers = min(len(segments), 4)
     try:
-        for i, seg in enumerate(segments):
-            seg_t0 = time.monotonic()
-            seg_record = run_per_segment_extraction_pass(
-                unit_id=unit_id,
-                segment=seg,
-                backend=llm,
-                cache_dir=cache_root / "per_segment",
-                use_cache=use_cache,
-                context=context,
-                unit_text=text,
-            )
-            segment_records.append(seg_record)
-            counts = seg_record.data.get("metrics", {}).get("counts", {}).get("per_segment", {})
-            print(
-                f"    [{i + 1}/{len(segments)}] {seg.segment_id}  "
-                f"{counts.get('source_blocks', 0)} blocks  "
-                f"{counts.get('concepts', 0)} concepts  "
-                f"{counts.get('atomic_items', 0)} items  "
-                f"({_elapsed_ms(seg_t0)}ms)"
-            )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_seg: dict[Any, Any] = {}
+            for seg in segments:
+                future = executor.submit(
+                    run_per_segment_extraction_pass,
+                    unit_id=unit_id,
+                    segment=seg,
+                    backend=llm,
+                    cache_dir=cache_root / "per_segment",
+                    use_cache=use_cache,
+                    context=context,
+                    unit_text=text,
+                )
+                future_to_seg[future] = seg
+
+            for i, future in enumerate(as_completed(future_to_seg)):
+                seg = future_to_seg[future]
+                seg_record = future.result()
+                segment_records.append(seg_record)
+                counts = seg_record.data.get("metrics", {}).get("counts", {}).get("per_segment", {})
+                print(
+                    f"    [{i + 1}/{len(segments)}] {seg.segment_id}  "
+                    f"{counts.get('source_blocks', 0)} blocks  "
+                    f"{counts.get('concepts', 0)} concepts  "
+                    f"{counts.get('atomic_items', 0)} items  "
+                )
         pass_summaries["per_segment_extraction"] = {
             "segment_count": len(segments),
             "elapsed_ms": _elapsed_ms(t0),
