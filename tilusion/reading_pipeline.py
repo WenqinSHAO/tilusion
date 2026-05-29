@@ -11,6 +11,7 @@ from .backend import (
     LLMBackend,
     MockExtractionBackend,
     parse_json_response,
+    sha256_text,
 )
 from .overview import (
     ResolvedOverviewSegment,
@@ -981,11 +982,12 @@ def run_reading_pipeline(
     total_start = time.monotonic()
     llm = backend or MockReadingBackend()
     overview_backend = backend or MockExtractionBackend()
-    cache_root = Path(cache_dir)
     pass_summaries: dict[str, dict[str, Any]] = {}
     TOTAL_STEPS = 3
 
-    book_path = Path(book_path)
+    book_path = Path(book_path).resolve()
+    book_hash = sha256_text(str(book_path))[:12]
+    cache_root = Path(cache_dir) / book_hash
     index = build_book_index(book_path)
     unit = index.unit_map()[unit_id]
     text = extract_unit_text(book_path, unit)
