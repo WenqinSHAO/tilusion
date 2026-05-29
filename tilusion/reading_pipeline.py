@@ -514,8 +514,8 @@ def _validate_merge_deltas(
             safe.append(delta)
             continue
 
-        target_refs: list[str] = delta.get("target_refs", [])
-        changes: dict[str, Any] = delta.get("changes", {})
+        target_refs: list[str] = _as_list(delta.get("target_refs"))
+        changes: dict[str, Any] = delta.get("changes") or {}
         targets = [concept_by_id[ref] for ref in target_refs if ref in concept_by_id]
 
         if len(targets) < 2:
