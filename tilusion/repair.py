@@ -141,6 +141,57 @@ def _fix_wrong_field_type(data: dict[str, Any], path: str, issue: dict[str, Any]
     return False
 
 
+def _fix_missing_source_block_refs(data: dict[str, Any], path: str, issue: dict[str, Any]) -> bool:
+    """Inherit source_block_refs from merged source concepts.
+
+    When a concept has merged_from refs, collect source_block_refs from
+    those source concepts. This handles both deterministic merge concepts
+    and LLM merge-delta concepts that lost their refs.
+
+    Paths look like ``concepts[65].source_block_refs`` — the field is at
+    the end, so locate the parent object then look up its merged_from refs
+    in the same collection.
+    """
+    # path ends with ".source_block_refs" — find the parent object path
+    dot_idx = path.rfind(".")
+    if dot_idx == -1:
+        return False
+    field = path[dot_idx + 1:]
+    if field not in ("source_block_refs",):
+        return False
+
+    concept_path = path[:dot_idx]  # e.g. "concepts[65]"
+    concept = _resolve_path(data, concept_path)
+    if not isinstance(concept, dict):
+        return False
+
+    merged_from = _as_list(concept.get("merged_from", []))
+    if not merged_from:
+        return False
+
+    # Walk back to the collection (e.g. "concepts") to find source concepts
+    list_path = concept_path.rsplit("[", 1)[0] if "[" in concept_path else ""
+    concept_list = _resolve_path(data, list_path) if list_path else None
+    if not isinstance(concept_list, list):
+        return False
+
+    inherited: list[str] = []
+    seen: set[str] = set()
+    for other in concept_list:
+        if not isinstance(other, dict):
+            continue
+        if other.get("concept_id") in merged_from:
+            for ref in _as_list(other.get("source_block_refs")):
+                if ref not in seen:
+                    seen.add(ref)
+                    inherited.append(ref)
+
+    if inherited:
+        concept["source_block_refs"] = list(inherited)
+        return True
+    return False
+
+
 # ── Registry ──
 
 AUTO_FIXERS: dict[str, Callable[[dict[str, Any], str, dict[str, Any]], bool]] = {
@@ -152,11 +203,11 @@ AUTO_FIXERS: dict[str, Callable[[dict[str, Any], str, dict[str, Any]], bool]] = 
     "schema_version_mismatch": _fix_schema_version_mismatch,
     "stale_core_field": _fix_stale_core_field,
     "wrong_field_type": _fix_wrong_field_type,
+    "missing_source_block_refs": _fix_missing_source_block_refs,
 }
 
 # Error codes that should never be auto-fixed (require LLM repair)
 NOT_AUTO_FIXABLE: set[str] = {
-    "missing_source_block_refs",
     "invalid_grounding",
     "invalid_type_string",
     "prior_context_used_as_evidence",
@@ -379,6 +430,9 @@ def run_agentic_pass(
         result = validation_subject if return_subject else data
         return result, conversation, report
 
+    # Log initial failure before entering repair loop
+    _log_validation_failure(report, 0, pass_name)
+
     # Enter repair loop
     data, conversation, report = _repair_loop(
         data=data,
@@ -422,11 +476,15 @@ def _repair_loop(
             result = validation_subject if return_subject else data
             return result, conversation, report
 
+        # Log validation failure summary
+        _log_validation_failure(report, repair_turns, pass_name)
+
         # Layer 1: deterministic auto-fix
         issues_dicts = [issue.to_dict() for issue in report.issues]
         fixed_codes, remaining_issues = fixer.fix(validation_subject, issues_dicts)
 
         if fixed_codes:
+            _log_auto_fixes(fixed_codes, repair_turns, pass_name)
             # Propagate auto-fixes from validation_subject back to data
             _propagate_fixes(data, validation_subject)
             if not remaining_issues:
@@ -435,16 +493,22 @@ def _repair_loop(
                 final_report = validate_extraction_unit_package(final_subject)
                 _update_conversation_validation(conversation, final_report)
                 result = final_subject if return_subject else data
+                print(
+                    f"  {pass_name}: all errors auto-fixed, no LLM repair needed",
+                    file=sys.stderr,
+                )
                 return result, conversation, final_report
 
         # Layer 2: compact LLM repair (if turns remain)
         if repair_turns >= max_repair_turns:
             break
 
+        repair_turns += 1
+        _log_llm_repair_start(remaining_issues, repair_turns, max_repair_turns, pass_name)
+
         repair_msg = build_repair_message(remaining_issues)
         conversation = backend.continue_conversation(conversation, repair_msg)
         repair_response = _last_assistant_content(conversation)
-        repair_turns += 1
 
         try:
             repair_data = parse_json_response(repair_response)
@@ -452,9 +516,17 @@ def _repair_loop(
             if repairs:
                 apply_repair_patch(validation_subject, repairs)
                 _propagate_fixes(data, validation_subject)
-        except Exception:
-            # If repair response is unparseable, continue to next turn
-            pass
+                _log_repair_applied(repairs, pass_name)
+            else:
+                print(
+                    f"  {pass_name}: LLM repair turn {repair_turns} returned no repairs",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            print(
+                f"  {pass_name}: LLM repair turn {repair_turns} response unparseable: {exc}",
+                file=sys.stderr,
+            )
 
     # Layer 3: full retry (new conversation)
     print(
@@ -475,6 +547,15 @@ def _repair_loop(
     validation_subject = validation_subject_builder(data)
     report = validate_extraction_unit_package(validation_subject)
     _update_conversation_validation(conversation, report)
+
+    if report.passed:
+        print(
+            f"  {pass_name}: full retry passed validation",
+            file=sys.stderr,
+        )
+    else:
+        _log_validation_failure(report, 0, f"{pass_name} (full retry)")
+
     result = validation_subject if return_subject else data
     return result, conversation, report
 
@@ -543,6 +624,10 @@ def apply_repair_patch(data: dict[str, Any], repairs: list[dict[str, Any]]) -> N
             pass
 
 
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _last_assistant_content(conversation: ConversationContext) -> str:
     """Return the content of the last assistant message in the conversation."""
     for msg in reversed(conversation.messages):
@@ -570,3 +655,82 @@ def _propagate_fixes(source: dict[str, Any], target: dict[str, Any]) -> None:
     for key in ("concepts", "atomic_items", "logical_groups", "source_blocks", "unresolved_items"):
         if key in source and key in target:
             target[key] = source[key]
+
+
+# ── Repair loop logging ──
+
+
+def _log_validation_failure(
+    report: ReadingValidationReport,
+    turn: int,
+    pass_name: str,
+) -> None:
+    """Log a compact summary of validation errors to stderr."""
+    label = f"{pass_name} turn {turn}" if turn > 0 else pass_name
+    errors = [i for i in report.issues if i.severity == "error"]
+    warnings = [i for i in report.issues if i.severity == "warning"]
+    print(
+        f"  {label}: {len(errors)} errors, {len(warnings)} warnings",
+        file=sys.stderr,
+    )
+    # Group errors by code for a compact summary
+    by_code: dict[str, list] = {}
+    for issue in errors:
+        by_code.setdefault(issue.code, []).append(issue)
+    for code, issues in sorted(by_code.items()):
+        sample_paths = [i.path for i in issues[:3]]
+        detail = ", ".join(sample_paths)
+        if len(issues) > 3:
+            detail += f" (+{len(issues) - 3} more)"
+        print(f"    {code}: {detail}", file=sys.stderr)
+
+
+def _log_auto_fixes(
+    fixed_codes: list[str],
+    turn: int,
+    pass_name: str,
+) -> None:
+    """Log auto-fixes applied to stderr."""
+    from collections import Counter
+
+    counts = Counter(fixed_codes)
+    parts = [f"{code} x{count}" if count > 1 else code for code, count in counts.items()]
+    print(
+        f"  {pass_name} turn {turn} auto-fix: {', '.join(parts)}",
+        file=sys.stderr,
+    )
+
+
+def _log_llm_repair_start(
+    remaining: list[dict[str, Any]],
+    turn: int,
+    max_turns: int,
+    pass_name: str,
+) -> None:
+    """Log the errors being sent to the LLM for repair."""
+    codes = [r.get("code", "?") for r in remaining]
+    paths = [r.get("path", "?") for r in remaining[:5]]
+    detail = ", ".join(paths)
+    if len(remaining) > 5:
+        detail += f" (+{len(remaining) - 5} more)"
+    print(
+        f"  {pass_name}: LLM repair turn {turn}/{max_turns} — "
+        f"{len(remaining)} issues: {detail}",
+        file=sys.stderr,
+    )
+
+
+def _log_repair_applied(
+    repairs: list[dict[str, Any]],
+    pass_name: str,
+) -> None:
+    """Log a summary of repairs applied by the LLM."""
+    ops: dict[str, int] = {}
+    for r in repairs:
+        op = r.get("operation", "replace")
+        ops[op] = ops.get(op, 0) + 1
+    op_summary = ", ".join(f"{count}x {op}" for op, count in ops.items())
+    print(
+        f"  {pass_name}: LLM applied {len(repairs)} repair(s) ({op_summary})",
+        file=sys.stderr,
+    )

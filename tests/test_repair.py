@@ -200,12 +200,6 @@ def test_not_auto_fixable_errors_are_kept() -> None:
     issues = [
         {
             "severity": "error",
-            "code": "missing_source_block_refs",
-            "path": "concepts[0].source_block_refs",
-            "message": "Must cite at least one source block.",
-        },
-        {
-            "severity": "error",
             "code": "invalid_grounding",
             "path": "concepts[0].provenance.grounding",
             "message": "Bad grounding.",
@@ -219,7 +213,7 @@ def test_not_auto_fixable_errors_are_kept() -> None:
     ]
     fixed, remaining = fixer.fix(data, issues)
     assert fixed == []
-    assert len(remaining) == 3
+    assert len(remaining) == 2
 
 
 def test_multiple_fixes_in_one_pass() -> None:
@@ -265,3 +259,66 @@ def test_fixer_handles_malformed_paths_gracefully() -> None:
     fixed, remaining = fixer.fix(data, issues)
     # Both should fail gracefully and remain
     assert len(remaining) == 2
+
+
+def test_fix_missing_source_block_refs_inherits_from_merged_source() -> None:
+    """When a concept has merged_from refs pointing to still-present source concepts,
+    inherit source_block_refs from those source concepts."""
+    fixer = DeterministicAutoFixer()
+    data = {
+        "concepts": [
+            {
+                "concept_id": "seg-0001-concept-0001",
+                "surface": "余",
+                "source_block_refs": ["seg-0001-block-0000", "seg-0002-block-0001"],
+                "merged_from": [],
+            },
+            {
+                "concept_id": "concept-0002",
+                "surface": "余",
+                "source_block_refs": [],
+                "merged_from": ["seg-0001-concept-0001"],
+            },
+        ]
+    }
+    issues = [
+        {
+            "severity": "error",
+            "code": "missing_source_block_refs",
+            "path": "concepts[1].source_block_refs",
+            "message": "Source-grounded concepts must cite at least one source block.",
+            "repair_hint": "",
+        }
+    ]
+    fixed, remaining = fixer.fix(data, issues)
+    assert "missing_source_block_refs" in fixed
+    assert remaining == []
+    # Inherited refs from the source concept with matching concept_id
+    assert set(data["concepts"][1]["source_block_refs"]) == {"seg-0001-block-0000", "seg-0002-block-0001"}
+
+
+def test_fix_missing_source_block_refs_no_merged_from_is_not_fixed() -> None:
+    """Concept without merged_from — can't inherit, stays unfixed."""
+    fixer = DeterministicAutoFixer()
+    data = {
+        "concepts": [
+            {
+                "concept_id": "concept-0001",
+                "surface": "白泥",
+                "source_block_refs": [],
+                "merged_from": [],
+            },
+        ]
+    }
+    issues = [
+        {
+            "severity": "error",
+            "code": "missing_source_block_refs",
+            "path": "concepts[0].source_block_refs",
+            "message": "Source-grounded concepts must cite at least one source block.",
+            "repair_hint": "",
+        }
+    ]
+    fixed, remaining = fixer.fix(data, issues)
+    assert fixed == []
+    assert len(remaining) == 1

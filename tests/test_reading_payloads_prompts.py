@@ -499,3 +499,96 @@ def test_segment_merge_single_segment_no_merge_needed() -> None:
     assert result["atomic_items"][0]["item_id"] == "item-0001"
     assert result["atomic_items"][0]["concept_refs"] == ["concept-0001"]
     assert result["unresolved_items"] == []
+
+
+def test_segment_merge_preserves_llm_inferred_grounding() -> None:
+    """Single concept with llm_inferred grounding keeps it (not upgraded to synthesis)."""
+    result = merge_segment_extraction_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "白泥", "concept_type": "object",
+                     "source_block_refs": [],
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "", "summary": "inferred material",
+                     "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"}}
+                ],
+                "atomic_items": [],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    assert len(result["concepts"]) == 1
+    assert result["concepts"][0]["provenance"]["grounding"] == "llm_inferred"
+    assert result["concepts"][0]["source_block_refs"] == []
+
+
+def test_segment_merge_llm_inferred_group_keeps_grounding() -> None:
+    """Multiple llm_inferred concepts with same surface+type keep llm_inferred."""
+    result = merge_segment_extraction_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "白泥", "concept_type": "object",
+                     "source_block_refs": [], "summary": "a",
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "",
+                     "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"}}
+                ],
+                "atomic_items": [],
+            },
+            {
+                "segment_id": "seg-0002",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "白泥", "concept_type": "object",
+                     "source_block_refs": [], "summary": "b",
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "",
+                     "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"}}
+                ],
+                "atomic_items": [],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    assert len(result["concepts"]) == 1
+    assert result["concepts"][0]["provenance"]["grounding"] == "llm_inferred"
+
+
+def test_segment_merge_mixed_grounding_becomes_synthesis() -> None:
+    """Mixing llm_inferred and source_grounded concepts → synthesis."""
+    result = merge_segment_extraction_results(
+        [
+            {
+                "segment_id": "seg-0001",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "白泥", "concept_type": "object",
+                     "source_block_refs": [], "summary": "a",
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "",
+                     "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"}}
+                ],
+                "atomic_items": [],
+            },
+            {
+                "segment_id": "seg-0002",
+                "concepts": [
+                    {"concept_id": "concept-0001", "surface": "白泥", "concept_type": "object",
+                     "source_block_refs": ["b2"], "summary": "b",
+                     "aliases": [], "observed_surfaces": [], "facets": [],
+                     "uncertainty": [], "canonical_name": "",
+                     "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}}
+                ],
+                "atomic_items": [],
+            },
+        ],
+        unit_id="unit-0001",
+    )
+
+    assert len(result["concepts"]) == 1
+    assert result["concepts"][0]["provenance"]["grounding"] == "synthesis"
+    assert set(result["concepts"][0]["source_block_refs"]) == {"b2"}

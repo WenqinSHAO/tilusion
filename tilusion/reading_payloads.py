@@ -346,6 +346,13 @@ def _merge_concept_group(
 
     canonical = _pick_canonical_name(members)
 
+    # Preserve the original grounding when all members agree;
+    # otherwise the merge is genuinely a synthesis.
+    groundings: set[str] = set()
+    for m in members:
+        groundings.add((m.get("provenance") or {}).get("grounding", ""))
+    grounding = groundings.pop() if len(groundings) == 1 and "" not in groundings else "synthesis"
+
     return {
         "concept_id": merged_id,
         "surface": canonical or surface,
@@ -358,7 +365,7 @@ def _merge_concept_group(
         "facets": _union("facets"),
         "uncertainty": _union("uncertainty"),
         "merged_from": merged_from,
-        "provenance": {"grounding": "synthesis", "created_by": "deterministic"},
+        "provenance": {"grounding": grounding, "created_by": "deterministic"},
     }
 
 
