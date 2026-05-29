@@ -135,7 +135,7 @@ Concept delta guidance:
 Logical group guidance:
 
 - Group items by their narrative function: what happens (plot events, actions), who characters are (traits, backstory, relationships), what the world is like (setting, history, rules), and what ideas recur (themes, motifs, symbols). Items that serve the same narrative purpose belong together.
-- A group does not need a complex graph. A simple group with just `group_type`, `summary`, and `item_refs` is valid — not every group needs nodes and edges.
+- Flat collection groups (`theme_set`, `contrast_set`, `open_thread_list`, `method_example_set`) do not need a graph — `group_type`, `summary`, and `item_refs` alone is fine. For structure-rich group types (`timeline`, `temporal_sequence`, `discourse_graph`, `claim_evidence_map`, `concept_map`, `viewpoint_evolution`, `motif_development`), provide graph nodes and edges to capture relationships between items. See specific edge type guidance below.
 - Prefer fewer meaningful groups over many tiny ones. Aim to place most items in a group — an item should be ungrouped only when it genuinely stands alone with no narrative connection to any other item. Cross-group membership is allowed.
 - `item_refs` must refer to existing input `atomic_items[*].item_id` values.
 - `concept_refs` must refer to existing input `concepts[*].concept_id` values.
