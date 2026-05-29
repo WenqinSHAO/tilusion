@@ -272,6 +272,53 @@ class MockReadingBackend:
 
         raise ValueError(f"MockReadingBackend: unknown task {task!r}")
 
+    def start_conversation(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        *,
+        pass_name: str = "",
+    ) -> Any:
+        from .conversation import ConversationContext, TurnMetadata
+
+        raw = self.complete_json(system_prompt, user_payload)
+        ctx = ConversationContext.create(
+            model_identity=self.model_identity,
+            pass_name=pass_name,
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+        )
+        ctx.record_turn(
+            assistant_response=raw,
+            metadata=TurnMetadata(
+                turn_index=1,
+                turn_type="initial",
+                elapsed_ms=0,
+            ),
+        )
+        return ctx
+
+    def continue_conversation(
+        self,
+        conversation: Any,
+        user_message: str,
+    ) -> Any:
+        from .conversation import TurnMetadata
+
+        conversation.append_user_message(user_message)
+        conversation.record_turn(
+            assistant_response=json.dumps(
+                {"repairs": [], "explanation": "mock repair — no fixes needed"},
+                ensure_ascii=False,
+            ),
+            metadata=TurnMetadata(
+                turn_index=conversation.turn_count + 1,
+                turn_type="repair",
+                elapsed_ms=0,
+            ),
+        )
+        return conversation
+
 
 # ── Pass: per-segment extraction ─────────────────────────────────────────────
 

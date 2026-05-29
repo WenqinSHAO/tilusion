@@ -126,6 +126,7 @@ def pass_artifact_paths(pass_dir: Path) -> dict[str, str]:
         "result": str(pass_dir / "result.json"),
         "validation_report": str(pass_dir / "validation_report.json"),
         "validated_result": str(pass_dir / "validated_result.json"),
+        "conversation": str(pass_dir / "conversation.json"),
     }
 
 

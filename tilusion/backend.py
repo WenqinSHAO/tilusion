@@ -6,7 +6,10 @@ import os
 import re
 import sys
 import time
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .conversation import ConversationContext
 
 # ── Constants ──
 
@@ -38,6 +41,22 @@ class LLMBackend(Protocol):
         ...
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+        ...
+
+    def start_conversation(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        *,
+        pass_name: str = "",
+    ) -> ConversationContext:
+        ...
+
+    def continue_conversation(
+        self,
+        conversation: ConversationContext,
+        user_message: str,
+    ) -> ConversationContext:
         ...
 
 
@@ -158,12 +177,68 @@ class DeepSeekBackend:
         return f"deepseek:{self.model}:{thinking_mode}:effort={self.reasoning_effort}:max={self.max_tokens}"
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ]
+        kwargs = self._build_request_kwargs(messages)
+        return self._call_with_retry(kwargs)
+
+    def start_conversation(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        *,
+        pass_name: str = "",
+    ) -> ConversationContext:
+        from .conversation import ConversationContext, TurnMetadata
+
+        ctx = ConversationContext.create(
+            model_identity=self.model_identity,
+            pass_name=pass_name,
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+        )
+        kwargs = self._build_request_kwargs(ctx.messages)
+        started_at = time.monotonic()
+        assistant_response = self._call_with_retry(kwargs)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        ctx.record_turn(
+            assistant_response=assistant_response,
+            metadata=TurnMetadata(
+                turn_index=1,
+                turn_type="initial",
+                elapsed_ms=elapsed_ms,
+            ),
+        )
+        return ctx
+
+    def continue_conversation(
+        self,
+        conversation: ConversationContext,
+        user_message: str,
+    ) -> ConversationContext:
+        from .conversation import TurnMetadata
+
+        conversation.append_user_message(user_message)
+        kwargs = self._build_request_kwargs(conversation.messages)
+        started_at = time.monotonic()
+        assistant_response = self._call_with_retry(kwargs)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        conversation.record_turn(
+            assistant_response=assistant_response,
+            metadata=TurnMetadata(
+                turn_index=conversation.turn_count + 1,
+                turn_type="repair",
+                elapsed_ms=elapsed_ms,
+            ),
+        )
+        return conversation
+
+    def _build_request_kwargs(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-            ],
+            "messages": messages,
             "response_format": {"type": "json_object"},
             "max_tokens": self.max_tokens,
             "stream": False,
@@ -171,7 +246,9 @@ class DeepSeekBackend:
         }
         if self.thinking:
             kwargs["reasoning_effort"] = self.reasoning_effort
+        return kwargs
 
+    def _call_with_retry(self, kwargs: dict[str, Any]) -> str:
         last_exception: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
