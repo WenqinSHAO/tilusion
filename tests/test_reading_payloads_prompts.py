@@ -31,7 +31,7 @@ def test_per_segment_extraction_composition_loads_static_contract() -> None:
     assert composition.parts[0].part_id == "per-segment-extraction-contract"
     assert composition.parts[-1].part_id == "context-pack"
     assert "Return only one JSON object" in composition.content
-    assert "inline block boundary markers" in composition.content
+    assert "inline markers" in composition.content
     assert "atomic_items" in composition.content
     assert "Do not invent block IDs" in composition.content
     assert composition.to_dict()["parts"][0]["metadata"]["schema_version"] == "reading-unit-v0.3"

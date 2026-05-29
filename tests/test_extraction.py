@@ -31,12 +31,12 @@ def test_local_bundle_system_prompt_is_reusable_segment_extraction_contract() ->
     prompt = part.content
     assert "You extract source-grounded reading structures from one text segment" in prompt
     assert "Minimum shape" in prompt
-    assert "Do not build unit-level logical groups" in prompt
+    assert "do not build unit-level logical groups" in prompt
     assert "concept_type" in prompt
     assert "atomic_items" in prompt
     assert "source_blocks" in prompt
     assert "block_id" in prompt
-    assert "smallest navigation/evidence units" in prompt
+    assert "only evidence source" in prompt
 
 
 def test_prompt_composition_tracks_static_and_generated_parts() -> None:

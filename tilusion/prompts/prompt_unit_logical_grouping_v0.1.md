@@ -1,28 +1,8 @@
-You review one unit's merged concepts and atomic items, emit optional concept corrections, and build logical groups with optional graph structure.
+**CRITICAL — Language:** Write ALL text fields in the source language (Chinese→Chinese, English→English). Never translate or mix. Only group_type, delta_type, edge_type, and node/item/concept IDs use English vocabulary.
 
-**CRITICAL — Language:** Write ALL text fields (summary, rationale, warnings, uncertainty, changes descriptions, node labels, edge summaries) in the same language as the source text. If the source is Chinese, write in Chinese. If the source is English, write in English. Never translate or mix languages. Group types, delta types, edge types, and node/item/concept IDs are the only fields that use the English vocabulary from the schema.
+You review merged concepts and atomic items, emit optional concept corrections, and build logical groups with optional graph structure. You receive already-extracted structures — review, correct, and group. Do not re-extract from source text.
 
-Hierarchy:
-- A book or long document is split into extraction units (chapters, sections).
-- Each unit is split into segments for per-segment extraction.
-- Per-segment extraction produces local concepts and atomic items grounded in deterministic source blocks.
-- A deterministic merge step then merges concepts with the same surface and type into unit-level concepts.
-- This pass reviews the merged concepts, emits optional concept deltas (merge, split, refine, reclassify), and builds logical groups from atomic items.
-- Later cross-unit passes may merge concepts and groups across units.
-
-You receive already-extracted structures. Your job is review, correction, and grouping. Do not re-extract from source text.
-
-The caller provides JSON with:
-- `task`: `unit_logical_grouping`.
-- `schema_version`: `reading-unit-v0.3`.
-- `unit_id`: parent reader unit identifier.
-- `unit_text`: the full original unit source text. This is reference material for resolving ambiguous surfaces and understanding context. Do not re-extract from it.
-- `source`: book-level metadata (path, title, unit label).
-- `segments`: segment metadata with `segment_id`, `title`, `summary`, `source_range`, and `region` classification.
-- `concepts`: merged unit-level concepts. Each has a `concept_id` (clean `concept-NNNN`), `surface`, `concept_type`, `merged_from` (list of original segment-scoped IDs), and all standard concept fields.
-- `atomic_items`: stabilized unit-level items with `item_id` (clean `item-NNNN`), `concept_refs` pointing to the concept IDs above, and all standard item fields.
-- `unresolved_items`: surfaces that appear with different types across segments, flagged by the deterministic merge step. Resolve or escalate these.
-- `context`: optional prior document context for alias/continuity guidance only.
+Input JSON fields: `task` ("unit_logical_grouping"), `schema_version` ("reading-unit-v0.3"), `unit_id`, `unit_text` (full original source text — reference only, do not re-extract from it), `source` (book-level metadata: path, title, unit label), `segments` (segment_id, title, summary, source_range, region), `concepts` (merged unit-level concepts with concept_id, surface, concept_type, merged_from, and all standard fields), `atomic_items` (stabilized items with item_id, concept_refs, and all standard fields), `unresolved_items` (surfaces appearing with different types across segments — resolve or escalate), `context` (optional prior-document guidance for alias/continuity, not evidence).
 
 Return only one JSON object. Do not include prose, markdown, or code fences.
 
@@ -101,33 +81,30 @@ Concept delta guidance:
   **Merge only for same identity.** Never merge distinct entities into synthetic collection/category concepts. If records are related but not identical, keep them separate and express the relationship through `logical_groups`.
 
   **Do not merge in these cases:**
-  - Multiple dates or time expressions → each temporal reference is a distinct `time_anchor`. Do not merge them into a "biography timeline" or "date collection" concept.
-  - Multiple places → each place is a distinct `place`. Do not merge them into a "route" or "place series" concept.
-  - Multiple terms, sources, or works → each is a distinct `term` or `source`. Do not merge them into a "terminology group" or "anthology" concept.
-  - Multiple people, organizations, or objects → keep distinct unless you have clear evidence they are the same referent.
+  - Distinct time expressions → each is a separate `time_anchor`. Do not merge dates into a "biography timeline" or "date collection".
+  - Distinct places → each is a separate `place`. Do not merge into a "route" or "place series".
+  - Distinct terms, sources, or works → each is a separate `term` or `source`. Do not merge into a "terminology group" or "anthology".
+  - Distinct people, organizations, or objects → keep separate unless you have clear evidence they are the same referent.
+  - **If in doubt, do not merge.** Use `logical_groups` instead.
 
-  **`canonical_name`** must be the standard name of the same entity (e.g., the historical figure's standard name, the full form of a term, the normalized title of a source). It must not be a summary label, category name, or collection title.
+  **`canonical_name`** must be the standard name of the same entity, not a summary label or category name.
 
-  **If in doubt, do not merge.** Group related items through `logical_groups` instead.
-
-  **Time anchor concepts:** `time_anchor` concepts represent individual temporal mentions (absolute dates, relative times, festivals, seasons, reign periods). Each distinct temporal expression is a separate referent. Two `time_anchor` concepts should only merge when they are the exact same temporal reference expressed identically (e.g., variant writing of the same date). Do not merge multiple dates into a biography timeline, a date range, or a "date collection" concept. In a timeline logical group, reference the individual time_anchor concepts rather than merging them.
+  **Time anchors:** `time_anchor` concepts represent individual temporal mentions. Each distinct temporal expression is a separate referent — only merge when they are the exact same reference with identical/trivially-variant surface. Reference individual time_anchor concepts from timeline groups rather than merging them.
 - `split`: a merged concept actually refers to different entities (e.g., same surface used for distinct referents). Provide the concept to split as `target_refs[0]` and `changes.split_into` with an array of new concept objects, each with `surface`, `concept_type`, `canonical_name`, `summary`, and the `source_block_refs` that belong to each.
 - `refine`: update `canonical_name`, `summary`, `aliases`, `observed_surfaces`, `facets`, or `uncertainty` without changing identity or type.
-- `reclassify`: change `concept_type` only. Use this to consolidate overly fine-grained types. Prefer fewer, coarser categories:
-
-  **Merge these types:** `substance`, `thing`, `format`, `component` → `object` or `technical_component` when technical. `work`, `collection`, `source_statement` → `source`. `condition`, `phenomenon`, `event_type`, `concept` → `theme` or `term`. `role`, `relationship` → `social_role` when it names a social/relational role.
-
-  **Avoid these types:** `event_type` (misleading — these are abstract event categories, not atomic items/events). `thing` (too vague; use `object`). `substance` (use `object` unless truly a material/substance with distinct identity). `work`/`collection` (use `source`). `relationship`/`role` (use `social_role` only when the role itself is the concept).
-
-  **Prefer:** `person`, `group`, `organization`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `emotion`, `social_role`, `institution`, `symbol`, `scene_element`, `technical_component`, `dataset`, `metric`, `source`, `other`.
-
-  **Type definitions for reclassification:**
-  - `source`: only for cited/named texts, books, poems, songs, documents, articles, scriptures, datasets, quoted source materials. A source must have a title or clear name.
-  - `object`: only for concrete salient physical objects that participate in action, symbolism, ownership, exchange, or scene meaning. Do not use as a vague "things" bucket.
-  - `term`: for reusable concepts, technical terms, named expressions that carry specific meaning. Not a catch-all for phrases.
-  - `theme`: for abstract recurring ideas or motifs. A theme is not a replacement for a logical group.
-  - `time_anchor`: for individual temporal mentions (dates, seasons, relative times). Keep distinct temporal references as separate concepts — do not consolidate them into one.
-  - Do not reclassify multiple distinct entities into a single concept just because they share a category. Categories belong in logical groups, not concepts.
+- `reclassify`: change `concept_type` only. Consolidate fine-grained types into coarser ones:
+  - `substance`, `thing`, `format`, `component` → `object` (or `technical_component` when technical).
+  - `work`, `collection`, `source_statement` → `source`.
+  - `condition`, `phenomenon`, `event_type`, `concept` → `theme` or `term`.
+  - `role`, `relationship` → `social_role`.
+  - Avoid: `event_type` (abstract categories, not events), `thing` (use `object`), `substance` (use `object`), `work`/`collection` (use `source`), `relationship`/`role` (use `social_role`).
+  - Prefer: `person`, `group`, `organization`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `emotion`, `social_role`, `institution`, `symbol`, `scene_element`, `technical_component`, `dataset`, `metric`, `source`, `other`.
+  - `source`: only cited/named texts, books, documents, articles, datasets with a title or clear name.
+  - `object`: only concrete salient physical objects in action, symbolism, ownership, exchange, or scene meaning.
+  - `term`: reusable concepts, technical terms, named expressions with specific meaning. Not a catch-all.
+  - `theme`: abstract recurring ideas or motifs. Not a replacement for a logical group.
+  - `time_anchor`: individual temporal mentions. Keep distinct references separate.
+  - Do not reclassify multiple distinct entities into a single concept. Categories belong in logical groups, not concepts.
 
 - Do not emit no-op deltas. If nothing needs changing, return an empty `concept_deltas` list.
 - The caller will apply deltas after your response. You only declare the edits.
