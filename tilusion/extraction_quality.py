@@ -899,7 +899,7 @@ def source_window_needles(quote: str) -> list[str]:
     stripped = quote.strip()
     if not stripped:
         return []
-    candidates = [
+    candidates: list[str] = [
         stripped[:12],
         stripped[:8],
         stripped[:4],
@@ -909,6 +909,13 @@ def source_window_needles(quote: str) -> list[str]:
             candidates.append(part[:12])
             candidates.append(part[:8])
             candidates.append(part[:4])
+            # Also try dropping fabricated prefixes: suffixes of the clause.
+            for drop in (2, 4, 6):
+                suffix = part[drop:]
+                if len(suffix) >= 4:
+                    candidates.append(suffix[:12])
+                    candidates.append(suffix[:8])
+                    candidates.append(suffix[:4])
     unique: list[str] = []
     for candidate in candidates:
         if len(candidate) >= 2 and candidate not in unique:

@@ -66,7 +66,11 @@
   - Post-18 fixes: uncertainty list normalization to prevent validation crashes on LLM-inconsistent types; HTML reading view offset fix for unit-relative vs book-level positions; source block rendering simplified to uniform `.src-block` class.
   - Pre-feature cleanup 2026-05-29: rebalanced graph guidance in logical grouping prompt (`f800153`); compacted all 3 extraction prompts by ~24% to save context space (`ab71552`); added book-hash scoping to cache directories to prevent cross-book unit ID collisions (`6b951e6`).
   - Multi-turn agentic repair loop 2026-05-29: 6 commits implementing the conversation backbone, backend protocol extension, deterministic auto-fixer, agentic repair loop, pipeline integration, and parallel per-segment extraction (`09219a9` → `fa8039c`). Designed in `design/05_multi_turn_agentic_repair.md`. `complete_json()` is untouched for backward compatibility.
-  - **Next step:** Run a real LLM trial on unit-0002/unit-0003 with the DeepSeek backend to validate the repair loop works end-to-end (auto-fix deterministically, repair turns reuse KV cache, full retry as last resort).
+  - Post-repair-loop fixes 2026-05-29: three bug fixes from unit-0007 trial —
+    (1) `resolve_overview_segments` no longer drops segments when only one anchor fails; fills missing boundary from neighbours,
+    (2) `source_window_needles` tries clause suffixes to catch LLM-fabricated quote prefixes,
+    (3) reading view template `.info-item` clicks now highlight item cards and graph nodes.
+  - **Next step:** Re-run unit-0007 pipeline to verify segment-0002 is no longer dropped, and unit-0002/unit-0003 trials to validate the repair loop end-to-end.
 
 ## Implementation Status
 

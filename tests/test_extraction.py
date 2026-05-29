@@ -126,7 +126,52 @@ def test_resolve_overview_segments_deoverlaps_adjacent_segments() -> None:
     assert segments[0].text + segments[1].text == text
 
 
-def test_resolve_overview_segments_reports_unresolved_anchor() -> None:
+def test_resolve_overview_segments_partial_anchor_fills_from_neighbour() -> None:
+    """Segment with only start_quote resolved gets end from next segment's start."""
+    text = "A begins. Middle section with lots of text. B begins. End."
+    data = {
+        "unit_id": "unit-0001",
+        "overview_segments": [
+            {
+                "segment_id": "seg-0001",
+                "title": "A",
+                "summary": "First",
+                "start_quote": "A begins.",
+                "end_quote": "Middle section with lots of text.",
+            },
+            {
+                "segment_id": "seg-0002",
+                "title": "Middle",
+                "summary": "Middle",
+                "start_quote": "Middle section with lots of text.",
+                "end_quote": "not present in source",
+            },
+            {
+                "segment_id": "seg-0003",
+                "title": "B",
+                "summary": "Last",
+                "start_quote": "B begins.",
+                "end_quote": "End.",
+            },
+        ],
+        "warnings": [],
+    }
+
+    segments, repairs = resolve_overview_segments(data, text)
+
+    # seg-0002 should be included despite failed end_quote
+    assert len(segments) == 3
+    assert len(repairs) == 1
+    assert repairs[0]["code"] == "segment_span_unresolved"
+    assert repairs[0]["segment_id"] == "seg-0002"
+    # seg-0002 end should be bounded by seg-0003 start
+    middle_seg = next(s for s in segments if s.segment_id == "seg-0002")
+    last_seg = next(s for s in segments if s.segment_id == "seg-0003")
+    assert middle_seg.end == last_seg.start
+    assert middle_seg.start < middle_seg.end
+
+
+def test_resolve_overview_segments_both_anchors_missing_drops_segment() -> None:
     text = "Only real text."
     data = {
         "unit_id": "unit-0001",

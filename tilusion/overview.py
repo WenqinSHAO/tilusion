@@ -181,8 +181,9 @@ def resolve_overview_segments(
     *,
     anchor_locations: dict[str, EvidenceLocation] | None = None,
 ) -> tuple[list[ResolvedOverviewSegment], list[dict[str, Any]]]:
-    resolved = []
-    repair_hints = []
+    resolved: list[ResolvedOverviewSegment] = []
+    partials: list[dict[str, Any]] = []
+    repair_hints: list[dict[str, Any]] = []
     precomputed = anchor_locations or {}
     segments = overview_data.get("overview_segments") or []
     for index, segment in enumerate(segments):
@@ -201,13 +202,39 @@ def resolve_overview_segments(
             str(segment.get("end_quote") or ""),
             evidence_id=end_key,
         )
-        if (
-            start_location.start is None
-            or end_location.end is None
-            or start_location.status == "ambiguous"
-            or end_location.status == "ambiguous"
-            or end_location.end < start_location.start
-        ):
+        start_ok = (
+            start_location.start is not None
+            and start_location.status != "ambiguous"
+        )
+        end_ok = (
+            end_location.end is not None
+            and end_location.status != "ambiguous"
+        )
+        if start_ok and end_ok and end_location.end >= start_location.start:
+            resolved.append(
+                ResolvedOverviewSegment(
+                    segment_id=segment_id,
+                    title=str(segment.get("title") or segment_id),
+                    summary=str(segment.get("summary") or ""),
+                    start=start_location.start,
+                    end=end_location.end,
+                    text=text[start_location.start : end_location.end],
+                    source=segment,
+                    start_location=start_location,
+                    end_location=end_location,
+                )
+            )
+        elif start_ok or end_ok:
+            partials.append(
+                {
+                    "segment": segment,
+                    "segment_id": segment_id,
+                    "start": start_location.start if start_ok else None,
+                    "end": end_location.end if end_ok else None,
+                    "start_location": start_location,
+                    "end_location": end_location,
+                }
+            )
             repair_hints.append(
                 {
                     "segment_id": segment_id,
@@ -217,22 +244,52 @@ def resolve_overview_segments(
                     "end_location": end_location.to_dict(),
                 }
             )
-            continue
-        resolved.append(
-            ResolvedOverviewSegment(
-                segment_id=segment_id,
-                title=str(segment.get("title") or segment_id),
-                summary=str(segment.get("summary") or ""),
-                start=start_location.start,
-                end=end_location.end,
-                text=text[start_location.start : end_location.end],
-                source=segment,
-                start_location=start_location,
-                end_location=end_location,
+        else:
+            repair_hints.append(
+                {
+                    "segment_id": segment_id,
+                    "code": "segment_span_unresolved",
+                    "repair_hint": "Provide distinctive start_quote and end_quote anchors in source order.",
+                    "start_location": start_location.to_dict(),
+                    "end_location": end_location.to_dict(),
+                }
             )
-        )
-    # De-overlap: ensure segments are disjoint.
+
     resolved.sort(key=lambda s: s.start)
+
+    # Fill in missing boundaries for partial segments from neighbours.
+    for p in partials:
+        if p["start"] is None and p["end"] is not None:
+            prev_end = 0
+            for r in resolved:
+                if r.end <= p["end"]:
+                    prev_end = max(prev_end, r.end)
+            p["start"] = prev_end
+        elif p["end"] is None and p["start"] is not None:
+            next_start = len(text)
+            for r in resolved:
+                if r.start >= p["start"]:
+                    next_start = min(next_start, r.start)
+            p["end"] = next_start
+
+        if p["start"] is not None and p["end"] is not None and p["start"] < p["end"]:
+            resolved.append(
+                ResolvedOverviewSegment(
+                    segment_id=p["segment_id"],
+                    title=str(p["segment"].get("title") or p["segment_id"]),
+                    summary=str(p["segment"].get("summary") or ""),
+                    start=p["start"],
+                    end=p["end"],
+                    text=text[p["start"] : p["end"]],
+                    source=p["segment"],
+                    start_location=p["start_location"],
+                    end_location=p["end_location"],
+                )
+            )
+
+    resolved.sort(key=lambda s: s.start)
+
+    # De-overlap: ensure segments are disjoint.
     for i in range(len(resolved) - 1):
         if resolved[i].end > resolved[i + 1].start:
             resolved[i].end = resolved[i + 1].start

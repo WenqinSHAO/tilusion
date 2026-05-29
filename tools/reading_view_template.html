@@ -1096,6 +1096,16 @@ function activateItem(itemId) {
     document.querySelectorAll(`mark[data-concept="${cid}"]`).forEach(m => m.classList.add('active-span'));
   });
 
+  // Highlight item cards in right pane
+  document.querySelectorAll(`.item-card[data-item="${itemId}"]`).forEach(card => {
+    card.classList.add('active');
+  });
+
+  // Highlight graph nodes in right pane
+  document.querySelectorAll(`.graph-node[data-item="${itemId}"] .node-rect`).forEach(rect => {
+    rect.classList.add('selected');
+  });
+
   const firstBlock = item.source_block_refs?.[0];
   if (firstBlock) {
     const el = document.querySelector(`[data-block="${firstBlock}"]`);
@@ -1148,16 +1158,22 @@ function showBlockInfo(el, blockId) {
   // Wire info item clicks
   blockInfo.querySelectorAll('.info-item').forEach(infoItem => {
     infoItem.addEventListener('click', () => {
-      activateItem(infoItem.dataset.item);
-      // Navigate to a group containing this item
-      for (const g of GROUPS) {
-        if ((g.item_refs || []).includes(infoItem.dataset.item)) {
-          document.querySelectorAll('#sidebarNav .nav-item').forEach(n => n.classList.remove('active'));
-          activateGroupSilent(g.group_id);
+      // Find all groups containing this item
+      const matchingGroups = GROUPS.filter(g => (g.item_refs || []).includes(infoItem.dataset.item));
+      document.querySelectorAll('#sidebarNav .nav-item').forEach(n => n.classList.remove('active'));
+      if (matchingGroups.length) {
+        // Highlight all matching group nav items
+        matchingGroups.forEach(g => {
           document.querySelector(`#sidebarNav .nav-item[data-group="${g.group_id}"]`)?.classList.add('active');
-          break;
-        }
+        });
+        // Activate the first matching group (renders cards / graph nodes)
+        activateGroupSilent(matchingGroups[0].group_id);
+        // Scroll the sidebar nav so the first matching group is visible
+        const firstNav = document.querySelector(`#sidebarNav .nav-item[data-group="${matchingGroups[0].group_id}"]`);
+        firstNav?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
+      // Highlight item after group content is rendered (cards / graph nodes now exist)
+      activateItem(infoItem.dataset.item);
     });
   });
 
@@ -1179,6 +1195,8 @@ function clearSourceHighlights() {
   document.querySelectorAll('.item-highlight').forEach(el => el.classList.remove('item-highlight'));
   document.querySelectorAll('.node-rect.item-highlight').forEach(r => r.classList.remove('item-highlight'));
   document.querySelectorAll('.item-card.item-highlight').forEach(c => c.classList.remove('item-highlight'));
+  document.querySelectorAll('.item-card.active').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.graph-node .node-rect.selected').forEach(r => r.classList.remove('selected'));
 }
 
 function clearAll() {
