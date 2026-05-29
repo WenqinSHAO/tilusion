@@ -385,26 +385,51 @@ def run_per_segment_extraction_pass(
         raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
         data = json.loads(result_path.read_text(encoding="utf-8"))
     else:
-        raw_response = backend.complete_json(prompt.content, payload)
-        data = parse_json_response(raw_response)
+        block_dicts = [b.to_dict() for b in blocks]
+
+        def _build_subject(llm_data: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "schema_version": READING_UNIT_SCHEMA_VERSION,
+                "unit_id": unit_id,
+                "source": {"unit_text": block_unit_text} if unit_text is not None else {},
+                "source_blocks": block_dicts,
+                "concepts": llm_data.get("concepts", []),
+                "atomic_items": llm_data.get("atomic_items", []),
+                "logical_groups": [],
+                "unresolved_items": [],
+                "validation": {},
+                "context_metadata": {},
+            }
+
+        from .repair import run_agentic_pass
+
+        data, conversation, validation_report = run_agentic_pass(
+            backend=backend,
+            prompt=prompt,
+            payload=payload,
+            validation_subject_builder=_build_subject,
+            pass_name="per-segment-extraction",
+        )
+        raw_response = _last_assistant_content(conversation)
 
     _normalize_uncertainty_fields(data)
 
-    # Build a v0.3 validation subject with authoritative source blocks
-    validation_subject = {
-        "schema_version": READING_UNIT_SCHEMA_VERSION,
-        "unit_id": unit_id,
-        "source": {"unit_text": block_unit_text} if unit_text is not None else {},
-        "source_blocks": [b.to_dict() for b in blocks],
-        "concepts": data.get("concepts", []),
-        "atomic_items": data.get("atomic_items", []),
-        "logical_groups": [],
-        "unresolved_items": [],
-        "validation": {},
-        "context_metadata": {},
-    }
-    validation_report = validate_extraction_unit_package(validation_subject)
-    _raise_on_validation_errors("per-segment-extraction", validation_report)
+    # Re-validate if cache hit (no agentic loop ran)
+    if cache_hit:
+        validation_subject = {
+            "schema_version": READING_UNIT_SCHEMA_VERSION,
+            "unit_id": unit_id,
+            "source": {"unit_text": block_unit_text} if unit_text is not None else {},
+            "source_blocks": [b.to_dict() for b in blocks],
+            "concepts": data.get("concepts", []),
+            "atomic_items": data.get("atomic_items", []),
+            "logical_groups": [],
+            "unresolved_items": [],
+            "validation": {},
+            "context_metadata": {},
+        }
+        validation_report = validate_extraction_unit_package(validation_subject)
+        _raise_on_validation_errors("per-segment-extraction", validation_report)
 
     # Compute factual per-segment counts for logging and final aggregation.
     llm_concepts = data.get("concepts", [])
@@ -455,6 +480,7 @@ def run_per_segment_extraction_pass(
             data=record.data,
             validation_report=validation_report,
             record=record,
+            conversation=locals().get("conversation"),
         )
 
     return record
@@ -689,6 +715,14 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _last_assistant_content(conversation: Any) -> str:
+    """Return the content of the last assistant message in the conversation."""
+    for msg in reversed(conversation.messages):
+        if msg.get("role") == "assistant":
+            return str(msg.get("content", ""))
+    return ""
+
+
 def _normalize_uncertainty_fields(data: dict[str, Any]) -> dict[str, Any]:
     """Coerce non-string uncertainty list items to strings in-place.
 
@@ -905,64 +939,113 @@ def run_unit_logical_grouping_pass(
         raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
         data = json.loads(result_path.read_text(encoding="utf-8"))
     else:
-        raw_response = backend.complete_json(prompt.content, payload)
-        data = parse_json_response(raw_response)
+        # The validation_subject_builder does all deterministic post-processing
+        # (delta screening, application, dedupe, remap). With return_subject=True,
+        # run_agentic_pass returns the final post-processed validation subject.
+        def _build_grouping_subject(llm_data: dict[str, Any]) -> dict[str, Any]:
+            _normalize_uncertainty_fields(llm_data)
+            deltas = llm_data.get("concept_deltas", [])
+            safe_deltas, rejected_merges = _validate_merge_deltas(deltas, concepts)
 
-    _normalize_uncertainty_fields(data)
+            uc, concept_remap = _apply_concept_deltas(concepts, safe_deltas, unit_id=unit_id)
+            uc, dedupe_remap = _dedupe_equivalent_concepts(uc)
+            final_remap = _compose_concept_remaps(concept_remap, dedupe_remap)
 
-    # Screen LLM merge deltas for unsafe patterns (synthetic collections,
-    # merging distinct time_anchor/place/source concepts, etc.) before
-    # applying them. Rejected merges become unresolved_items.
-    deltas = data.get("concept_deltas", [])
-    safe_deltas, rejected_merges = _validate_merge_deltas(deltas, concepts)
+            remapped_items: list[dict[str, Any]] = []
+            for item in atomic_items:
+                updated = dict(item)
+                updated["concept_refs"] = [
+                    final_remap.get(ref, ref) for ref in item.get("concept_refs", [])
+                ]
+                remapped_items.append(updated)
 
-    # Apply concept deltas, then dedupe any concepts that became equivalent
-    # after reclassification/refinement. This catches common LLM repair output
-    # where the model fixes types but forgets to emit a separate merge delta.
-    updated_concepts, concept_remap = _apply_concept_deltas(
-        concepts, safe_deltas, unit_id=unit_id
-    )
-    updated_concepts, dedupe_remap = _dedupe_equivalent_concepts(updated_concepts)
-    final_concept_remap = _compose_concept_remaps(concept_remap, dedupe_remap)
-    groups = data.get("logical_groups", [])
+            groups = llm_data.get("logical_groups", [])
+            remapped_groups: list[dict[str, Any]] = []
+            for group in groups:
+                updated = dict(group)
+                updated["concept_refs"] = [
+                    final_remap.get(ref, ref) for ref in group.get("concept_refs", [])
+                ]
+                remapped_groups.append(updated)
 
-    # Remap item concept_refs for any concept IDs that were merged/renamed
-    updated_items: list[dict[str, Any]] = []
-    for item in atomic_items:
-        updated = dict(item)
-        updated["concept_refs"] = [
-            final_concept_remap.get(ref, ref) for ref in item.get("concept_refs", [])
-        ]
-        updated_items.append(updated)
+            llm_unresolved = llm_data.get("unresolved_items", [])
+            merge_rejection_items = _build_merge_rejection_items(rejected_merges, llm_unresolved)
+            all_unresolved = list(llm_unresolved) + merge_rejection_items
 
-    # Remap concept_refs in logical groups
-    updated_groups: list[dict[str, Any]] = []
-    for group in groups:
-        updated = dict(group)
-        updated["concept_refs"] = [
-            final_concept_remap.get(ref, ref) for ref in group.get("concept_refs", [])
-        ]
-        updated_groups.append(updated)
+            return {
+                "schema_version": READING_UNIT_SCHEMA_VERSION,
+                "unit_id": unit_id,
+                "source": {**source, "unit_text": unit_text},
+                "source_blocks": source_blocks,
+                "concepts": uc,
+                "atomic_items": remapped_items,
+                "logical_groups": remapped_groups,
+                "unresolved_items": all_unresolved,
+                "validation": {},
+                "context_metadata": {},
+            }
 
-    # Fold rejected merge proposals into unresolved_items
-    llm_unresolved = data.get("unresolved_items", [])
-    merge_rejection_items = _build_merge_rejection_items(rejected_merges, llm_unresolved)
-    all_unresolved = list(llm_unresolved) + merge_rejection_items
+        from .repair import run_agentic_pass
 
-    validation_subject = {
-        "schema_version": READING_UNIT_SCHEMA_VERSION,
-        "unit_id": unit_id,
-        "source": {**source, "unit_text": unit_text},
-        "source_blocks": source_blocks,
-        "concepts": updated_concepts,
-        "atomic_items": updated_items,
-        "logical_groups": updated_groups,
-        "unresolved_items": all_unresolved,
-        "validation": {},
-        "context_metadata": {},
-    }
-    validation_report = validate_extraction_unit_package(validation_subject)
-    _raise_on_validation_errors("unit-logical-grouping", validation_report)
+        data, conversation, validation_report = run_agentic_pass(
+            backend=backend,
+            prompt=prompt,
+            payload=payload,
+            validation_subject_builder=_build_grouping_subject,
+            pass_name="unit-logical-grouping",
+            return_subject=True,
+        )
+        raw_response = _last_assistant_content(conversation)
+
+    # When return_subject=True, data IS the final validation subject with
+    # post-processed concepts/items/groups. Extract fields for the record.
+    if not cache_hit:
+        updated_concepts = data.get("concepts", [])
+        updated_items = data.get("atomic_items", [])
+        updated_groups = data.get("logical_groups", [])
+        all_unresolved = data.get("unresolved_items", [])
+    else:
+        _normalize_uncertainty_fields(data)
+        deltas = data.get("concept_deltas", [])
+        safe_deltas, rejected_merges = _validate_merge_deltas(deltas, concepts)
+        updated_concepts, concept_remap = _apply_concept_deltas(
+            concepts, safe_deltas, unit_id=unit_id
+        )
+        updated_concepts, dedupe_remap = _dedupe_equivalent_concepts(updated_concepts)
+        final_concept_remap = _compose_concept_remaps(concept_remap, dedupe_remap)
+        groups = data.get("logical_groups", [])
+        updated_items: list[dict[str, Any]] = []
+        for item in atomic_items:
+            updated = dict(item)
+            updated["concept_refs"] = [
+                final_concept_remap.get(ref, ref) for ref in item.get("concept_refs", [])
+            ]
+            updated_items.append(updated)
+        updated_groups = []
+        for group in groups:
+            updated = dict(group)
+            updated["concept_refs"] = [
+                final_concept_remap.get(ref, ref) for ref in group.get("concept_refs", [])
+            ]
+            updated_groups.append(updated)
+        llm_unresolved = data.get("unresolved_items", [])
+        merge_rejection_items = _build_merge_rejection_items(rejected_merges, llm_unresolved)
+        all_unresolved = list(llm_unresolved) + merge_rejection_items
+
+        validation_subject = {
+            "schema_version": READING_UNIT_SCHEMA_VERSION,
+            "unit_id": unit_id,
+            "source": {**source, "unit_text": unit_text},
+            "source_blocks": source_blocks,
+            "concepts": updated_concepts,
+            "atomic_items": updated_items,
+            "logical_groups": updated_groups,
+            "unresolved_items": all_unresolved,
+            "validation": {},
+            "context_metadata": {},
+        }
+        validation_report = validate_extraction_unit_package(validation_subject)
+        _raise_on_validation_errors("unit-logical-grouping", validation_report)
 
     # ── Compute factual grouping counts ──
     grouping_counts = _compute_grouping_counts(updated_groups, updated_items)
@@ -1001,6 +1084,7 @@ def run_unit_logical_grouping_pass(
             data=record.data,
             validation_report=validation_report,
             record=record,
+            conversation=locals().get("conversation"),
         )
 
     return record
@@ -1253,6 +1337,7 @@ def _write_reading_pass_artifacts(
     data: dict[str, Any],
     validation_report: ReadingValidationReport,
     record: ReadingPassRecord,
+    conversation: Any = None,
 ) -> None:
     pass_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1273,6 +1358,10 @@ def _write_reading_pass_artifacts(
     )
     Path(paths["validated_result"]).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
+    if conversation is not None and hasattr(conversation, "to_dict"):
+        Path(paths["conversation"]).write_text(
+            json.dumps(conversation.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
 
 def _derive_run_key(passes: dict[str, dict[str, Any]]) -> str:

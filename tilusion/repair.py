@@ -344,6 +344,7 @@ def run_agentic_pass(
     *,
     max_repair_turns: int = DEFAULT_MAX_REPAIR_TURNS,
     pass_name: str = "",
+    return_subject: bool = False,
 ) -> tuple[dict[str, Any], ConversationContext, ReadingValidationReport]:
     """Run a pass with an agentic validation-repair loop.
 
@@ -351,6 +352,10 @@ def run_agentic_pass(
     If validation passes, return immediately.
     Otherwise: auto-fix → re-validate → compact LLM repair with KV-cache
     reuse → re-validate → loop. On exhaustion, full retry (new conversation).
+
+    If *return_subject* is True, the first return value is the final
+    validation subject (after post-processing and any auto-fixes/repairs).
+    Otherwise it is the raw parsed LLM response.
 
     Returns ``(data, conversation, final_validation_report)``.
     """
@@ -371,7 +376,8 @@ def run_agentic_pass(
 
     if report.passed:
         _update_conversation_validation(conversation, report)
-        return data, conversation, report
+        result = validation_subject if return_subject else data
+        return result, conversation, report
 
     # Enter repair loop
     data, conversation, report = _repair_loop(
@@ -383,6 +389,7 @@ def run_agentic_pass(
         prompt=prompt,
         payload=payload,
         pass_name=pass_name,
+        return_subject=return_subject,
     )
     return data, conversation, report
 
@@ -396,6 +403,7 @@ def _repair_loop(
     prompt: PromptComposition,
     payload: dict[str, Any],
     pass_name: str,
+    return_subject: bool = False,
 ) -> tuple[dict[str, Any], ConversationContext, ReadingValidationReport]:
     """Inner repair loop: auto-fix → LLM repair → re-validate → repeat."""
     from .backend import parse_json_response
@@ -411,7 +419,8 @@ def _repair_loop(
 
         if report.passed:
             _update_conversation_validation(conversation, report)
-            return data, conversation, report
+            result = validation_subject if return_subject else data
+            return result, conversation, report
 
         # Layer 1: deterministic auto-fix
         issues_dicts = [issue.to_dict() for issue in report.issues]
@@ -425,7 +434,8 @@ def _repair_loop(
                 final_subject = validation_subject_builder(data)
                 final_report = validate_extraction_unit_package(final_subject)
                 _update_conversation_validation(conversation, final_report)
-                return data, conversation, final_report
+                result = final_subject if return_subject else data
+                return result, conversation, final_report
 
         # Layer 2: compact LLM repair (if turns remain)
         if repair_turns >= max_repair_turns:
@@ -465,7 +475,8 @@ def _repair_loop(
     validation_subject = validation_subject_builder(data)
     report = validate_extraction_unit_package(validation_subject)
     _update_conversation_validation(conversation, report)
-    return data, conversation, report
+    result = validation_subject if return_subject else data
+    return result, conversation, report
 
 
 def build_repair_message(errors: list[dict[str, Any]]) -> str:
