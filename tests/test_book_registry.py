@@ -1,0 +1,654 @@
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from tilusion.book_registry import (
+    BookRegistry,
+    CollisionInfo,
+    DeterministicConceptMerger,
+    KeepExistingConceptMerger,
+    MergeRejectedError,
+)
+from tilusion.reading_payloads import _merge_concept_group, _pick_canonical_name
+from tilusion.reading_schema import (
+    AtomicItem,
+    Concept,
+    LogicalGroup,
+    normalize_concept_type,
+)
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _dict_to_concept(d: dict) -> Concept:
+    return Concept(
+        concept_id=d.get("concept_id", ""),
+        surface=d.get("surface", ""),
+        concept_type=d.get("concept_type", ""),
+        canonical_name=d.get("canonical_name") or None,
+        summary=d.get("summary", ""),
+        aliases=list(d.get("aliases", [])),
+        observed_surfaces=list(d.get("observed_surfaces", [])),
+        source_block_refs=list(d.get("source_block_refs", [])),
+        facets=list(d.get("facets", [])),
+        uncertainty=list(d.get("uncertainty", [])),
+        provenance=dict(d.get("provenance", {})),
+    )
+
+
+def _make_registry(book_path: str | None = None) -> BookRegistry:
+    if book_path is None:
+        book_path = tempfile.mkdtemp(prefix="test_book_")
+    cache_root = tempfile.mkdtemp(prefix="test_cache_")
+    return BookRegistry(book_path, cache_root=cache_root)
+
+
+def _cleanup(reg: BookRegistry) -> None:
+    shutil.rmtree(str(reg._cache_dir), ignore_errors=True)
+    # book_path is a temp dir, clean it too if it looks like one
+    bp = str(reg._book_path)
+    if "/test_book_" in bp or "/tmp/" in bp:
+        shutil.rmtree(bp, ignore_errors=True)
+
+
+# ── DeterministicConceptMerger tests ───────────────────────────────────────
+
+
+class TestDeterministicConceptMerger:
+    def test_merge_single_returns_same(self) -> None:
+        c = Concept(
+            concept_id="concept-0001", surface="Confucius",
+            concept_type="person", canonical_name="Confucius",
+            summary="A philosopher",
+        )
+        result = DeterministicConceptMerger.merge([c])
+        assert result.concept_id == "concept-0001"
+        assert result.surface == "Confucius"
+
+    def test_merge_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least one"):
+            DeterministicConceptMerger.merge([])
+
+    def test_picks_longest_canonical_name(self) -> None:
+        c1 = Concept(
+            concept_id="c1", surface="X", concept_type="person",
+            canonical_name="Short",
+        )
+        c2 = Concept(
+            concept_id="c2", surface="X", concept_type="person",
+            canonical_name="LongerName",
+        )
+        result = DeterministicConceptMerger.merge([c1, c2])
+        assert result.canonical_name == "LongerName"
+
+    def test_canonical_name_tie_broken_alphabetically(self) -> None:
+        c1 = Concept(
+            concept_id="c1", surface="X", concept_type="person",
+            canonical_name="Beta",
+        )
+        c2 = Concept(
+            concept_id="c2", surface="X", concept_type="person",
+            canonical_name="Alpha",
+        )
+        result = DeterministicConceptMerger.merge([c1, c2])
+        # Both length 4; Alpha < Beta alphabetically
+        assert result.canonical_name == "Alpha"
+
+    def test_first_nonempty_summary(self) -> None:
+        c1 = Concept(
+            concept_id="c1", surface="X", concept_type="person",
+            summary="",
+        )
+        c2 = Concept(
+            concept_id="c2", surface="X", concept_type="person",
+            summary="Second summary",
+        )
+        c3 = Concept(
+            concept_id="c3", surface="X", concept_type="person",
+            summary="Third summary",
+        )
+        result = DeterministicConceptMerger.merge([c1, c2, c3])
+        assert result.summary == "Second summary"
+
+    def test_union_of_list_fields(self) -> None:
+        c1 = Concept(
+            concept_id="c1", surface="X", concept_type="person",
+            aliases=["a1"], facets=["f1"], source_block_refs=["b1"],
+            observed_surfaces=["X"], uncertainty=["low"],
+        )
+        c2 = Concept(
+            concept_id="c2", surface="X", concept_type="person",
+            aliases=["a2"], facets=["f1", "f2"], source_block_refs=["b2"],
+            observed_surfaces=["Y"], uncertainty=[],
+        )
+        result = DeterministicConceptMerger.merge([c1, c2])
+        assert result.aliases == ["a1", "a2"]
+        assert result.facets == ["f1", "f2"]
+        assert set(result.source_block_refs) == {"b1", "b2"}
+        assert set(result.observed_surfaces) == {"X", "Y"}
+
+    def test_provenance_deterministic_when_groundings_agree(self) -> None:
+        c1 = Concept(
+            concept_id="c1", surface="X", concept_type="person",
+            provenance={"grounding": "source_grounded"},
+        )
+        c2 = Concept(
+            concept_id="c2", surface="X", concept_type="person",
+            provenance={"grounding": "source_grounded"},
+        )
+        result = DeterministicConceptMerger.merge([c1, c2])
+        assert result.provenance["grounding"] == "source_grounded"
+
+    def test_provenance_synthesis_when_groundings_differ(self) -> None:
+        c1 = Concept(
+            concept_id="c1", surface="X", concept_type="person",
+            provenance={"grounding": "source_grounded"},
+        )
+        c2 = Concept(
+            concept_id="c2", surface="X", concept_type="person",
+            provenance={"grounding": "llm_inferred"},
+        )
+        result = DeterministicConceptMerger.merge([c1, c2])
+        assert result.provenance["grounding"] == "synthesis"
+
+    def test_merged_from_populated(self) -> None:
+        c1 = Concept(concept_id="c1", surface="X", concept_type="person")
+        c2 = Concept(concept_id="c2", surface="X", concept_type="person")
+        result = DeterministicConceptMerger.merge([c1, c2])
+        assert result.provenance["merged_from"] == ["c1", "c2"]
+
+
+# ── KeepExistingConceptMerger tests ────────────────────────────────────────
+
+
+class TestKeepExistingConceptMerger:
+    def test_returns_first(self) -> None:
+        c1 = Concept(concept_id="c1", surface="A", concept_type="person")
+        c2 = Concept(concept_id="c2", surface="B", concept_type="person")
+        result = KeepExistingConceptMerger.merge([c1, c2])
+        assert result.concept_id == "c1"
+
+
+# ── Merge parity with _merge_concept_group ──────────────────────────────────
+
+
+class TestMergeParity:
+    """DeterministicConceptMerger produces identical output to
+    _merge_concept_group for the same inputs."""
+
+    def test_parity_basic_merge(self) -> None:
+        members = [
+            {
+                "concept_id": "concept-0001", "surface": "余",
+                "concept_type": "person", "summary": "narrator",
+                "source_block_refs": ["b1"], "aliases": [],
+                "observed_surfaces": ["余"], "facets": [],
+                "uncertainty": [], "canonical_name": "",
+            },
+            {
+                "concept_id": "concept-0002", "surface": "余",
+                "concept_type": "person", "summary": "husband",
+                "source_block_refs": ["b2"], "aliases": [],
+                "observed_surfaces": ["余"], "facets": [],
+                "uncertainty": [], "canonical_name": "沈复",
+            },
+        ]
+        # Old way
+        old_result = _merge_concept_group(
+            "merged-1", "余", "person", members,
+        )
+        # New way
+        concepts = [_dict_to_concept(m) for m in members]
+        new_result = DeterministicConceptMerger.merge(concepts)
+
+        assert new_result.canonical_name == old_result["canonical_name"]
+        assert new_result.surface == old_result["surface"]
+        assert new_result.summary == old_result["summary"]
+        assert new_result.provenance["merged_from"] == old_result["merged_from"]
+        assert new_result.provenance["grounding"] == old_result["provenance"]["grounding"]
+
+    def test_parity_canonical_name_merge(self) -> None:
+        """Cross-surface merge via shared canonical_name."""
+        members = [
+            {
+                "concept_id": "concept-0001", "surface": "相如",
+                "concept_type": "person", "summary": "汉代辞赋家",
+                "source_block_refs": ["b1"], "aliases": [],
+                "observed_surfaces": ["相如"], "facets": [],
+                "uncertainty": [], "canonical_name": "司马相如",
+            },
+            {
+                "concept_id": "concept-0002", "surface": "长卿",
+                "concept_type": "person", "summary": "字长卿",
+                "source_block_refs": ["b2"], "aliases": ["司马长卿"],
+                "observed_surfaces": ["长卿"], "facets": [],
+                "uncertainty": [], "canonical_name": "司马相如",
+            },
+        ]
+        old_result = _merge_concept_group(
+            "merged-1", "相如", "person", members,
+        )
+        concepts = [_dict_to_concept(m) for m in members]
+        new_result = DeterministicConceptMerger.merge(concepts)
+
+        assert new_result.canonical_name == old_result["canonical_name"]
+        assert new_result.aliases == old_result["aliases"]
+        assert new_result.provenance["merged_from"] == old_result["merged_from"]
+
+
+# ── BookRegistry CRUD tests ────────────────────────────────────────────────
+
+
+class TestBookRegistryCRUD:
+    @pytest.fixture(autouse=True)
+    def _setup_teardown(self) -> None:
+        self.reg = _make_registry()
+        yield
+        _cleanup(self.reg)
+
+    def _add_person(self, surface: str, cname: str | None = None,
+                    **kwargs) -> tuple[str, CollisionInfo | None]:
+        return self.reg.add_concept(Concept(
+            concept_id="", surface=surface, concept_type="person",
+            canonical_name=cname, **kwargs,
+        ))
+
+    def test_add_and_get_concept(self) -> None:
+        cid, collision = self._add_person("Confucius", "Confucius",
+                                           summary="A philosopher")
+        assert cid == "concept-0001"
+        assert collision is None
+
+        c = self.reg.get_concept(cid)
+        assert c is not None
+        assert c.surface == "Confucius"
+        assert c.concept_type == "person"
+
+    def test_add_concepts_batch(self) -> None:
+        concepts = [
+            Concept(concept_id="", surface=f"Entity_{i}",
+                    concept_type="person")
+            for i in range(3)
+        ]
+        results = self.reg.add_concepts(concepts)
+        assert len(results) == 3
+        assert [r[0] for r in results] == [
+            "concept-0001", "concept-0002", "concept-0003",
+        ]
+
+    def test_get_nonexistent_concept(self) -> None:
+        assert self.reg.get_concept("concept-9999") is None
+
+    def test_collision_same_surface_and_type(self) -> None:
+        self._add_person("Confucius", "Confucius")
+        _, collision = self._add_person("Confucius", "Confucius")
+        assert collision is not None
+        assert collision.match_reason == "exact_match"
+        assert collision.existing_concept_id == "concept-0001"
+
+    def test_collision_same_cname_different_surface(self) -> None:
+        self._add_person("Confucius", "Confucius")
+        _, collision = self.reg.add_concept(Concept(
+            concept_id="", surface="Kongzi", concept_type="person",
+            canonical_name="Confucius",
+        ))
+        assert collision is not None
+        assert collision.match_reason == "alias_match"
+
+    def test_no_collision_different_everything(self) -> None:
+        self._add_person("Confucius", "Confucius")
+        _, collision = self._add_person("Mencius", "Mencius")
+        assert collision is None
+
+    def test_find_collisions_multiple_matches(self) -> None:
+        self._add_person("Confucius", "Confucius")
+        self.reg.add_concept(Concept(
+            concept_id="", surface="Kongzi", concept_type="person",
+            canonical_name="Confucius",
+        ), force=True)
+
+        collisions = self.reg.find_collisions(Concept(
+            concept_id="", surface="Confucius", concept_type="person",
+            canonical_name="Confucius",
+        ))
+        reasons = {c.match_reason for c in collisions}
+        assert "exact_match" in reasons
+        assert "alias_match" in reasons
+
+    def test_get_by_surface(self) -> None:
+        self._add_person("Confucius", "Confucius")
+        results = self.reg.get_by_surface("Confucius")
+        assert len(results) == 1
+        assert results[0].surface == "Confucius"
+
+    def test_get_by_canonical_name(self) -> None:
+        self._add_person("Confucius", "Confucius")
+        results = self.reg.get_by_canonical_name("Confucius")
+        assert len(results) == 1
+
+    def test_get_by_surface_nonexistent(self) -> None:
+        assert self.reg.get_by_surface("Nobody") == []
+
+    def test_get_by_canonical_name_nonexistent(self) -> None:
+        assert self.reg.get_by_canonical_name("Nobody") == []
+
+
+# ── BookRegistry merge tests ───────────────────────────────────────────────
+
+
+class TestBookRegistryMerge:
+    @pytest.fixture(autouse=True)
+    def _setup_teardown(self) -> None:
+        self.reg = _make_registry()
+        yield
+        _cleanup(self.reg)
+
+    def _add(self, surface: str, cname: str | None = None,
+              ctype: str = "person", **kwargs) -> str:
+        cid, _ = self.reg.add_concept(Concept(
+            concept_id="", surface=surface, concept_type=ctype,
+            canonical_name=cname, **kwargs,
+        ))
+        return cid
+
+    def _force_add(self, surface: str, cname: str | None = None,
+                   ctype: str = "person", **kwargs) -> str:
+        cid, _ = self.reg.add_concept(Concept(
+            concept_id="", surface=surface, concept_type=ctype,
+            canonical_name=cname, **kwargs,
+        ), force=True)
+        return cid
+
+    def test_merge_with_shared_canonical_name(self) -> None:
+        cid1 = self._add("Confucius", "Confucius")
+        cid2 = self._force_add("Kongzi", "Confucius")
+        merged_id = self.reg.merge_concepts([cid1, cid2])
+        assert merged_id != cid1
+        assert merged_id != cid2
+        assert self.reg.get_concept(cid1) is None
+        assert self.reg.get_concept(cid2) is None
+        merged = self.reg.get_concept(merged_id)
+        assert merged is not None
+        assert merged.canonical_name == "Confucius"
+
+    def test_merge_with_same_surface(self) -> None:
+        cid1 = self._add("Confucius", "Confucius")
+        cid2 = self._force_add("Confucius", "")  # same surface, no cname
+        merged_id = self.reg.merge_concepts([cid1, cid2])
+        merged = self.reg.get_concept(merged_id)
+        assert merged is not None
+        assert merged.surface == "Confucius"
+
+    def test_merge_rejects_distinct_places(self) -> None:
+        cid1 = self._add("Beijing", ctype="place")
+        cid2 = self._force_add("Shanghai", ctype="place")
+        with pytest.raises(MergeRejectedError, match="place"):
+            self.reg.merge_concepts([cid1, cid2])
+
+    def test_merge_rejects_distinct_time_anchors(self) -> None:
+        cid1 = self._add("2020", ctype="time_anchor")
+        cid2 = self._force_add("2021", ctype="time_anchor")
+        with pytest.raises(MergeRejectedError, match="time_anchor"):
+            self.reg.merge_concepts([cid1, cid2])
+
+    def test_merge_rejects_different_types_no_shared_cname(self) -> None:
+        cid1 = self._add("Confucius", "Confucius", ctype="person")
+        cid2 = self._force_add("Confucianism", ctype="theme")
+        with pytest.raises(MergeRejectedError):
+            self.reg.merge_concepts([cid1, cid2])
+
+    def test_merge_requires_two_distinct_ids(self) -> None:
+        cid1 = self._add("Confucius", "Confucius")
+        with pytest.raises(ValueError, match="distinct"):
+            self.reg.merge_concepts([cid1, cid1])
+
+    def test_merge_preserves_indices(self) -> None:
+        cid1 = self._add("Confucius", "Confucius")
+        cid2 = self._force_add("Kongzi", "Confucius")
+        merged_id = self.reg.merge_concepts([cid1, cid2])
+
+        # Old IDs gone from indices
+        key = ("Confucius", normalize_concept_type("person"))
+        assert cid1 not in self.reg._surface_type_index.get(key, [])
+        assert cid2 not in self.reg._canonical_name_index.get("Confucius", set())
+
+        # New ID in indices
+        assert merged_id in self.reg._surface_type_index.get(key, [])
+        assert merged_id in self.reg._canonical_name_index.get("Confucius", set())
+
+
+# ── Item and Group tests ────────────────────────────────────────────────────
+
+
+class TestItemsAndGroups:
+    @pytest.fixture(autouse=True)
+    def _setup_teardown(self) -> None:
+        self.reg = _make_registry()
+        yield
+        _cleanup(self.reg)
+
+    def test_add_and_get_item(self) -> None:
+        item = AtomicItem(
+            item_id="", item_type="event", summary="A thing happened",
+            concept_refs=["concept-0001"],
+        )
+        iid = self.reg.add_item(item)
+        assert iid == "item-0001"
+        stored = self.reg.get_item(iid)
+        assert stored is not None
+        assert stored["item_type"] == "event"
+        assert stored["summary"] == "A thing happened"
+
+    def test_get_nonexistent_item(self) -> None:
+        assert self.reg.get_item("item-9999") is None
+
+    def test_add_and_get_group(self) -> None:
+        group = LogicalGroup(
+            group_id="", group_type="theme", summary="A theme group",
+        )
+        gid = self.reg.add_group(group)
+        assert gid == "group-0001"
+        stored = self.reg.get_group(gid)
+        assert stored is not None
+        assert stored["group_type"] == "theme"
+
+    def test_get_nonexistent_group(self) -> None:
+        assert self.reg.get_group("group-9999") is None
+
+    def test_sequential_ids(self) -> None:
+        iid1 = self.reg.add_item(AtomicItem(
+            item_id="", item_type="event", summary="First"))
+        iid2 = self.reg.add_item(AtomicItem(
+            item_id="", item_type="event", summary="Second"))
+        assert iid1 == "item-0001"
+        assert iid2 == "item-0002"
+
+
+# ── Persistence tests ──────────────────────────────────────────────────────
+
+
+class TestPersistence:
+    def test_save_and_load_round_trip(self) -> None:
+        reg = _make_registry()
+        try:
+            cid, _ = reg.add_concept(Concept(
+                concept_id="", surface="Confucius", concept_type="person",
+                canonical_name="Confucius", summary="A philosopher",
+                aliases=["Kong Qiu"],
+            ))
+            reg.add_item(AtomicItem(
+                item_id="", item_type="event", summary="Born",
+                concept_refs=[cid],
+            ))
+            reg.add_group(LogicalGroup(
+                group_id="", group_type="theme",
+                summary="Chinese philosophy",
+            ))
+
+            reg.save()
+            # cache_root is the parent of the "books/{book_hash}" directory,
+            # i.e. the directory that contains "books/"
+            cache_root = reg._cache_dir.parents[1]
+            loaded = BookRegistry.load(
+                reg._book_path, cache_root=cache_root,
+            )
+
+            assert loaded.get_concept(cid) is not None
+            assert loaded.get_concept(cid).summary == "A philosopher"
+            assert loaded.get_concept(cid).aliases == ["Kong Qiu"]
+            assert loaded.get_item("item-0001") is not None
+            assert loaded.get_group("group-0001") is not None
+            assert loaded._next_concept_id == reg._next_concept_id
+        finally:
+            _cleanup(reg)
+
+    def test_save_multiple_times(self) -> None:
+        reg = _make_registry()
+        try:
+            reg.add_concept(Concept(
+                concept_id="", surface="First", concept_type="person"))
+            h1 = reg.save()
+            assert h1
+
+            reg.add_concept(Concept(
+                concept_id="", surface="Second", concept_type="person"))
+            h2 = reg.save()
+            assert h2
+            assert h2 != h1
+        finally:
+            _cleanup(reg)
+
+    def test_load_nonexistent_raises(self) -> None:
+        with pytest.raises(FileNotFoundError, match="No registry found"):
+            BookRegistry.load("/nonexistent/path", cache_root="/tmp/nonexistent")
+
+    def test_rollback(self) -> None:
+        reg = _make_registry()
+        try:
+            c1, _ = reg.add_concept(Concept(
+                concept_id="", surface="Keep", concept_type="person"))
+            reg.save()
+
+            c2, _ = reg.add_concept(Concept(
+                concept_id="", surface="Remove", concept_type="person"))
+            reg.save()
+            assert reg.get_concept(c2) is not None
+
+            # Rollback to first save
+            reg.rollback("HEAD~1")
+            assert reg.get_concept(c1) is not None
+            assert reg.get_concept(c2) is None
+        finally:
+            _cleanup(reg)
+
+    def test_rollback_preserves_id_counters(self) -> None:
+        reg = _make_registry()
+        try:
+            reg.add_concept(Concept(
+                concept_id="", surface="A", concept_type="person"))
+            reg.add_concept(Concept(
+                concept_id="", surface="B", concept_type="person"))
+            reg.save()
+            assert reg._next_concept_id == 3
+
+            reg.rollback("HEAD")
+            assert reg._next_concept_id == 3
+        finally:
+            _cleanup(reg)
+
+
+# ── Edge cases ──────────────────────────────────────────────────────────────
+
+
+class TestEdgeCases:
+    def test_force_add_bypasses_collision(self) -> None:
+        reg = _make_registry()
+        try:
+            cid1, _ = reg.add_concept(Concept(
+                concept_id="", surface="X", concept_type="person",
+                canonical_name="X",
+            ))
+            cid2, _ = reg.add_concept(Concept(
+                concept_id="", surface="X", concept_type="person",
+                canonical_name="X",
+            ), force=True)
+            assert cid1 != cid2
+            assert len(reg._concepts) == 2
+        finally:
+            _cleanup(reg)
+
+    def test_merge_updates_surface_lookup(self) -> None:
+        reg = _make_registry()
+        try:
+            cid1, _ = reg.add_concept(Concept(
+                concept_id="", surface="Confucius", concept_type="person",
+                canonical_name="Confucius", aliases=["Kong Qiu"],
+            ))
+            cid2, _ = reg.add_concept(Concept(
+                concept_id="", surface="Kongzi", concept_type="person",
+                canonical_name="Confucius",
+            ), force=True)
+
+            merged_id = reg.merge_concepts([cid1, cid2])
+            assert merged_id in reg._surface_lookup.get("Confucius", set())
+            assert merged_id in reg._surface_lookup.get("Kong Qiu", set())
+            # Old IDs removed from surface lookup
+            for s in ["Confucius", "Kong Qiu"]:
+                assert cid1 not in reg._surface_lookup.get(s, set())
+        finally:
+            _cleanup(reg)
+
+    def test_concept_type_normalization_in_index(self) -> None:
+        reg = _make_registry()
+        try:
+            cid, _ = reg.add_concept(Concept(
+                concept_id="", surface="X", concept_type="phenomenon",
+            ))
+            # "phenomenon" normalizes to "theme"
+            key = ("X", "theme")
+            assert cid in reg._surface_type_index.get(key, [])
+        finally:
+            _cleanup(reg)
+
+    def test_merge_same_type_with_overlapping_surfaces(self) -> None:
+        """Two concepts same type, no shared cname, but share an alias."""
+        reg = _make_registry()
+        try:
+            cid1, _ = reg.add_concept(Concept(
+                concept_id="", surface="Beijing", concept_type="place",
+                aliases=["Peking"],
+            ))
+            cid2, _ = reg.add_concept(Concept(
+                concept_id="", surface="Peking", concept_type="place",
+            ), force=True)
+            # Same type + surface overlap via alias 'Peking' → safe
+            merged_id = reg.merge_concepts([cid1, cid2])
+            assert merged_id is not None
+        finally:
+            _cleanup(reg)
+
+
+# ── Import sanity (verified at import time) ─────────────────────────────────
+
+def test_book_registry_imports_do_not_reference_reading_pipeline() -> None:
+    """book_registry.py must not import from reading_pipeline.py."""
+    import inspect
+    from tilusion import book_registry
+
+    source = inspect.getsource(book_registry)
+    # Check for actual import, not a comment mention
+    import re
+    import_lines = [
+        line for line in source.splitlines()
+        if re.match(r"^\s*(from|import)\s", line)
+    ]
+    for line in import_lines:
+        assert "reading_pipeline" not in line, (
+            f"book_registry.py imports from reading_pipeline: {line}"
+        )
