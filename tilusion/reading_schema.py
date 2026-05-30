@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -7,6 +8,32 @@ from typing import Any
 READING_UNIT_SCHEMA_VERSION = "reading-unit-v0.3"
 DOCUMENT_STATE_SCHEMA_VERSION = "document-state-v0.1"
 REGISTRY_DELTA_SCHEMA_VERSION = "registry-delta-v0.1"
+
+_CONCEPT_TYPE_NORMALIZATION: dict[str, str] = {
+    "thing": "object",
+    "substance": "object",
+    "format": "object",
+    "component": "technical_component",
+    "technical_component": "technical_component",
+    "work": "source",
+    "collection": "source",
+    "source_statement": "source",
+    "condition": "theme",
+    "phenomenon": "theme",
+    "event_type": "theme",
+    "concept": "theme",
+    "role": "social_role",
+    "relationship": "social_role",
+}
+
+
+def normalize_concept_type(value: Any) -> str:
+    """Normalize known noisy concept type aliases into the coarse schema vocabulary."""
+    raw = str(value or "").strip()
+    if not raw:
+        return "other"
+    key = re.sub(r"[\s-]+", "_", raw.lower())
+    return _CONCEPT_TYPE_NORMALIZATION.get(key, key)
 
 Grounding = str  # "source_grounded" | "synthesis" | "deterministic" | "llm_inferred" | "user_corrected"
 

@@ -4,34 +4,7 @@ from typing import Any
 
 import re
 
-from .reading_schema import READING_UNIT_SCHEMA_VERSION
-
-
-_CONCEPT_TYPE_NORMALIZATION = {
-    "thing": "object",
-    "substance": "object",
-    "format": "object",
-    "component": "technical_component",
-    "technical_component": "technical_component",
-    "work": "source",
-    "collection": "source",
-    "source_statement": "source",
-    "condition": "theme",
-    "phenomenon": "theme",
-    "event_type": "theme",
-    "concept": "theme",
-    "role": "social_role",
-    "relationship": "social_role",
-}
-
-
-def normalize_concept_type(value: Any) -> str:
-    """Normalize known noisy concept type aliases into the coarse schema vocabulary."""
-    raw = str(value or "").strip()
-    if not raw:
-        return "other"
-    key = re.sub(r"[\s-]+", "_", raw.lower())
-    return _CONCEPT_TYPE_NORMALIZATION.get(key, key)
+from .reading_schema import READING_UNIT_SCHEMA_VERSION, normalize_concept_type
 
 
 def render_text_with_block_markers(

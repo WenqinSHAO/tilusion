@@ -27,8 +27,8 @@ from .reading_payloads import (
     build_per_segment_extraction_payload,
     build_unit_logical_grouping_payload,
     merge_segment_extraction_results,
-    normalize_concept_type,
 )
+from .reading_schema import normalize_concept_type
 from .reading_prompts import (
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,

@@ -7,10 +7,9 @@ from tilusion.reading_payloads import (
     _source_block_meta,
     build_per_segment_extraction_payload,
     merge_segment_extraction_results,
-    normalize_concept_type,
     render_text_with_block_markers,
 )
-from tilusion.reading_schema import RECOMMENDED_CONCEPT_TYPES, SourceBlock
+from tilusion.reading_schema import RECOMMENDED_CONCEPT_TYPES, SourceBlock, normalize_concept_type
 from tilusion.reading_prompts import (
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
