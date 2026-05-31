@@ -31,7 +31,6 @@ BookRegistry(book_path, cache_root=".tilusion_cache")
 │       # surface (any form) → {concept_id, ...}
 ├── _items: dict[str, AtomicItem]
 ├── _groups: dict[str, LogicalGroup]
-├── _transactions: list[dict]
 ├── _next_concept_id: int
 ├── _next_item_id: int
 ├── _next_group_id: int
@@ -56,6 +55,10 @@ BookRegistry(book_path, cache_root=".tilusion_cache")
 ```
 
 ### What changed from the original sketch and why
+
+**_transactions dropped.** The in-memory transaction log was underspecified and had
+no concrete consumer in this batch (no git commit messages to build, logging serves
+the audit role). Dropped.
 
 **Two-index collision detection** (replaces the single `_concept_key_index`).
 The original `_concept_key_index: dict[tuple, str]` keyed by
@@ -118,7 +121,8 @@ class CollisionInfo:
 
 ## DeterministicConceptMerger
 
-Extracted from `_merge_concept_group` in `reading_payloads.py:321`:
+Extracted from `_merge_concept_group` in `reading_payloads.py:321`.
+Operates on `Concept` objects only — no dict-based API.
 
 ```python
 class DeterministicConceptMerger:
@@ -136,15 +140,51 @@ Rules (identical to `_merge_concept_group`):
   `"synthesis"` otherwise
 - `merged_from` populated from all original concept IDs
 
-A `KeepExistingConceptMerger` (first-write-wins) is also provided.
+A `KeepExistingConceptMerger` (first-write-wins) is also provided for cases where
+the caller has already decided the existing concept is canonical.
 
 `_merge_concept_into` (in `reading_pipeline.py:799`, in-place enrichment of an
 existing concept with new surfaces/refs) is a separate concern. Don't try to unify
 the two merge patterns in this batch.
 
-## Persistence
+### Merge boundary: what `merge_concepts` accepts
 
-[OPEN Q1] Git-backed or plain filesystem? See Open Questions below.
+`merge_concepts(ids)` is **not** a pure "just do it" method. It validates that the
+merge is safe before applying `DeterministicConceptMerger`. The rules, adapted from
+the existing `_classify_merge_risk` in `reading_pipeline.py:537`:
+
+| Condition | Outcome |
+|---|---|
+| All concepts share a non-empty `canonical_name` | Safe — merge |
+| All concepts share the same surface | Safe — merge |
+| Concepts are same `concept_type` and share surface/cname overlap | Safe — merge |
+| Concepts are `time_anchor` with different surfaces and no shared cname | Reject — distinct temporal references |
+| Concepts are `place` with different surfaces and no shared cname | Reject — distinct locations |
+| Concepts are `source` with different surfaces and no shared cname | Reject — distinct cited works |
+| Concepts have different `concept_type` and no shared cname | Reject — ambiguous, needs LLM tie-break |
+
+Rejected merges return an error or raise `MergeRejectedError`; the caller is
+responsible for deferring to LLM tie-breaking (deferred to next batch), emitting
+an `ambiguity_item`, or leaving the concepts separate.
+
+### Summary staleness after deterministic merge
+
+Deterministic merge picks the first nonempty summary. When two concepts with
+different summaries merge, the result may not capture the union. This is a known
+limitation: deterministic merge produces **structurally correct** results (correct
+indices, unioned surfaces, correct provenance), but **semantic coherence** of the
+summary is an LLM concern.
+
+Strategy:
+- `DeterministicConceptMerger` sets `provenance.grounding = "synthesis"` when
+  summaries differ, flagging that the merged concept would benefit from LLM
+  refinement. Keep all the origin summaries to facilitate LLM refinement.
+- `refine_concept` (deferred to next batch) will handle summary rewriting when
+  LLM integration is wired up.
+- Until then, the merged concept is correct for identity/collision purposes
+  even with a potentially stale summary.
+
+## Persistence
 
 ```
 .tilusion_cache/books/{book_hash}/
@@ -160,17 +200,20 @@ the two merge patterns in this batch.
 - `load(book_path, cache_root)` reads `registry.json` and rebuilds indices.
 - `rollback(commit_hash)` restores a prior state (git checkout or copy-back).
 
-## Transaction Log
+### Existing practice: git as application storage layer
 
-[OPEN Q2] In-memory, append-only (see Open Questions):
+Two mature projects demonstrate this pattern:
 
-```python
-{"op": "add_concept", "concept_id": "concept-0007",
- "surface": "...", "concept_type": "person", "ts": "2026-05-30T..."}
-```
+- **py-docvault** (Python): Git-backed document store where every write produces a
+  git commit with author, timestamp, and message. Supports point-in-time retrieval
+  at any commit SHA, tag, or branch. Content-addressable IDs.
+- **Yamabiko** (Rust): Embedded database with Git-based version control. Key-value
+  storage in a local Git repo with `revert-n-commits` and `revert-to-commit`
+  commands. Supports JSON, YAML, and Pot data formats.
 
-If git-backed: powers commit messages and in-session audit. Cleared after `save()`.
-If plain filesystem: may be unnecessary; logging can serve the audit role.
+Both validate the approach: JSON on disk, git commits on every mutation, rollback
+via checkout. The pattern is well-established for configuration management,
+document versioning, and audit-logged data stores.
 
 ## Import Dependency Management
 
@@ -185,7 +228,7 @@ module where the `Concept` dataclass already lives.
 
 | File | Action | What |
 |---|---|---|
-| `tilusion/reading_schema.py` | **Modify** | Move `_CONCEPT_TYPE_NORMALIZATION` + `normalize_concept_type` here |
+| `tilusion/reading_schema.py` | **Modify** | Move `_CONCEPT_TYPE_NORMALIZATION` + `normalize_concept_type` here (separate preparatory commit) |
 | `tilusion/book_registry.py` | **Create** | `BookRegistry`, `DeterministicConceptMerger`, `CollisionInfo`, persistence |
 | `tilusion/reading_payloads.py` | **Modify** | Re-import normalization from `reading_schema` |
 | `tests/test_book_registry.py` | **Create** | CRUD, collision detection, merge parity, persistence round-trip |
@@ -201,8 +244,11 @@ module where the `Concept` dataclass already lives.
 - **`LLMConceptMerger`**: LLM tie-breaking for ambiguous concept collisions
 - **Group operations**: `continue_group`, `find_related_groups`, `merge_groups`
 - **Item operations**: `link_item_mention`, `refine_item`, `find_similar_items`
-- **Concept refinement**: `refine_concept`
-- **Diff report**: CLI reporting for same-unit re-extraction
+- **Concept refinement**: `refine_concept` (including summary rewriting after
+  deterministic merge)
+- **Diff report**: Produce a diff summary after each registry save, comparing
+  against prior state (added/merged/refined concepts, new items, group changes).
+  Same-unit re-extraction is a special case of this.
 
 ## Verification
 
@@ -215,99 +261,65 @@ module where the `Concept` dataclass already lives.
    `_merge_concept_group` for the same test fixtures. Use a small
    `_concept_dict_to_object(d)` helper in the test module to convert existing
    dict-based fixtures to `Concept` objects.
-4. **Persistence round-trip**: Create registry, add data, `save()`, `load()` into
+4. **Merge boundary**: `merge_concepts` rejects unsafe merges (different types
+   with no shared cname, distinct time_anchor/place/source concepts).
+5. **Persistence round-trip**: Create registry, add data, `save()`, `load()` into
    new instance, verify identical state. `rollback()` to previous save, verify
    state matches.
-5. **Import sanity**: `book_registry.py` does not import from
+6. **Import sanity**: `book_registry.py` does not import from
    `reading_pipeline.py`.
 
 ---
 
 ## Open Design Questions
 
-These need explicit decisions before or during implementation.
+### Q1: Persistence — git-backed from the start or plain files first?
 
-### Q1: Persistence — git or plain files?
+Git-backed persistence is a known pattern (py-docvault, Yamabiko — see above).
+Options:
 
-Git-backed persistence (`save()` commits, `rollback()` does `git checkout`) has
-good properties but there is **no programmatic git usage** anywhere in `tilusion/`
-today. Options:
-
-**A) Git-backed** — `save()` runs `git commit`; `rollback()` does
-`git checkout <hash> -- registry.json` + reload.
-- Pros: versioning, diffing, rollback come for free
-- Cons: git repo init on first save, subprocess dependency, dirty-state
-  edge cases to handle
+**A) Git-backed from the start** — `save()` runs `git commit`; `rollback()` does
+`git checkout <hash> -- registry.json` + reload. Needs git repo init on first
+save and subprocess git calls.
 
 **B) Plain filesystem with atomic writes** — `save()` writes via temp-file +
 rename. Rollback via timestamped/hash-named backup copies.
-- Pros: no git dependency, simpler
-- Cons: reimplementing versioning, harder to diff/inspect history
 
-**C) Plain `save()`/`load()` now, add git later** — start with simple reads/writes
-to a single `registry.json`. Design the signatures to accommodate git later.
-Rollback would be limited (only restore the last-saved state) or unimplemented
-until git is added.
+**C) Plain `save()`/`load()` now, add git later** — start simple, design
+signatures to accommodate git. Rollback limited or unimplemented until git added.
 
-> Recommendation: **(C)**. Git backing is well-motivated but adds complexity not
-> needed until multi-unit extraction exercises rollback. Start simple, add git
-> when the need is concrete.
+> Updated recommendation: **(A)**. The py-docvault and Yamabiko precedents show
+> this is a mature pattern. Git-backed from the start avoids a migration later.
+> The subprocess surface is small: `git init` (once), `git add + commit` (on
+> save), `git checkout` (on rollback), `git log` (for history). Q1 resolution
+> also resolves Q2, Q6: no separate transaction log needed (git IS the log),
+> rollback reloads in place (natural with git checkout).
 
-### Q2: Is an in-memory transaction log needed?
+### Q2: Transaction log — dropped
 
-The original design keeps `_transactions: list[dict]` for commit messages and
-in-session audit. But:
-- If we go with Q1(C), there's no git commit message to build
-- In-session audit can be done with Python `logging`
+`_transactions` is removed from the API. No in-memory operation log — git commit
+history serves as the audit trail, and in-session debugging uses Python `logging`.
 
-> Recommendation: Drop `_transactions` from this batch. Add it when there's a
-> concrete consumer (git commit messages or a debug/diff feature).
+### Q3: DeterministicConceptMerger — Concept objects only
 
-### Q3: Should `DeterministicConceptMerger` work with `Concept` objects or dicts?
+Works with `Concept` dataclass instances, not dicts. No backward-compatibility
+with the dict-based `_merge_concept_group` needed in the merger itself — the
+parity test converts dict fixtures to `Concept` objects via a helper.
 
-The existing `_merge_concept_group` works with dicts. The BookRegistry API uses
-`Concept` dataclass instances. Options:
+### Q4: ID counter persistence — embed in registry.json
 
-**A) `Concept` objects** — clean API, type-safe, consistent with BookRegistry
-**B) Dicts** — matches existing code, easier parity testing
-**C) Both** — primary method takes `Concept`; add a `merge_dicts` classmethod
-for parity testing
+Top-level `"next_ids": {"concept": 8, "item": 3, "group": 1}` in `registry.json`.
+Self-contained, travels with the registry state, survives `save()`/`load()`.
 
-> Recommendation: **(C)**. The primary `merge(members: list[Concept]) -> Concept`
-> is the production path. The parity test converts dict fixtures to `Concept`
-> objects via a small helper, runs through `merge()`, and compares.
+### Q5: Normalization move — separate preparatory commit
 
-### Q4: How does the next-ID counter survive save/load?
+Move `_CONCEPT_TYPE_NORMALIZATION` and `normalize_concept_type` from
+`reading_payloads.py` to `reading_schema.py` in its own commit before the
+BookRegistry implementation.
 
-Sequential IDs (`concept-0007`) need the counter to persist across sessions:
+### Q6: Rollback — reload in place
 
-**A) Embed in `registry.json`** — top-level `"next_ids": {"concept": 8, ...}`
-**B) Scan on load** — `load()` derives `_next_concept_id = max(existing_ids) + 1`
-**C) Separate counter file** — `.registry_counters.json`
-
-> Recommendation: **(A)**. Self-contained, travels with the registry state.
-> (B) works but is fragile if IDs have gaps. (C) adds an unnecessary file.
-
-### Q5: Normalization move — separate preparatory commit?
-
-Moving `_CONCEPT_TYPE_NORMALIZATION` and `normalize_concept_type` from
-`reading_payloads.py` to `reading_schema.py` is pure refactoring touching
-existing imports.
-
-> Recommendation: Do it as a **separate preparatory commit** before the
-> BookRegistry implementation. Keeps the BookRegistry commit focused and makes
-> the import change independently reviewable.
-
-### Q6: `rollback` — reload in place or return new instance?
-
-After `rollback(commit_hash)`:
-
-**A) Reload in place** — the current instance's `_concepts`, `_items`, etc. are
-replaced with the historical state. The instance now reflects the rolled-back
-point.
-**B) Return new instance** — `rollback()` returns a fresh `BookRegistry` loaded
-from the historical state. The current instance is unchanged.
-
-> Recommendation: **(A)**. After rollback, the registry IS at the historical
-> state — this is the natural mental model. The caller can always `load()`
-> separately if they want both states side by side.
+With git-backed persistence (Q1-A): `rollback(commit_hash)` does
+`git checkout <hash> -- registry.json` then reloads the instance's in-memory
+state from the historical file. The registry IS at the rolled-back point after
+the call. Caller can `load()` separately if they need both states side by side.
