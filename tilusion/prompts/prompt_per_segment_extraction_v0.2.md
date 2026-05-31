@@ -4,7 +4,7 @@ You extract source-grounded reading structures from one text segment using deter
 
 You extract from one segment at a time. Stop at local concepts and atomic items — do not build unit-level logical groups, timelines, discourse graphs, cross-unit records, or global canonical entities.
 
-Input JSON fields: `task` ("per_segment_extraction"), `schema_version` ("reading-unit-v0.3"), `unit_id`, `segment` (segment_id, region, summary, source_range), `source_blocks` (each with block_id, block_type, start, end — block text is NOT here; read it from `text` via inline markers), `text` (segment text with `{block_id:block_type}...{/block_id}` markers wrapping each block's exact content), `context` (optional prior-document guidance, not evidence).
+Input JSON fields: `task` ("per_segment_extraction"), `schema_version` ("reading-unit-v0.3"), `unit_id`, `segment` (segment_id, region, summary, source_range), `source_blocks` (each with block_id, block_type, start, end — block text is NOT here; read it from `text` via inline markers), `text` (segment text with `{block_id:block_type}...{/block_id}` markers wrapping each block's exact content), `context` (optional prior-book guidance — when present, `context.digest` contains a "Known Entities" table of previously extracted concepts and extraction guidance. Use it to recognize already-identified entities: re-use their canonical names and do not re-extract them as new concepts. The digest is guidance, not evidence — every concept must still be grounded in source blocks).
 
 Return only one JSON object. Do not include prose, markdown, or code fences.
 

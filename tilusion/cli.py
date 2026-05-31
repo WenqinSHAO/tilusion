@@ -49,6 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_llm_backend_args(run_reading_parser)
     run_reading_parser.add_argument("--cache-dir", default=".tilusion_cache/reading_passes")
     run_reading_parser.add_argument("--no-cache", action="store_true")
+    run_reading_parser.add_argument(
+        "--scope", choices=["unit", "book"], default="unit",
+        help="Extraction scope: unit (isolated, default) or book (cross-unit with registry)",
+    )
 
     split_blocks_parser = subparsers.add_parser(
         "split-blocks",
@@ -105,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                 backend=build_reading_backend(args),
                 cache_dir=args.cache_dir,
                 use_cache=not args.no_cache,
+                scope=args.scope,
             )
         except (ExtractionError, OSError, ValueError, KeyError) as error:
             print(f"reading pipeline failed: {error}", file=sys.stderr)

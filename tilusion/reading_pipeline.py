@@ -39,6 +39,9 @@ from .reading_validation import (
     ReadingValidationReport,
     validate_extraction_unit_package,
 )
+from .book_digest import build_book_digest, make_context_dict
+from .book_registry import BookRegistry
+from .registry_delta import RegistryDeltaResult, apply_registry_delta, compute_registry_delta
 
 # re-export for convenience
 __all__ = [
@@ -256,6 +259,29 @@ def mock_unit_logical_grouping_response(user_payload: dict[str, Any]) -> dict[st
     }
 
 
+def mock_book_digest_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    entities = user_payload.get("entities", [])
+    entity_names = [e.get("name", "?") for e in entities[:5]]
+    table_rows = "\n".join(
+        f"| {e.get('name', '?')} | {e.get('type', '?')} | {e.get('summary', '')} | {', '.join(e.get('aliases', []))} |"
+        for e in entities
+    )
+    digest = (
+        "# Book Context Digest\n\n"
+        "## Known Entities\n"
+        "| Name | Type | Summary | Aliases |\n"
+        "|---|---|---|---|\n"
+        f"{table_rows}\n\n"
+        "## Extraction Guidance\n"
+        f"Mock digest for {len(entities)} known entities: {', '.join(entity_names)}. "
+        "Look for these entities in the upcoming unit."
+    )
+    return {
+        "digest": digest,
+        "entity_count": len(entities),
+        "warnings": ["mock book digest: placeholder"],
+    }
+
 
 # ── Mock backend ─────────────────────────────────────────────────────────────
 
@@ -270,6 +296,8 @@ class MockReadingBackend:
             return json.dumps(mock_per_segment_extraction_response(user_payload), ensure_ascii=False)
         if task == "unit_logical_grouping":
             return json.dumps(mock_unit_logical_grouping_response(user_payload), ensure_ascii=False)
+        if task == "book_digest":
+            return json.dumps(mock_book_digest_response(user_payload), ensure_ascii=False)
 
         raise ValueError(f"MockReadingBackend: unknown task {task!r}")
 
@@ -1102,13 +1130,22 @@ def run_reading_pipeline(
     cache_dir: str | Path = ".tilusion_cache/reading_passes",
     use_cache: bool = True,
     context: dict[str, Any] | None = None,
+    scope: str = "unit",
 ) -> ReadingPipelineRecord:
     """Run the full reading pipeline: overview → per-segment → logical grouping.
 
     Reuses the existing overview/segmentation pass, then runs deterministic
     source block splitting, per-segment concept/item extraction, deterministic
     concept merging, and unit-level logical grouping with optional concept deltas.
+
+    When *scope* is ``"book"``, loads the BookRegistry before extraction,
+    builds a book context digest from prior registry state (if any), injects
+    it as extraction context, and computes/applies a registry delta after
+    extraction. The default ``"unit"`` scope is unchanged.
     """
+    if scope not in ("unit", "book"):
+        raise ValueError(f"scope must be 'unit' or 'book', got {scope!r}")
+
     from .book_reader import build_book_index, extract_unit_text
 
     total_start = time.monotonic()
@@ -1130,6 +1167,37 @@ def run_reading_pipeline(
         "unit_label": unit.label,
         "unit_kind": unit.kind,
     }
+
+    # ── Scope "book" pre-extraction: load registry, build digest ──
+    registry: BookRegistry | None = None
+    registry_cache_root: Path | None = None
+    if scope == "book":
+        # BookRegistry lives under the parent of the reading_passes cache_dir
+        # so that registry state is shared across pipeline runs.  If the user
+        # passed a custom cache_dir that isn't nested, use it directly.
+        _cache_path = Path(cache_dir)
+        registry_cache_root = (
+            _cache_path.parent
+            if _cache_path.name == "reading_passes"
+            else _cache_path
+        )
+        registry = BookRegistry.load_or_init(book_path, cache_root=registry_cache_root)
+        digest = build_book_digest(
+            backend=llm,
+            registry=registry,
+            unit_id=unit_id,
+            cache_dir=registry_cache_root / "book_digests",
+            use_cache=use_cache,
+        )
+        context = make_context_dict(digest)
+        if digest:
+            print(
+                f"  [book] digest ready: {len(digest)} chars, "
+                f"{registry._next_concept_id - 1} known concepts",
+                file=sys.stderr,
+            )
+        else:
+            print("  [book] first unit — no prior context", file=sys.stderr)
 
     # ── Step 1: Overview segmentation (reuse existing) ──
     step = 1
@@ -1308,6 +1376,22 @@ def run_reading_pipeline(
     }
     final_data["metrics"] = metrics
     final_data["validation"] = final_validation
+
+    # ── Scope "book" post-extraction: compute delta, apply, save ──
+    delta_result: RegistryDeltaResult | None = None
+    if scope == "book" and registry is not None:
+        delta_result = compute_registry_delta(
+            final_data, registry, unit_id=unit_id,
+        )
+        applied = apply_registry_delta(registry, delta_result)
+        commit_hash = registry.save()
+        print(
+            f"  [book] delta: {len(delta_result.operations)} ops "
+            f"({delta_result.stats}), "
+            f"{len(delta_result.ambiguity_items)} ambiguities — "
+            f"saved at {commit_hash}",
+            file=sys.stderr,
+        )
 
     # ── Write unit package ──
     package_path = write_reading_unit_package(
