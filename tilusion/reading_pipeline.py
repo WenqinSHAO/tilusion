@@ -18,6 +18,7 @@ from .overview import (
     ResolvedOverviewSegment,
     resolve_overview_segments,
     run_overview_segmentation_pass,
+    segment_hint_payload,
 )
 from .pass_utils import (
     build_pass_cache_key,
@@ -444,10 +445,6 @@ def run_per_segment_extraction_pass(
             "segment_id": segment.segment_id,
             "title": segment.title,
             "summary": segment.summary,
-            "source_range": {
-                "start": segment.start,
-                "end": segment.end,
-            },
         },
         text=segment_text,
         source_blocks=blocks,
@@ -1017,7 +1014,6 @@ def run_unit_logical_grouping_pass(
                 "segment_id": s.segment_id,
                 "title": s.title,
                 "summary": s.summary,
-                "source_range": {"start": s.start, "end": s.end},
             }
             for s in segments
         ],
@@ -1302,6 +1298,7 @@ def run_reading_pipeline(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_seg: dict[Any, Any] = {}
             for seg in segments:
+                seg_context = segment_hint_payload(seg)
                 future = executor.submit(
                     run_per_segment_extraction_pass,
                     unit_id=unit_id,
@@ -1309,7 +1306,7 @@ def run_reading_pipeline(
                     backend=llm,
                     cache_dir=cache_root / "per_segment",
                     use_cache=use_cache,
-                    context=context,
+                    context=seg_context,
                     unit_text=text,
                 )
                 future_to_seg[future] = seg
@@ -1388,7 +1385,7 @@ def run_reading_pipeline(
             backend=llm,
             cache_dir=cache_root / "logical_grouping",
             use_cache=use_cache,
-            context=context,
+            context=None,
         )
         pass_summaries["unit_logical_grouping"] = {
             "cache_key": grouping_record.cache_key,

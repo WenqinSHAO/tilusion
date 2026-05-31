@@ -20,10 +20,10 @@ The caller provides JSON with:
 - `task`: `per_segment_extraction`.
 - `schema_version`: `reading-unit-v0.3`.
 - `unit_id`: parent reader unit identifier.
-- `segment`: restored segment metadata (`segment_id`, optional region classification, summary, source_range).
+- `segment`: restored segment metadata (`segment_id`, optional region classification, summary).
 - `source_blocks`: deterministic source block metadata for this segment. Each block has `block_id`, `block_type`, `start`, and `end` (unit-level character offsets). Block text is NOT included here — read it from the `text` field via the inline block markers.
 - `text`: exact segment source text with inline block boundary markers. Each block's text is wrapped as `{block_id:block_type}` ... `{/block_id}`. The markers are machine-generated and never appear in the original source. Read the text inside each marker pair as the block's exact content.
-- `context`: optional prior document context for alias and continuity guidance only. When present, `context.digest` may contain known entities and attention cues from prior units — use it to recognize already-identified entities, but never cite it as evidence. Every concept must still be grounded in the source blocks of this segment.
+- `context`: optional per-segment attention hints produced by the overview pass. Contains `extraction_hints` — segment-specific natural language cues for what narrative threads, entities, or developments to watch for. Hints are guidance, not evidence; every concept must still be grounded in the source blocks of this segment. Hints may be empty or absent — extraction must work correctly without them.
 
 Return only one JSON object. Do not include prose, markdown, or code fences.
 
@@ -95,7 +95,8 @@ Rules:
   - `theme`: abstract recurring ideas or motifs. Not a replacement for a logical group.
   - `time_anchor`: explicit/relative time expressions. Each distinct temporal reference is a separate concept — do not merge dates.
   - Do not create synthetic collection/category concepts. Express grouping through logical groups, not concept types.
-- Use `observed_surfaces` for exact forms found in this segment. Use `aliases` only for aliases directly supported by this segment.
+- `observed_surfaces`: every distinct surface form of this concept attested in the current segment's text. Be complete — the application uses this for deterministic dedup. Include the primary `surface` form.
+- `aliases`: alternative names known from prior context or cross-unit continuity. Do not duplicate forms already listed in `observed_surfaces`.
 - Atomic items should be compact source-grounded compressions. Prefer fewer meaningful items over one per sentence. An item may cite multiple non-contiguous source blocks. Multiple items may cite the same block.
 - `item_type` is schema-light: `event`, `scene`, `action`, `claim`, `argument`, `statement`, `observation`, `description`, `method`, `habit`, `question`, `other`, `custom`.
 - Add temporal attributes only when the item has explicit, relative, or clearly implied time structure.

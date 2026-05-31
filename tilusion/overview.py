@@ -317,10 +317,6 @@ def segment_hint_payload(segment: ResolvedOverviewSegment) -> dict[str, Any]:
         "segment_id": segment.segment_id,
         "overview_title": segment.title,
         "overview_summary": segment.summary,
-        "key_entities": segment.source.get("key_entities", []),
-        "key_locations": segment.source.get("key_locations", []),
-        "time_hints": segment.source.get("time_hints", []),
-        "event_hints": segment.source.get("event_hints", []),
         "extraction_hints": segment.source.get("extraction_hints", []),
     }
 
@@ -356,8 +352,8 @@ def validate_overview_structure(
                 )
             )
             continue
-        for field_name in ["segment_id", "title", "summary", "start_quote", "end_quote"]:
-            if not isinstance(segment.get(field_name), str) or not segment.get(field_name):
+        for field_name in ["segment_id", "start_quote", "end_quote"]:
+            if not isinstance(segment.get(field_name), str) or not segment.get(field_name).strip():
                 issues.append(
                     overview_issue(
                         "error",

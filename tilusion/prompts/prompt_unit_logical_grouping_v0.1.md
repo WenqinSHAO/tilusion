@@ -19,11 +19,11 @@ The caller provides JSON with:
 - `unit_id`: parent reader unit identifier.
 - `unit_text`: the full original unit source text. This is reference material for resolving ambiguous surfaces and understanding context. Do not re-extract from it.
 - `source`: book-level metadata (path, title, unit label).
-- `segments`: segment metadata with `segment_id`, `title`, `summary`, `source_range`, and `region` classification.
+- `segments`: segment metadata with `segment_id`, `title`, and `summary` from the overview pass. Provides coarse navigation context — which segment covers what — to inform grouping decisions without re-reading the full unit text.
 - `concepts`: merged unit-level concepts. Each has a `concept_id` (clean `concept-NNNN`), `surface`, `concept_type`, `merged_from` (list of original segment-scoped IDs), and all standard concept fields.
 - `atomic_items`: stabilized unit-level items with `item_id` (clean `item-NNNN`), `concept_refs` pointing to the concept IDs above, and all standard item fields.
 - `unresolved_items`: surfaces that appear with different types across segments, flagged by the deterministic merge step. Resolve or escalate these.
-- `context`: optional prior document context for alias and continuity guidance only. When present, `context.digest` may contain known entities and attention cues from prior units — use it when resolving surface ambiguity, suggesting merges, or reclassifying concepts. The digest is guidance, not evidence — every correction must be grounded in the provided concepts/items.
+- `context`: reserved for future cross-unit continuity guidance. Currently empty — rely on the provided concepts and items for all decisions.
 
 Return only one JSON object. Do not include prose, markdown, or code fences.
 
