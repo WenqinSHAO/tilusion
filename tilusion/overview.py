@@ -82,6 +82,7 @@ def run_overview_segmentation_pass(
     backend,
     cache_dir: Path,
     use_cache: bool,
+    context: dict[str, Any] | None = None,
 ) -> JsonPassRecord:
     prompt = build_overview_composition()
     payload = {
@@ -98,6 +99,8 @@ def run_overview_segmentation_pass(
         },
         "text": text,
     }
+    if context:
+        payload["context"] = context
     check_extraction_budget(
         prompt.content,
         payload,

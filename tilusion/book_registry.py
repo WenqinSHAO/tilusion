@@ -339,6 +339,16 @@ class BookRegistry:
             capture_output=True,
         )
 
+        # Stage digest alongside registry so they are versioned together
+        digest_path = self._cache_dir / "book_digest.json"
+        if digest_path.exists():
+            subprocess.run(
+                ["git", "add", "book_digest.json"],
+                cwd=self._cache_dir,
+                check=True,
+                capture_output=True,
+            )
+
         # Only commit if there are staged changes
         diff_result = subprocess.run(
             ["git", "diff", "--staged", "--quiet"],

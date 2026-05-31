@@ -39,7 +39,7 @@ from .reading_validation import (
     ReadingValidationReport,
     validate_extraction_unit_package,
 )
-from .book_digest import build_book_digest, make_context_dict
+from .book_digest import make_context_dict
 from .book_registry import BookRegistry
 from .registry_delta import RegistryDeltaResult, apply_registry_delta, compute_registry_delta
 
@@ -139,9 +139,10 @@ class ReadingPassRecord:
     data: dict[str, Any]
     validation_report: ReadingValidationReport
     artifact_paths: dict[str, str]
+    conversation: Any | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "pass_name": self.pass_name,
             "cache_key": self.cache_key,
             "cache_dir": self.cache_dir,
@@ -150,6 +151,9 @@ class ReadingPassRecord:
             "data": self.data,
             "validation_report": self.validation_report.to_dict(),
         }
+        if self.conversation is not None and hasattr(self.conversation, "to_dict"):
+            d["conversation_id"] = self.conversation.conversation_id
+        return d
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
@@ -283,6 +287,39 @@ def mock_book_digest_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def mock_book_digest_update_response(
+    previous_digest: str,
+    conversation: Any,
+) -> dict[str, Any]:
+    """Mock response for the Conversation C digest update turn.
+
+    Produces an updated digest that references the previous digest when
+    available, simulating the real digest evolution behavior.
+    """
+    if previous_digest:
+        digest = (
+            f"{previous_digest}\n\n"
+            "## Updated (mock)\n"
+            "New entities from this unit: mock-concept-new (person). "
+            "The narrative continues — watch for developments."
+        )
+    else:
+        digest = (
+            "# Book Context Digest\n\n"
+            "## Known Entities\n"
+            "| Name | Type | Notes |\n"
+            "|---|---|---|\n"
+            "| mock-entity | person | First unit extraction |\n\n"
+            "## Attention Guidance\n"
+            "First unit digest — continue extraction."
+        )
+    return {
+        "digest": digest,
+        "entity_count": 1,
+        "warnings": ["mock digest update: placeholder"],
+    }
+
+
 # ── Mock backend ─────────────────────────────────────────────────────────────
 
 
@@ -335,6 +372,25 @@ class MockReadingBackend:
         from .conversation import TurnMetadata
 
         conversation.append_user_message(user_message)
+
+        # Detect digest update turn
+        try:
+            msg_data = json.loads(user_message)
+            if isinstance(msg_data, dict) and msg_data.get("task") == "update_book_digest":
+                prev = msg_data.get("previous_digest", "")
+                updated = mock_book_digest_update_response(prev, conversation)
+                conversation.record_turn(
+                    assistant_response=json.dumps(updated, ensure_ascii=False),
+                    metadata=TurnMetadata(
+                        turn_index=conversation.turn_count + 1,
+                        turn_type="digest_update",
+                        elapsed_ms=0,
+                    ),
+                )
+                return conversation
+        except (json.JSONDecodeError, ValueError):
+            pass
+
         conversation.record_turn(
             assistant_response=json.dumps(
                 {"repairs": [], "explanation": "mock repair — no fixes needed"},
@@ -497,6 +553,7 @@ def run_per_segment_extraction_pass(
         data=enriched_data,
         validation_report=validation_report,
         artifact_paths=paths,
+        conversation=locals().get("conversation"),
     )
 
     if use_cache:
@@ -509,7 +566,6 @@ def run_per_segment_extraction_pass(
             data=record.data,
             validation_report=validation_report,
             record=record,
-            conversation=locals().get("conversation"),
         )
 
     return record
@@ -750,6 +806,24 @@ def _last_assistant_content(conversation: Any) -> str:
         if msg.get("role") == "assistant":
             return str(msg.get("content", ""))
     return ""
+
+
+def _load_cached_digest(registry_cache_root: Path) -> str | None:
+    """Load the cached book digest from the registry directory."""
+    path = registry_cache_root / "book_digest.json"
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("digest") if isinstance(data, dict) else None
+    return None
+
+
+def _save_cached_digest(registry_cache_root: Path, digest: str) -> None:
+    """Save the book digest to the registry directory."""
+    path = registry_cache_root / "book_digest.json"
+    path.write_text(
+        json.dumps({"digest": digest}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _normalize_uncertainty_fields(data: dict[str, Any]) -> dict[str, Any]:
@@ -1101,6 +1175,7 @@ def run_unit_logical_grouping_pass(
         },
         validation_report=validation_report,
         artifact_paths=paths,
+        conversation=locals().get("conversation"),
     )
 
     if use_cache:
@@ -1113,7 +1188,6 @@ def run_unit_logical_grouping_pass(
             data=record.data,
             validation_report=validation_report,
             record=record,
-            conversation=locals().get("conversation"),
         )
 
     return record
@@ -1182,18 +1256,11 @@ def run_reading_pipeline(
             else _cache_path
         )
         registry = BookRegistry.load_or_init(book_path, cache_root=registry_cache_root)
-        digest = build_book_digest(
-            backend=llm,
-            registry=registry,
-            unit_id=unit_id,
-            cache_dir=registry_cache_root / "book_digests",
-            use_cache=use_cache,
-        )
+        digest = _load_cached_digest(registry_cache_root)
         context = make_context_dict(digest)
         if digest:
             print(
-                f"  [book] digest ready: {len(digest)} chars, "
-                f"{registry._next_concept_id - 1} known concepts",
+                f"  [book] digest loaded: {len(digest)} chars",
                 file=sys.stderr,
             )
         else:
@@ -1209,6 +1276,7 @@ def run_reading_pipeline(
             backend=overview_backend,
             cache_dir=cache_root / "overview",
             use_cache=use_cache,
+            context=context,
         )
         segments, overview_repairs = resolve_overview_segments(overview_record.data, text)
         pass_summaries["overview_segmentation"] = {
@@ -1255,7 +1323,8 @@ def run_reading_pipeline(
                     f"    [{i + 1}/{len(segments)}] {seg.segment_id}  "
                     f"{counts.get('source_blocks', 0)} blocks  "
                     f"{counts.get('concepts', 0)} concepts  "
-                    f"{counts.get('atomic_items', 0)} items  "
+                    f"{counts.get('atomic_items', 0)} items  ",
+                    file=sys.stderr,
                 )
         pass_summaries["per_segment_extraction"] = {
             "segment_count": len(segments),
@@ -1269,7 +1338,8 @@ def run_reading_pipeline(
             f"{seg_agg['total_concepts']} concepts, "
             f"{seg_agg['total_atomic_items']} items "
             f"({seg_agg['concepts_per_block']} concepts/block, "
-            f"{seg_agg['items_per_block']} items/block)"
+            f"{seg_agg['items_per_block']} items/block)",
+            file=sys.stderr,
         )
     except Exception:
         _log_progress(step, TOTAL_STEPS, "Per-segment extraction", "FAILED", _elapsed_ms(t0))
@@ -1283,7 +1353,8 @@ def run_reading_pipeline(
     print(
         f"    merge: {merge_counts.get('concepts_before_merge', '?')} -> "
         f"{merge_counts.get('concepts_after_merge', '?')} concepts, "
-        f"{merge_counts.get('unresolved_items', 0)} unresolved"
+        f"{merge_counts.get('unresolved_items', 0)} unresolved",
+        file=sys.stderr,
     )
 
     # ── Aggregate factual stage counts ──
@@ -1332,7 +1403,8 @@ def run_reading_pipeline(
         n_unresolved = len(gdata.get("unresolved_items", []))
         _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "OK", _elapsed_ms(t0))
         print(
-            f"    = {n_groups} groups, {n_deltas} deltas, {n_unresolved} unresolved"
+            f"    = {n_groups} groups, {n_deltas} deltas, {n_unresolved} unresolved",
+            file=sys.stderr,
         )
     except Exception:
         _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "FAILED", _elapsed_ms(t0))
@@ -1393,6 +1465,25 @@ def run_reading_pipeline(
             file=sys.stderr,
         )
 
+        # ── Post-extraction digest update (Conversation C turn) ──
+        if grouping_record.conversation is not None:
+            previous_digest = context.get("digest", "") if context else ""
+            digest_update_msg = json.dumps(
+                {"task": "update_book_digest", "previous_digest": previous_digest},
+                ensure_ascii=False,
+            )
+            updated_conv = llm.continue_conversation(
+                grouping_record.conversation, digest_update_msg,
+            )
+            digest_response = json.loads(_last_assistant_content(updated_conv))
+            digest_for_next = digest_response.get("digest", "")
+            if digest_for_next:
+                _save_cached_digest(registry_cache_root, digest_for_next)
+                print(
+                    f"  [book] digest updated: {len(digest_for_next)} chars",
+                    file=sys.stderr,
+                )
+
     # ── Write unit package ──
     package_path = write_reading_unit_package(
         unit_id=unit_id,
@@ -1429,7 +1520,6 @@ def _write_reading_pass_artifacts(
     data: dict[str, Any],
     validation_report: ReadingValidationReport,
     record: ReadingPassRecord,
-    conversation: Any = None,
 ) -> None:
     pass_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1450,9 +1540,9 @@ def _write_reading_pass_artifacts(
     )
     Path(paths["validated_result"]).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
-    if conversation is not None and hasattr(conversation, "to_dict"):
+    if record.conversation is not None and hasattr(record.conversation, "to_dict"):
         Path(paths["conversation"]).write_text(
-            json.dumps(conversation.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(record.conversation.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
 
