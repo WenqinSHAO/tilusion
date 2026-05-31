@@ -35,12 +35,12 @@ Rules:
 - Include every concept from Turn 1 that was added to the registry (not duplicates).
 - Merge with entities from the `previous_digest` — keep every previously known entity unless it was merged into another concept during Turn 1.
 - Sort by most relevant/common first.
-- When the table would be too large, keep the most important entities and note the omission.
+- When the table would be too large (beyond 50 entires), keep the most important entities and note the omission.
 - Entity names must match their canonical form from the extraction results.
 
 ### Attention Guidance
 
-A short prose paragraph (2-4 sentences) summarizing narrative threads, unresolved questions, and what to watch for in the next unit:
+A short prose paragraph (<=8 sentences) summarizing narrative threads, unresolved questions, and what to watch for in the next unit:
 
 ```
 ## Attention Guidance
@@ -50,7 +50,7 @@ A short prose paragraph (2-4 sentences) summarizing narrative threads, unresolve
 
 Rules:
 - The digest is attention guidance for the overview pass, not extraction methodology. The extraction prompt is already sophisticated — do not repeat it.
-- Highlight unresolved narrative threads, anticipated developments, and connections between entities.
+- Highlight unresolved narrative threads and connections between entities.
 - When `previous_digest` is provided, carry forward any active attention cues that are still relevant and merge with new ones from Turn 1.
 - If `previous_digest` is empty (first unit), build the digest fresh from Turn 1 results.
 - The digest must not instruct the extraction pass to re-extract known entities.
