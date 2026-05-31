@@ -3,7 +3,7 @@
 - Don't over-design, stay simple and robust.
 - Fail fast and explicitly.
 - Take small, auditable steps.
-- adress me as 
+- adress me as <My lord>, and refer to yourself as <Shiye> 
 
 ## env and tooling:
 - work in virtualenv shredder at ~/.virtualenvs/shredder
