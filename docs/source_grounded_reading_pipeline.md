@@ -13,13 +13,17 @@ source text
 -> deterministic source blocks
 -> per-segment concepts + atomic items over source blocks
 -> unit-level concept unification + item stabilization
+-> [NEW] cross-unit concept resolution (LLM: link/merge/split/refine/reclassify)
 -> unit-level logical/thematic grouping (with optional graphs)
--> cross-unit registry deltas
+-> [NEW] cross-unit group resolution (LLM: continue/mutate/new_thread/cross_group_edge)
+-> cross-unit registry deltas (deterministic + LLM proposals)
 ```
 
 Timelines, discourse graphs, claim maps, and theme maps are all logical groups — graph-shaped views over atomic items. They are not core package fields or separate top-level models.
 
 The key correction after the unit-0002 reading trial: source blocks must be deterministic before LLM extraction begins. The LLM cites source blocks; it does not invent them.
+
+Phase 3 (2026-05-31) added cross-unit LLM resolution: concept identity resolution against the book registry (Conversation D), revised unit grouping without concept deltas (Conversation C v0.2), and cross-unit group resolution (Conversation E). See `design/08_cross_unit_llm_merge.md`.
 
 ## Design Principles
 
@@ -276,7 +280,7 @@ Recommended provenance values:
 
 No raw LLM output should destructively mutate document state. It proposes a delta. Deterministic validation and, when needed, user approval apply the delta to a new snapshot.
 
-## Pipeline Stages
+## Pipeline Stages (Current — 8 stages, 5 LLM-backed)
 
 ### Stage 1: Overview / Segmentation
 
@@ -398,15 +402,47 @@ Validation checks:
 - Edges with `source_grounded` provenance must cite `source_block_refs`.
 - Synthesis edges must be marked as `synthesis`, not `source_grounded`.
 
-### Stage 6: Cross-Unit Registry Delta
+### Stage 6: Cross-Unit Concept Resolution (NEW — Phase 3)
 
-Future stage. It should operate only after unit-level extraction is stable.
+Purpose: resolve concept identity across units by comparing unit concepts against the book registry.
 
-Input: finalized unit package and selected document context pack.
+Input: merged unit concepts, compact registry index (built via `registry_index.py`), unresolved items, N-1 book digest. No unit text needed — concept summaries provide semantic context.
 
-Output: validated registry delta against the current document snapshot.
+Output: `resolution_proposals` — `link` (cross-unit identity), `merge` (within-unit correction), `split`, `refine`, `reclassify`, `new_concept`. Each `link` may carry `implicit_refs` for items that reference the linked concept without naming it.
 
-Backend: LLM-backed proposal plus deterministic validation and transaction write.
+Backend: LLM-backed (Conversation D) with deterministic post-processing.
+
+### Stage 7: Cross-Unit Group Resolution (NEW — Phase 3)
+
+Purpose: determine how unit logical groups relate to book-level groups from prior units.
+
+Input: resolved concepts, unit logical groups, registry group candidates (filtered by concept/item overlap via `select_group_candidates()`).
+
+Output: `group_resolution_proposals` — `continue` (extend existing group), `mutate` (modify structure), `new_thread` (novel group), `cross_group_edge` (group-to-group relationship), `merge_groups` (retrospective merge of registry groups).
+
+Backend: LLM-backed (Conversation E) with deterministic post-processing.
+
+### Stage 8: Cross-Unit Registry Delta
+
+Applies LLM resolution proposals and deterministic operations to the BookRegistry.
+
+Input: finalized unit package, concept and group resolution proposals.
+
+Output: validated registry delta (`RegistryDeltaResult` with operations, ambiguity items, ID remapping, stats). Applied via `apply_registry_delta()`.
+
+Backend: deterministic — `registry_delta.py` with LLM proposals from steps 6-7.
+
+Note: Step 6 runs for all units (including unit 1 with empty registry for within-unit corrections). Step 7 is skipped for unit 1 (no prior registry groups).
+
+### Registry Index And Dual-Signal Candidate Detection
+
+`tilusion/registry_index.py` builds the compact registry concept index for LLM concept resolution and selects candidate concepts/groups:
+
+- **`build_registry_index()`**: One-line-per-concept compact representation (concept_id, canonical_name, type, summary truncated to ~120 chars, observed_surfaces first 10).
+- **`select_concept_candidates()`**: Hybrid candidate selection. When registry ≤50 concepts, returns the full index. When larger, unions deterministic pre-filter (surface collision + type family + canonical_name) with dual-signal retrieval (BM25 lexical + Qwen3-Embedding-0.6B semantic similarity + Reciprocal Rank Fusion).
+- **`select_group_candidates()`**: Pre-filters registry groups by concept overlap with unit groups.
+
+The dual-signal approach uses Qwen3-Embedding-0.6B (Apache 2.0, 0.6B params, 32K context, 0.988 R@1 on ZH→EN cross-lingual retrieval) for semantic similarity. Degrades gracefully to BM25-only if the model is unavailable.
 
 ## What To Preserve From Current Codebase
 
@@ -417,20 +453,23 @@ These are well-designed and should be reused or adapted:
 - **Reader/index layer** (`book_reader.py`): stable unit IDs, source coordinate extraction, unit text extraction. No changes needed.
 - **Overview segmentation** (`overview.py`): `run_overview_segmentation_pass` and `resolve_overview_segments`. The pass restores source regions, de-overlaps segments, and extends the final segment to the unit end for source completeness.
 - **Context pack hashing** (`book_context.py`): cache key isolation when context injection is enabled.
+- **BookRegistry** (`book_registry.py`): concept/item/group store with deterministic merge, collision detection, and git-backed persistence.
+- **Registry delta** (`registry_delta.py`): `compute_registry_delta` and `apply_registry_delta` with LLM proposal support.
+- **Registry index** (`registry_index.py`): compact concept index builder, dual-signal candidate detection (BM25 + Qwen3-Embedding-0.6B + RRF).
+- **Conversation infrastructure** (`conversation.py`): `ConversationContext` + `TurnMetadata` for multi-turn LLM conversations.
+- **Agentic repair** (`repair.py`): `run_agentic_pass()` with validation + repair loop.
 
-## What To Rewrite
-
-These modules carry the v0.1 model and should be rewritten from scratch:
-
-- `tilusion/reading_schema.py` — new dataclasses for v0.3 model, no SourceSpan/ConceptMention/GroupLink/DerivedStructure.
-- `tilusion/reading_validation.py` — updated field checks, coverage metrics, graph edge validation.
-- `tilusion/reading_prompts.py` — new prompt versions for per-segment (concepts + atomic items only) and unit-level grouping.
-- `tilusion/reading_payloads.py` — payload builders aligned with new schema and prompt contracts.
-- `tilusion/reading_pipeline.py` — updated pass functions and orchestrator for the new stages.
-
-New module to create:
+## New Modules Created (Phase 2-3)
 
 - `tilusion/source_blocks.py` — deterministic source block splitter with coverage verification.
+- `tilusion/book_registry.py` — BookRegistry with deterministic merge and git-backed persistence.
+- `tilusion/registry_delta.py` — deterministic diff of unit extraction against BookRegistry.
+- `tilusion/registry_index.py` — compact concept index, dual-signal candidate selection.
+- `tilusion/conversation.py` — multi-turn conversation context and turn metadata.
+- `tilusion/book_digest.py` — book context digest generation and consumption.
+- `tilusion/prompts/prompt_concept_resolution_v0.1.md` — Conversation D (cross-unit concept resolution).
+- `tilusion/prompts/prompt_group_resolution_v0.1.md` — Conversation E (cross-unit group resolution).
+- `tilusion/prompts/prompt_unit_grouping_v0.2.md` — Revised Conversation C (grouping without concept deltas).
 
 ## What To Leave Untouched
 
@@ -449,7 +488,9 @@ Each stage reports factual counts as part of its cached output. The final unit p
     "overview": {},
     "per_segment": {},
     "segment_merge": {},
-    "grouping": {}
+    "concept_resolution": {},
+    "grouping": {},
+    "group_resolution": {}
   }
 }
 ```
@@ -478,6 +519,12 @@ Segment merge counts:
 - Ambiguous surface count
 - Propagated warning count
 
+Concept resolution counts (Phase 3):
+- Registry index size
+- Candidate count (deterministic + dual-signal)
+- Resolution proposals by type (link, merge, split, refine, reclassify, new_concept)
+- Implicit refs captured
+
 Grouping counts:
 - Logical group count
 - Singleton group count
@@ -487,122 +534,46 @@ Grouping counts:
 - Event-like items with temporal hints
 - Timeline or temporal-sequence group count
 
-## Implementation Sequence
+Group resolution counts (Phase 3):
+- Registry group candidate count
+- Group resolution proposals by type (continue, mutate, new_thread, cross_group_edge, merge_groups)
 
-Each step is a focused, reviewable commit.
+## Implementation Status
 
-### Commit 1: Update plan and PROGRESS.md
+### Done (Phase 1-3, 2026-05-30 through 2026-05-31)
 
-- Revise this document with the v0.3 model, clarified naming, splitter spec, and updated commit sequence.
-- Update PROGRESS.md to reflect the fresh start and current direction.
+1. Update plan and PROGRESS.md
+2. Deterministic source block splitter (`tilusion/source_blocks.py`)
+3. Rewrite reading schema v0.3 (`tilusion/reading_schema.py`)
+4. Rewrite reading validation (`tilusion/reading_validation.py`)
+5. Rewrite per-segment extraction prompt (v0.2)
+6. Rewrite per-segment pass (prompts, payloads, pipeline)
+7. Segment-scoped ID reindexing
+8. Unit-level concept unification and item stabilization
+9. Unit-level logical grouping prompt (v0.1 → v0.2)
+10. Unit-level logical grouping pass
+11. Metrics wiring
+12. Update CLI
+13. Quality cleanup (concept type normalization, post-delta dedupe)
+14. BookRegistry + deterministic merge + git persistence (`book_registry.py`)
+15. Registry delta compute/apply (`registry_delta.py`)
+16. Multi-turn conversation infrastructure (`conversation.py`)
+17. Agentic repair loop (`repair.py`)
+18. Book digest as Conversation C turn (`book_digest.py`)
+19. Overview pass digest ingestion
+20. Cross-unit concept resolution — Conversation D (`registry_index.py`, prompt, pass)
+21. Revised unit logical grouping v0.2 — no concept deltas
+22. Cross-unit group resolution — Conversation E (prompt, pass)
+23. Dual-signal candidate detection — BM25 + Qwen3-Embedding-0.6B + RRF
+24. Pipeline wiring — TOTAL_STEPS=5
+25. Tests — 356 passing (3 pre-existing validation failures deselected)
 
-### Commit 2: Deterministic source block splitter
+### Future
 
-- New `tilusion/source_blocks.py` with `split_source_blocks()`.
-- Paragraph/sentence splitting, dialogue/line handling, coverage verification.
-- Tests: round-trip text fidelity, paragraph splitting, sentence splitting, empty/whitespace-only segments, coverage.
-- Quality metrics: block count, coverage %, average block size, oversized block count.
-
-### Commit 3: Rewrite reading schema (v0.3)
-
-- Replace `tilusion/reading_schema.py` with new dataclasses: `SourceBlock`, `Concept`, `AtomicItem`, `LogicalGroup` (with graph nodes/edges), `ExtractionUnitPackage`.
-- Remove: `SourceSpan`, `ConceptMention`, `CanonicalConcept`, `GroupLink`, `DerivedStructure`.
-- Keep: `DocumentStateSnapshot`, `RegistryDelta`, `AmbiguityQueueItem`, `UserCorrectionOperation` (unchanged for now).
-- Update recommended type sets and `schema_version` to `reading-unit-v0.3`.
-- Tests: recommended and custom types accepted, serialization round-trips, removed fields rejected.
-
-### Commit 4: Rewrite reading validation
-
-- Replace `tilusion/reading_validation.py` for the new schema fields.
-- Validate: package shape, source block coverage, concept/atomic item refs, logical group graph edges.
-- Add provenance checks: source-grounded edges must cite source blocks, synthesis edges must be marked as such.
-- Remove confidence validation (confidence is no longer a core field).
-- Tests: valid package passes, missing fields fail, broken refs fail, synthesis edges without blocks flagged, source-grounded edges without blocks flagged.
-
-### Commit 5: Rewrite per-segment extraction prompt
-
-- New `tilusion/prompts/prompt_per_segment_extraction_v0.2.md`.
-- Input provides deterministic source blocks. Output is only concepts and atomic items.
-- Region classification guidance (dialogue → more character concepts, expository → more term/claim items, sparse → minimal output).
-- Schema-light type guidance: recommended types as starter vocabulary, `other` and custom strings accepted.
-- Tests: prompt resource loads, prompt composition builds, contract keys present.
-
-### Commit 6: Rewrite per-segment pass (prompts, payloads, pipeline)
-
-- Update `reading_prompts.py` for v0.2 prompt.
-- Rewrite `reading_payloads.py` for the new per-segment contract.
-- Update `reading_pipeline.py` per-segment pass to use deterministic source blocks as input.
-- Update mock backend for new output shape.
-- Tests: mock backend returns valid concepts + atomic items, validation passes, source_block_refs resolve.
-
-### Commit 7: Segment-scoped ID reindexing
-
-- Update `flatten_segment_results` to prefix local IDs with segment ID.
-- Update all refs during flattening: `source_block_refs`, `concept_refs`, `item_refs`.
-- Reindex to sequential unit-level IDs after flattening.
-- Tests: two segments with same local IDs don't cross-wire, all refs resolve after reindexing.
-
-### Commit 8: Unit-level concept unification and item stabilization
-
-- Merge concepts by exact surface match + same `concept_type`.
-- Stabilize item IDs.
-- Generate unresolved items list for concepts with ambiguous surfaces.
-- Tests: duplicate concepts merged, distinct concepts preserved, item refs remain valid after merge.
-
-### Commit 9: Unit-level logical grouping prompt
-
-- New `tilusion/prompts/prompt_unit_logical_grouping_v0.1.md`.
-- Takes stabilized concepts and atomic items, outputs logical groups with optional graphs.
-- Guidance for timeline construction from event-like items with temporal attributes.
-- Guidance for discourse/claim graphs from claim/argument items.
-- Do not force groups when items don't naturally cluster together.
-
-### Commit 10: Unit-level logical grouping pass
-
-- Add `run_unit_logical_grouping_pass` to `reading_pipeline.py`.
-- Wire into orchestrator as stage 5.
-- Validate graph refs and provenance.
-- Update mock backend for grouping responses.
-- Tests: valid groups pass validation, graph edges resolve, source-grounded edges cite blocks.
-
-### Commit 11: Metrics wiring
-
-- Wire source block splitter counts into per-segment pass artifacts.
-- Wire per-segment counts into extraction pass output.
-- Rename the segment merge helper to match the `metrics.counts.segment_merge` stage.
-- Wire segment-merge counts into the merge helper output.
-- Wire grouping counts into grouping pass output.
-- Aggregate final factual telemetry under top-level `metrics.validation` and `metrics.counts`.
-- Keep validation focused on structural correctness; do not turn metric thresholds into warnings yet.
-
-### Commit 12: Update CLI
-
-- Add `run-reading` command to `cli.py` that runs the full v0.3 source-grounded reading pipeline.
-- Add `split-blocks` command to run just the deterministic source block splitter and inspect output as text or JSON.
-- Remove old event/timeline-centered extraction commands; keep `index`, `extract`, `run-reading`, `split-blocks`, and `validate-result`.
-- Ensure mock `run-reading` uses reading-pipeline mock contracts instead of the old extraction mock backend.
-
-### Quality cleanup sequence before next LLM trial
-
-The first real `run-reading` trial showed two quality problems that should be fixed before another backend run:
-
-- concept types drifted into overly fine-grained labels that were not useful for reading or merging;
-- concepts that clearly referred to the same source entity or idea were not always merged after segment flattening and unit grouping.
-
-These fixes should stay small and deterministic where possible:
-
-1. Align the concept-type vocabulary across schema, prompts, and docs. Per-segment extraction should advertise the coarse recommended types only; custom strings remain allowed but exceptional.
-2. Add deterministic concept-type normalization for merge grouping, so known noisy aliases collapse into the coarse vocabulary before comparing concepts.
-3. Add a post-delta dedupe after unit-level concept deltas, so a `reclassify` delta that makes concepts equivalent is not left as duplicate records.
-4. Emit unresolved items for risky same-surface/canonical conflicts that are not safe to auto-merge.
-5. Include deterministic pipeline versioning in unit package run fingerprints, so code-only post-processing changes do not silently reuse the same run output path.
-6. Clean up overview segment de-overlap metadata so debug/UI anchors remain consistent after truncation.
-
-Only the first three are required before the next LLM-backed quality comparison. The rest improve reviewability and cache hygiene.
-
-### Future: Cross-unit registry delta
-
-Only after unit-level extraction is stable on multiple real units.
+- LLM-driven concept summary refinement after deterministic merge
+- Re-extraction when concept resolution reveals major missed links
+- Item-level cross-unit linking
+- User feedback / correction engine
 
 ## Validation And Tests
 

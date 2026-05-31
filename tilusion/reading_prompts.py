@@ -8,6 +8,12 @@ PER_SEGMENT_EXTRACTION_PROMPT_VERSION = "per-segment-extraction-v0.2"
 PER_SEGMENT_EXTRACTION_PROMPT_RESOURCE = "prompt_per_segment_extraction_v0.2.md"
 UNIT_LOGICAL_GROUPING_PROMPT_VERSION = "unit-logical-grouping-v0.1"
 UNIT_LOGICAL_GROUPING_PROMPT_RESOURCE = "prompt_unit_logical_grouping_v0.1.md"
+UNIT_LOGICAL_GROUPING_PROMPT_V0_2_VERSION = "unit-logical-grouping-v0.2"
+UNIT_LOGICAL_GROUPING_PROMPT_V0_2_RESOURCE = "prompt_unit_grouping_v0.2.md"
+CONCEPT_RESOLUTION_PROMPT_VERSION = "concept-resolution-v0.1"
+CONCEPT_RESOLUTION_PROMPT_RESOURCE = "prompt_concept_resolution_v0.1.md"
+GROUP_RESOLUTION_PROMPT_VERSION = "group-resolution-v0.1"
+GROUP_RESOLUTION_PROMPT_RESOURCE = "prompt_group_resolution_v0.1.md"
 
 
 def build_per_segment_extraction_composition(
@@ -45,3 +51,57 @@ def build_unit_logical_grouping_composition(
     ]
     parts.extend(generated_prompt_parts or [])
     return PromptComposition(composition_id=UNIT_LOGICAL_GROUPING_PROMPT_VERSION, parts=parts)
+
+
+def build_unit_logical_grouping_v0_2_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "unit-logical-grouping-contract",
+            role="static_task_contract",
+            resource_name=UNIT_LOGICAL_GROUPING_PROMPT_V0_2_RESOURCE,
+            metadata={
+                "prompt_version": UNIT_LOGICAL_GROUPING_PROMPT_V0_2_VERSION,
+                "schema_version": READING_UNIT_SCHEMA_VERSION,
+            },
+        )
+    ]
+    parts.extend(generated_prompt_parts or [])
+    return PromptComposition(composition_id=UNIT_LOGICAL_GROUPING_PROMPT_V0_2_VERSION, parts=parts)
+
+
+def build_concept_resolution_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "concept-resolution-contract",
+            role="static_task_contract",
+            resource_name=CONCEPT_RESOLUTION_PROMPT_RESOURCE,
+            metadata={
+                "prompt_version": CONCEPT_RESOLUTION_PROMPT_VERSION,
+                "schema_version": READING_UNIT_SCHEMA_VERSION,
+            },
+        )
+    ]
+    parts.extend(generated_prompt_parts or [])
+    return PromptComposition(composition_id=CONCEPT_RESOLUTION_PROMPT_VERSION, parts=parts)
+
+
+def build_group_resolution_composition(
+    generated_prompt_parts: list[PromptPart] | None = None,
+) -> PromptComposition:
+    parts = [
+        load_static_prompt_part(
+            "group-resolution-contract",
+            role="static_task_contract",
+            resource_name=GROUP_RESOLUTION_PROMPT_RESOURCE,
+            metadata={
+                "prompt_version": GROUP_RESOLUTION_PROMPT_VERSION,
+                "schema_version": READING_UNIT_SCHEMA_VERSION,
+            },
+        )
+    ]
+    parts.extend(generated_prompt_parts or [])
+    return PromptComposition(composition_id=GROUP_RESOLUTION_PROMPT_VERSION, parts=parts)

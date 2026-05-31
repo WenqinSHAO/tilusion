@@ -27,17 +27,25 @@ def compute_registry_delta(
     registry: BookRegistry,
     *,
     unit_id: str,
+    concept_resolution_proposals: list[dict[str, Any]] | None = None,
+    group_resolution_proposals: list[dict[str, Any]] | None = None,
 ) -> RegistryDeltaResult:
     """Compare unit extraction result against current BookRegistry state.
 
-    Produces a structured delta. Entirely deterministic — no LLM calls.
+    When ``concept_resolution_proposals`` is provided, ``link`` proposals
+    override the deterministic exact-match-only rule — LLM-confirmed
+    cross-unit identity allows merging concepts that share only surface
+    or semantic similarity without exact canonical_name match.
 
     Args:
         unit_data: Unit package data with ``concepts``, ``atomic_items``,
                    ``logical_groups``, and ``unresolved_items`` keys.
         registry: Current BookRegistry state.
-        unit_id: The unit being processed (injected into concept provenance
-                 for source-unit tracking in summary concatenation).
+        unit_id: The unit being processed.
+        concept_resolution_proposals: Optional LLM resolution proposals.
+            ``link`` proposals override deterministic matching.
+        group_resolution_proposals: Optional LLM group resolution proposals.
+            ``continue`` proposals emit ``continue_group`` operations.
 
     Returns:
         ``RegistryDeltaResult`` with safe operations, ambiguity items,
@@ -51,15 +59,49 @@ def compute_registry_delta(
     unit_groups_dicts: list[dict[str, Any]] = unit_data.get("logical_groups", [])
     unresolved: list[dict[str, Any]] = unit_data.get("unresolved_items", [])
 
+    # Build link lookup: unit_concept_id → registry_concept_id
+    llm_links: dict[str, str] = {}
+    for prop in (concept_resolution_proposals or []):
+        if prop.get("proposal_type") == "link" and prop.get("registry_ref"):
+            for ref in prop.get("target_refs", []):
+                llm_links[ref] = prop["registry_ref"]
+
+    # Build group continuation lookup: unit_group_id → registry_group_id
+    group_continues: dict[str, str] = {}
+    group_mutates: dict[str, str] = {}
+    for prop in (group_resolution_proposals or []):
+        if prop.get("unit_group_ref") and prop.get("registry_group_ref"):
+            if prop.get("proposal_type") == "continue":
+                group_continues[prop["unit_group_ref"]] = prop["registry_group_ref"]
+            elif prop.get("proposal_type") == "mutate":
+                group_mutates[prop["unit_group_ref"]] = prop["registry_group_ref"]
+
     # ── Concepts: resolve identity against registry ──────────────────────
     for uc in unit_concepts_dicts:
+        uc_id = uc.get("concept_id", "")
+
+        # 1) LLM link override: confirmed cross-unit identity
+        if uc_id in llm_links:
+            existing_id = llm_links[uc_id]
+            result.id_remap[uc_id] = existing_id
+            stats["merge_concepts"] = stats.get("merge_concepts", 0) + 1
+            result.operations.append({
+                "op_type": "merge_concepts",
+                "unit_concept": uc,
+                "book_concept_id": existing_id,
+                "match_reason": "llm_link_proposal",
+                "unit_id": unit_id,
+            })
+            continue
+
+        # 2) Deterministic exact match
         concept = _dict_to_concept(uc, source_unit=unit_id)
         collisions = registry.find_collisions(concept)
         exact_matches = [c for c in collisions if c.match_reason == "exact_match"]
 
         if exact_matches:
             existing_id = exact_matches[0].existing_concept_id
-            result.id_remap[uc["concept_id"]] = existing_id
+            result.id_remap[uc_id] = existing_id
             stats["merge_concepts"] = stats.get("merge_concepts", 0) + 1
             result.operations.append({
                 "op_type": "merge_concepts",
@@ -69,14 +111,13 @@ def compute_registry_delta(
                 "unit_id": unit_id,
             })
         elif collisions:
-            # surface_match or alias_match — not safe to auto-merge
-            result.id_remap[uc["concept_id"]] = uc["concept_id"]  # keep local for now
+            result.id_remap[uc_id] = uc_id
             stats["ambiguity_item"] = stats.get("ambiguity_item", 0) + 1
             for col in collisions:
                 result.ambiguity_items.append({
                     "kind": "identity_ambiguity",
                     "unit_id": unit_id,
-                    "unit_concept_id": uc["concept_id"],
+                    "unit_concept_id": uc_id,
                     "unit_surface": uc.get("surface", ""),
                     "unit_canonical_name": uc.get("canonical_name", ""),
                     "unit_concept_type": uc.get("concept_type", ""),
@@ -85,8 +126,7 @@ def compute_registry_delta(
                     "match_details": col.match_details,
                 })
         else:
-            # No collision — new concept
-            result.id_remap[uc["concept_id"]] = None  # placeholder, assigned on add
+            result.id_remap[uc_id] = None
             stats["add_concept"] = stats.get("add_concept", 0) + 1
             result.operations.append({
                 "op_type": "add_concept",
@@ -103,14 +143,32 @@ def compute_registry_delta(
             "unit_id": unit_id,
         })
 
-    # ── Groups: always new, remap concept_refs ───────────────────────────
+    # ── Groups: new or continued, remap concept_refs ──────────────────────
     for group in unit_groups_dicts:
-        stats["add_group"] = stats.get("add_group", 0) + 1
-        result.operations.append({
-            "op_type": "add_group",
-            "group": group,
-            "unit_id": unit_id,
-        })
+        group_id = group.get("group_id", "")
+        if group_id in group_continues:
+            stats["continue_group"] = stats.get("continue_group", 0) + 1
+            result.operations.append({
+                "op_type": "continue_group",
+                "group": group,
+                "book_group_id": group_continues[group_id],
+                "unit_id": unit_id,
+            })
+        elif group_id in group_mutates:
+            stats["mutate_group"] = stats.get("mutate_group", 0) + 1
+            result.operations.append({
+                "op_type": "mutate_group",
+                "group": group,
+                "book_group_id": group_mutates[group_id],
+                "unit_id": unit_id,
+            })
+        else:
+            stats["add_group"] = stats.get("add_group", 0) + 1
+            result.operations.append({
+                "op_type": "add_group",
+                "group": group,
+                "unit_id": unit_id,
+            })
 
     # ── Unresolved items: carry forward as ambiguity items ───────────────
     for ui in unresolved:
@@ -188,6 +246,44 @@ def apply_registry_delta(
             applied_ids.append(item_id)
 
         elif op_type == "add_group":
+            group_dict = op["group"]
+            group_dict["concept_refs"] = _remap_refs(
+                group_dict.get("concept_refs", []), delta.id_remap
+            )
+            group = LogicalGroup(
+                group_id="",  # registry assigns
+                group_type=group_dict.get("group_type", "other"),
+                summary=group_dict.get("summary", ""),
+                item_refs=group_dict.get("item_refs", []),
+                concept_refs=group_dict["concept_refs"],
+                graph=group_dict.get("graph", {}),
+                uncertainty=group_dict.get("uncertainty", []),
+                provenance=group_dict.get("provenance", {}),
+            )
+            group_id = registry.add_group(group)
+            applied_ids.append(group_id)
+
+        elif op_type == "continue_group":
+            # LLM-confirmed continuation: add group with reference to book group
+            group_dict = op["group"]
+            group_dict["concept_refs"] = _remap_refs(
+                group_dict.get("concept_refs", []), delta.id_remap
+            )
+            group = LogicalGroup(
+                group_id="",  # registry assigns
+                group_type=group_dict.get("group_type", "other"),
+                summary=group_dict.get("summary", ""),
+                item_refs=group_dict.get("item_refs", []),
+                concept_refs=group_dict["concept_refs"],
+                graph=group_dict.get("graph", {}),
+                uncertainty=group_dict.get("uncertainty", []),
+                provenance=group_dict.get("provenance", {}),
+            )
+            group_id = registry.add_group(group)
+            applied_ids.append(group_id)
+
+        elif op_type == "mutate_group":
+            # LLM-confirmed mutation: add group with reference to book group
             group_dict = op["group"]
             group_dict["concept_refs"] = _remap_refs(
                 group_dict.get("concept_refs", []), delta.id_remap

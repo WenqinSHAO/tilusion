@@ -25,14 +25,20 @@ from .pass_utils import (
     pass_artifact_paths,
 )
 from .reading_payloads import (
+    build_concept_resolution_payload,
+    build_group_resolution_payload,
     build_per_segment_extraction_payload,
     build_unit_logical_grouping_payload,
+    build_unit_logical_grouping_payload_v0_2,
     merge_segment_extraction_results,
 )
 from .reading_schema import normalize_concept_type
 from .reading_prompts import (
+    build_concept_resolution_composition,
+    build_group_resolution_composition,
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
+    build_unit_logical_grouping_v0_2_composition,
 )
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
 from .source_blocks import split_source_blocks
@@ -42,6 +48,11 @@ from .reading_validation import (
 )
 from .book_digest import make_context_dict
 from .book_registry import BookRegistry
+from .registry_index import (
+    build_registry_index,
+    select_concept_candidates,
+    select_group_candidates,
+)
 from .registry_delta import RegistryDeltaResult, apply_registry_delta, compute_registry_delta
 
 # re-export for convenience
@@ -334,6 +345,10 @@ class MockReadingBackend:
             return json.dumps(mock_per_segment_extraction_response(user_payload), ensure_ascii=False)
         if task == "unit_logical_grouping":
             return json.dumps(mock_unit_logical_grouping_response(user_payload), ensure_ascii=False)
+        if task == "cross_unit_concept_resolution":
+            return json.dumps(mock_concept_resolution_response(user_payload), ensure_ascii=False)
+        if task == "cross_unit_group_resolution":
+            return json.dumps(mock_group_resolution_response(user_payload), ensure_ascii=False)
         if task == "book_digest":
             return json.dumps(mock_book_digest_response(user_payload), ensure_ascii=False)
 
@@ -984,6 +999,202 @@ def _compute_grouping_counts(
     }
 
 
+# ── Cross-unit resolution application functions ───────────────────────────
+
+
+def _apply_concept_resolution(
+    concepts: list[dict[str, Any]],
+    proposals: list[dict[str, Any]],
+    *,
+    unit_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, Any]]]:
+    """Apply LLM concept resolution proposals.
+
+    Returns ``(updated_concepts, concept_remap, implicit_ref_map)`` where
+    *concept_remap* maps old concept IDs to new concept IDs, and
+    *implicit_ref_map* collects implicit item references per concept.
+    """
+    if not proposals:
+        return concepts, {}, {}
+
+    concept_by_id = {c["concept_id"]: c for c in concepts}
+    remap: dict[str, str] = {}
+    implicit_ref_map: dict[str, dict[str, Any]] = {}
+    next_index = len(concepts)
+
+    for prop in proposals:
+        prop_type = prop.get("proposal_type", "")
+        target_refs = prop.get("target_refs", [])
+        changes = prop.get("changes", {})
+        registry_ref = prop.get("registry_ref", "")
+
+        # Collect implicit_refs from link proposals
+        implicit_refs = prop.get("implicit_refs", [])
+        if implicit_refs and prop_type == "link" and registry_ref:
+            implicit_ref_map[registry_ref] = {
+                "unit_concept_ref": target_refs[0] if target_refs else "",
+                "implicit_refs": implicit_refs,
+            }
+
+        if prop_type == "link":
+            # Cross-unit identity: mark the unit concept as linked to registry
+            for ref in target_refs:
+                if ref in concept_by_id:
+                    concept_by_id[ref]["registry_ref"] = registry_ref
+                    # Update with LLM-refined fields if provided
+                    for field in ("canonical_name", "summary", "surface"):
+                        if changes.get(field):
+                            concept_by_id[ref][field] = changes[field]
+
+        elif prop_type == "merge":
+            known_refs = [ref for ref in target_refs if ref in concept_by_id]
+            if len(known_refs) < 2:
+                continue
+            primary_id = known_refs[0]
+            primary = concept_by_id[primary_id]
+            for ref in known_refs:
+                remap[ref] = primary_id
+
+            for field in ("canonical_name", "summary", "surface", "concept_type"):
+                if changes.get(field):
+                    primary[field] = changes[field]
+
+            for field in ("aliases", "observed_surfaces", "source_block_refs", "facets", "uncertainty"):
+                seen = set()
+                values: list[Any] = []
+                for value in _as_list(primary.get(field)):
+                    if value not in seen:
+                        seen.add(value)
+                        values.append(value)
+                for ref in known_refs[1:]:
+                    for value in _as_list(concept_by_id[ref].get(field)):
+                        if value not in seen:
+                            seen.add(value)
+                            values.append(value)
+                for value in _as_list(changes.get(field)):
+                    if value not in seen:
+                        seen.add(value)
+                        values.append(value)
+                if values:
+                    primary[field] = values
+
+            merged_from = []
+            for ref in known_refs:
+                merged_from.extend(_as_list(concept_by_id[ref].get("merged_from")) or [ref])
+            primary["merged_from"] = list(dict.fromkeys(merged_from))
+
+            for ref in known_refs[1:]:
+                del concept_by_id[ref]
+
+        elif prop_type == "split":
+            original_id = target_refs[0] if target_refs else ""
+            split_into = changes.get("split_into", [])
+            if original_id in concept_by_id:
+                del concept_by_id[original_id]
+            for i, new_concept in enumerate(split_into):
+                next_index += 1
+                new_id = f"concept-{next_index:04d}"
+                new_concept["concept_id"] = new_id
+                new_concept.setdefault("provenance", {"grounding": "synthesis", "created_by": "llm_inferred"})
+                concept_by_id[new_id] = new_concept
+                if i == 0 and original_id:
+                    remap[original_id] = new_id
+
+        elif prop_type == "refine":
+            for ref in target_refs:
+                if ref in concept_by_id:
+                    c = concept_by_id[ref]
+                    for field in ("canonical_name", "summary", "aliases", "observed_surfaces", "facets", "uncertainty"):
+                        if field in changes:
+                            c[field] = changes[field]
+
+        elif prop_type == "reclassify":
+            for ref in target_refs:
+                if ref in concept_by_id and "concept_type" in changes:
+                    concept_by_id[ref]["concept_type"] = changes["concept_type"]
+
+        elif prop_type == "new_concept":
+            # Re-confirm registry_ref is empty — these stay local
+            for ref in target_refs:
+                if ref in concept_by_id:
+                    concept_by_id[ref].pop("registry_ref", None)
+
+    return list(concept_by_id.values()), remap, implicit_ref_map
+
+
+def _apply_group_resolution(
+    groups: list[dict[str, Any]],
+    proposals: list[dict[str, Any]],
+    *,
+    unit_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply LLM group resolution proposals.
+
+    Returns ``(updated_groups, cross_group_edges)``.
+    """
+    if not proposals:
+        return groups, []
+
+    group_by_id = {g["group_id"]: g for g in groups}
+    cross_group_edges: list[dict[str, Any]] = []
+    next_index = len(groups)
+
+    for prop in proposals:
+        prop_type = prop.get("proposal_type", "")
+        unit_group_ref = prop.get("unit_group_ref", "")
+        registry_group_ref = prop.get("registry_group_ref", "")
+        changes = prop.get("changes", {})
+
+        if prop_type == "continue":
+            if unit_group_ref in group_by_id:
+                group_by_id[unit_group_ref]["registry_group_ref"] = registry_group_ref
+                group_by_id[unit_group_ref]["_continuation"] = "continue"
+                if changes.get("summary"):
+                    group_by_id[unit_group_ref]["summary"] = changes["summary"]
+
+        elif prop_type == "mutate":
+            if unit_group_ref in group_by_id:
+                group_by_id[unit_group_ref]["registry_group_ref"] = registry_group_ref
+                group_by_id[unit_group_ref]["_continuation"] = "mutate"
+                for field in ("summary", "group_type"):
+                    if changes.get(field):
+                        group_by_id[unit_group_ref][field] = changes[field]
+
+        elif prop_type == "new_thread":
+            if unit_group_ref in group_by_id:
+                group_by_id[unit_group_ref]["_continuation"] = "new_thread"
+
+        elif prop_type == "cross_group_edge":
+            edge = prop.get("edge", {})
+            if edge:
+                cross_group_edges.append({
+                    "source_group": edge.get("source_group", ""),
+                    "target_group": edge.get("target_group", ""),
+                    "edge_type": edge.get("edge_type", "related_to"),
+                    "summary": edge.get("summary", ""),
+                    "provenance": prop.get("provenance", {}),
+                    "uncertainty": prop.get("uncertainty", []),
+                })
+
+        elif prop_type == "merge_groups":
+            target_refs = prop.get("target_refs", [])
+            known_refs = [ref for ref in target_refs if ref in group_by_id]
+            if len(known_refs) < 2:
+                continue
+            primary_id = known_refs[0]
+            primary = group_by_id[primary_id]
+            for ref in known_refs[1:]:
+                group_by_id[ref]["_merged_into"] = primary_id
+                primary.setdefault("_merged_from", []).append(ref)
+            for field in ("summary", "group_type"):
+                if changes.get(field):
+                    primary[field] = changes[field]
+            for ref in known_refs[1:]:
+                del group_by_id[ref]
+
+    return list(group_by_id.values()), cross_group_edges
+
+
 def run_unit_logical_grouping_pass(
     *,
     unit_id: str,
@@ -997,15 +1208,16 @@ def run_unit_logical_grouping_pass(
     backend: LLMBackend,
     cache_dir: Path,
     use_cache: bool = True,
+    implicit_refs: dict[str, dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
 ) -> ReadingPassRecord:
-    """Run the unit-level logical grouping + concept delta pass.
+    """Run the unit-level logical grouping pass (v0.2).
 
-    The LLM reviews merged concepts, emits optional corrections as
-    concept deltas, and builds logical groups from atomic items.
+    Concepts have already been resolved by a prior cross-unit pass.
+    This pass only builds logical groups — it does not emit concept deltas.
     """
-    prompt = build_unit_logical_grouping_composition()
-    payload = build_unit_logical_grouping_payload(
+    prompt = build_unit_logical_grouping_v0_2_composition()
+    payload = build_unit_logical_grouping_payload_v0_2(
         unit_id=unit_id,
         unit_text=unit_text,
         source=source,
@@ -1020,11 +1232,12 @@ def run_unit_logical_grouping_pass(
         concepts=concepts,
         atomic_items=atomic_items,
         unresolved_items=unresolved_items,
+        implicit_refs=implicit_refs,
         context=context,
     )
 
     cache_key = build_pass_cache_key(
-        pass_name="unit-logical-grouping",
+        pass_name="unit-logical-grouping-v0.2",
         prompt=prompt,
         user_payload=payload,
         model_identity=backend.model_identity,
@@ -1038,48 +1251,24 @@ def run_unit_logical_grouping_pass(
         raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
         data = json.loads(result_path.read_text(encoding="utf-8"))
     else:
-        # The validation_subject_builder does all deterministic post-processing
-        # (delta screening, application, dedupe, remap). With return_subject=True,
-        # run_agentic_pass returns the final post-processed validation subject.
+        # v0.2: concepts are already resolved — no concept delta processing.
+        # The validation_subject_builder preserves concepts/items as-is and
+        # only extracts logical_groups from the LLM response.
         def _build_grouping_subject(llm_data: dict[str, Any]) -> dict[str, Any]:
             _normalize_uncertainty_fields(llm_data)
-            deltas = llm_data.get("concept_deltas", [])
-            safe_deltas, rejected_merges = _validate_merge_deltas(deltas, concepts)
-
-            uc, concept_remap = _apply_concept_deltas(concepts, safe_deltas, unit_id=unit_id)
-            uc, dedupe_remap = _dedupe_equivalent_concepts(uc)
-            final_remap = _compose_concept_remaps(concept_remap, dedupe_remap)
-
-            remapped_items: list[dict[str, Any]] = []
-            for item in atomic_items:
-                updated = dict(item)
-                updated["concept_refs"] = [
-                    final_remap.get(ref, ref) for ref in item.get("concept_refs", [])
-                ]
-                remapped_items.append(updated)
 
             groups = llm_data.get("logical_groups", [])
-            remapped_groups: list[dict[str, Any]] = []
-            for group in groups:
-                updated = dict(group)
-                updated["concept_refs"] = [
-                    final_remap.get(ref, ref) for ref in group.get("concept_refs", [])
-                ]
-                remapped_groups.append(updated)
-
             llm_unresolved = llm_data.get("unresolved_items", [])
-            merge_rejection_items = _build_merge_rejection_items(rejected_merges, llm_unresolved)
-            all_unresolved = list(llm_unresolved) + merge_rejection_items
 
             return {
                 "schema_version": READING_UNIT_SCHEMA_VERSION,
                 "unit_id": unit_id,
                 "source": {**source, "unit_text": unit_text},
                 "source_blocks": source_blocks,
-                "concepts": uc,
-                "atomic_items": remapped_items,
-                "logical_groups": remapped_groups,
-                "unresolved_items": all_unresolved,
+                "concepts": concepts,
+                "atomic_items": atomic_items,
+                "logical_groups": groups,
+                "unresolved_items": llm_unresolved,
                 "validation": {},
                 "context_metadata": {},
             }
@@ -1091,13 +1280,13 @@ def run_unit_logical_grouping_pass(
             prompt=prompt,
             payload=payload,
             validation_subject_builder=_build_grouping_subject,
-            pass_name="unit-logical-grouping",
+            pass_name="unit-logical-grouping-v0.2",
             return_subject=True,
         )
         raw_response = _last_assistant_content(conversation)
 
-    # When return_subject=True, data IS the final validation subject with
-    # post-processed concepts/items/groups. Extract fields for the record.
+    # When return_subject=True, data IS the final validation subject.
+    # v0.2: concepts/items are preserved as-is — no delta application needed.
     if not cache_hit:
         updated_concepts = data.get("concepts", [])
         updated_items = data.get("atomic_items", [])
@@ -1105,31 +1294,10 @@ def run_unit_logical_grouping_pass(
         all_unresolved = data.get("unresolved_items", [])
     else:
         _normalize_uncertainty_fields(data)
-        deltas = data.get("concept_deltas", [])
-        safe_deltas, rejected_merges = _validate_merge_deltas(deltas, concepts)
-        updated_concepts, concept_remap = _apply_concept_deltas(
-            concepts, safe_deltas, unit_id=unit_id
-        )
-        updated_concepts, dedupe_remap = _dedupe_equivalent_concepts(updated_concepts)
-        final_concept_remap = _compose_concept_remaps(concept_remap, dedupe_remap)
-        groups = data.get("logical_groups", [])
-        updated_items: list[dict[str, Any]] = []
-        for item in atomic_items:
-            updated = dict(item)
-            updated["concept_refs"] = [
-                final_concept_remap.get(ref, ref) for ref in item.get("concept_refs", [])
-            ]
-            updated_items.append(updated)
-        updated_groups = []
-        for group in groups:
-            updated = dict(group)
-            updated["concept_refs"] = [
-                final_concept_remap.get(ref, ref) for ref in group.get("concept_refs", [])
-            ]
-            updated_groups.append(updated)
-        llm_unresolved = data.get("unresolved_items", [])
-        merge_rejection_items = _build_merge_rejection_items(rejected_merges, llm_unresolved)
-        all_unresolved = list(llm_unresolved) + merge_rejection_items
+        updated_concepts = concepts
+        updated_items = atomic_items
+        updated_groups = data.get("logical_groups", [])
+        all_unresolved = data.get("unresolved_items", [])
 
         validation_subject = {
             "schema_version": READING_UNIT_SCHEMA_VERSION,
@@ -1144,13 +1312,13 @@ def run_unit_logical_grouping_pass(
             "context_metadata": {},
         }
         validation_report = validate_extraction_unit_package(validation_subject)
-        _raise_on_validation_errors("unit-logical-grouping", validation_report)
+        _raise_on_validation_errors("unit-logical-grouping-v0.2", validation_report)
 
     # ── Compute factual grouping counts ──
     grouping_counts = _compute_grouping_counts(updated_groups, updated_items)
 
     record = ReadingPassRecord(
-        pass_name="unit-logical-grouping",
+        pass_name="unit-logical-grouping-v0.2",
         cache_key=cache_key,
         cache_dir=str(pass_dir),
         cache_hit=cache_hit,
@@ -1189,6 +1357,388 @@ def run_unit_logical_grouping_pass(
     return record
 
 
+# ── Pass: cross-unit concept resolution ────────────────────────────────────
+
+
+def run_cross_unit_concept_resolution_pass(
+    *,
+    unit_id: str,
+    concepts: list[dict[str, Any]],
+    registry_index: list[dict[str, Any]],
+    unresolved_items: list[dict[str, Any]],
+    backend: LLMBackend,
+    cache_dir: Path,
+    use_cache: bool = True,
+    source_blocks: list[dict[str, Any]] | None = None,
+    context: dict[str, Any] | None = None,
+) -> ReadingPassRecord:
+    """Run cross-unit concept identity resolution (Conversation D).
+
+    LLM reviews unit concepts against the registry index and emits
+    resolution proposals: link, merge, split, refine, reclassify, new_concept.
+    """
+    prompt = build_concept_resolution_composition()
+    payload = build_concept_resolution_payload(
+        unit_id=unit_id,
+        concepts=concepts,
+        registry_index=registry_index,
+        unresolved_items=unresolved_items,
+        context=context,
+    )
+    blocks = source_blocks or []
+
+    cache_key = build_pass_cache_key(
+        pass_name="cross-unit-concept-resolution",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=backend.model_identity,
+    )
+    pass_dir = cache_dir / cache_key
+    paths = pass_artifact_paths(pass_dir)
+    result_path = Path(paths["result"])
+    cache_hit = use_cache and result_path.exists()
+
+    if cache_hit:
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+    else:
+        def _build_subject(llm_data: dict[str, Any]) -> dict[str, Any]:
+            _normalize_uncertainty_fields(llm_data)
+            proposals = llm_data.get("resolution_proposals", [])
+            uc, concept_remap, implicit_refs = _apply_concept_resolution(
+                concepts, proposals, unit_id=unit_id,
+            )
+            return {
+                "schema_version": READING_UNIT_SCHEMA_VERSION,
+                "unit_id": unit_id,
+                "source": {},
+                "source_blocks": blocks,
+                "concepts": uc,
+                "atomic_items": [],
+                "logical_groups": [],
+                "unresolved_items": llm_data.get("unresolved_items", []),
+                "validation": {},
+                "context_metadata": {},
+            }
+
+        from .repair import run_agentic_pass
+
+        data, conversation, validation_report = run_agentic_pass(
+            backend=backend,
+            prompt=prompt,
+            payload=payload,
+            validation_subject_builder=_build_subject,
+            pass_name="cross-unit-concept-resolution",
+            return_subject=True,
+        )
+        raw_response = _last_assistant_content(conversation)
+
+    if not cache_hit:
+        updated_concepts = data.get("concepts", [])
+        all_unresolved = data.get("unresolved_items", [])
+    else:
+        _normalize_uncertainty_fields(data)
+        proposals = data.get("resolution_proposals", [])
+        updated_concepts, concept_remap, implicit_refs = _apply_concept_resolution(
+            concepts, proposals, unit_id=unit_id,
+        )
+        all_unresolved = data.get("unresolved_items", [])
+
+    # Build implicit_ref_map from link proposals (needed for both cache paths)
+    raw_proposals = data.get("resolution_proposals", [])
+    implicit_ref_map: dict[str, dict[str, Any]] = {}
+    for prop in raw_proposals:
+        if prop.get("proposal_type") == "link" and prop.get("registry_ref"):
+            refs = prop.get("implicit_refs", [])
+            if refs:
+                implicit_ref_map[prop["registry_ref"]] = {
+                    "unit_concept_ref": (prop.get("target_refs") or [""])[0],
+                    "implicit_refs": refs,
+                }
+
+    record = ReadingPassRecord(
+        pass_name="cross-unit-concept-resolution",
+        cache_key=cache_key,
+        cache_dir=str(pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data={
+            **data,
+            "schema_version": READING_UNIT_SCHEMA_VERSION,
+            "unit_id": unit_id,
+            "concepts": updated_concepts,
+            "resolution_proposals": raw_proposals,
+            "implicit_refs": implicit_ref_map,
+            "unresolved_items": all_unresolved,
+            "validation": validation_report.to_dict() if not cache_hit else {},
+        },
+        validation_report=validation_report if not cache_hit else ReadingValidationReport(True, 0, 0, 0, []),
+        artifact_paths=paths,
+        conversation=locals().get("conversation"),
+    )
+
+    if use_cache:
+        _write_reading_pass_artifacts(
+            pass_dir=pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=record.data,
+            validation_report=record.validation_report,
+            record=record,
+        )
+
+    return record
+
+
+# ── Pass: cross-unit group resolution ──────────────────────────────────────
+
+
+def run_cross_unit_group_resolution_pass(
+    *,
+    unit_id: str,
+    concepts: list[dict[str, Any]],
+    groups: list[dict[str, Any]],
+    registry_groups: list[dict[str, Any]],
+    backend: LLMBackend,
+    cache_dir: Path,
+    use_cache: bool = True,
+    source_blocks: list[dict[str, Any]] | None = None,
+    context: dict[str, Any] | None = None,
+) -> ReadingPassRecord:
+    """Run cross-unit group resolution (Conversation E).
+
+    LLM reviews unit groups against candidate registry groups and emits
+    group resolution proposals: continue, mutate, new_thread, cross_group_edge,
+    merge_groups.
+    """
+    prompt = build_group_resolution_composition()
+    payload = build_group_resolution_payload(
+        unit_id=unit_id,
+        concepts=concepts,
+        groups=groups,
+        registry_groups=registry_groups,
+        context=context,
+    )
+    blocks = source_blocks or []
+
+    cache_key = build_pass_cache_key(
+        pass_name="cross-unit-group-resolution",
+        prompt=prompt,
+        user_payload=payload,
+        model_identity=backend.model_identity,
+    )
+    pass_dir = cache_dir / cache_key
+    paths = pass_artifact_paths(pass_dir)
+    result_path = Path(paths["result"])
+    cache_hit = use_cache and result_path.exists()
+
+    if cache_hit:
+        raw_response = Path(paths["raw_response"]).read_text(encoding="utf-8")
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+    else:
+        def _build_subject(llm_data: dict[str, Any]) -> dict[str, Any]:
+            _normalize_uncertainty_fields(llm_data)
+            proposals = llm_data.get("group_resolution_proposals", [])
+            ug, cross_edges = _apply_group_resolution(
+                groups, proposals, unit_id=unit_id,
+            )
+            return {
+                "schema_version": READING_UNIT_SCHEMA_VERSION,
+                "unit_id": unit_id,
+                "source": {},
+                "source_blocks": blocks,
+                "concepts": concepts,
+                "atomic_items": [],
+                "logical_groups": ug,
+                "unresolved_items": [],
+                "validation": {},
+                "context_metadata": {},
+            }
+
+        from .repair import run_agentic_pass
+
+        data, conversation, validation_report = run_agentic_pass(
+            backend=backend,
+            prompt=prompt,
+            payload=payload,
+            validation_subject_builder=_build_subject,
+            pass_name="cross-unit-group-resolution",
+            return_subject=True,
+        )
+        raw_response = _last_assistant_content(conversation)
+
+    if not cache_hit:
+        updated_groups = data.get("logical_groups", [])
+    else:
+        _normalize_uncertainty_fields(data)
+        proposals = data.get("group_resolution_proposals", [])
+        updated_groups, cross_group_edges = _apply_group_resolution(
+            groups, proposals, unit_id=unit_id,
+        )
+
+    raw_proposals = data.get("group_resolution_proposals", [])
+    _, cross_group_edges = _apply_group_resolution(
+        groups if cache_hit else groups, raw_proposals, unit_id=unit_id,
+    )
+
+    record = ReadingPassRecord(
+        pass_name="cross-unit-group-resolution",
+        cache_key=cache_key,
+        cache_dir=str(pass_dir),
+        cache_hit=cache_hit,
+        raw_response=raw_response,
+        data={
+            **data,
+            "schema_version": READING_UNIT_SCHEMA_VERSION,
+            "unit_id": unit_id,
+            "concepts": concepts,
+            "logical_groups": updated_groups,
+            "group_resolution_proposals": raw_proposals,
+            "cross_group_edges": cross_group_edges,
+            "warnings": data.get("warnings", []),
+        },
+        validation_report=validation_report if not cache_hit else ReadingValidationReport(True, 0, 0, 0, []),
+        artifact_paths=paths,
+        conversation=locals().get("conversation"),
+    )
+
+    if use_cache:
+        _write_reading_pass_artifacts(
+            pass_dir=pass_dir,
+            paths=paths,
+            prompt=prompt,
+            user_payload=payload,
+            raw_response=raw_response,
+            data=record.data,
+            validation_report=record.validation_report,
+            record=record,
+        )
+
+    return record
+
+
+# ── Mock responses for new passes ──────────────────────────────────────────
+
+
+def mock_concept_resolution_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_id = user_payload.get("unit_id", "unit-0001")
+    concepts = user_payload.get("concepts", [])
+    registry_index = user_payload.get("registry_index", [])
+
+    proposals: list[dict[str, Any]] = []
+    if registry_index:
+        # Link each unit concept to first matching-type registry concept
+        for i, uc in enumerate(concepts):
+            uc_type = uc.get("concept_type", "other")
+            matched = next(
+                (r for r in registry_index if r.get("concept_type") == uc_type),
+                None,
+            )
+            if matched:
+                proposals.append({
+                    "proposal_id": f"res-{i + 1:04d}",
+                    "proposal_type": "link",
+                    "target_refs": [uc["concept_id"]],
+                    "registry_ref": matched["concept_id"],
+                    "changes": {},
+                    "rationale": "Mock: matching type in registry index.",
+                    "implicit_refs": [],
+                    "uncertainty": [],
+                    "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+                })
+            else:
+                proposals.append({
+                    "proposal_id": f"res-{i + 1:04d}",
+                    "proposal_type": "new_concept",
+                    "target_refs": [uc["concept_id"]],
+                    "registry_ref": "",
+                    "changes": {},
+                    "rationale": "Mock: no matching type in registry.",
+                    "implicit_refs": [],
+                    "uncertainty": [],
+                    "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+                })
+    else:
+        # Empty registry — all new concepts
+        for i, uc in enumerate(concepts):
+            proposals.append({
+                "proposal_id": f"res-{i + 1:04d}",
+                "proposal_type": "new_concept",
+                "target_refs": [uc["concept_id"]],
+                "registry_ref": "",
+                "changes": {},
+                "rationale": "Mock: first unit, no registry.",
+                "implicit_refs": [],
+                "uncertainty": [],
+                "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+            })
+
+    return {
+        "unit_id": unit_id,
+        "resolution_proposals": proposals,
+        "unresolved_items": [],
+        "warnings": ["mock concept resolution: placeholder"],
+    }
+
+
+def mock_group_resolution_response(user_payload: dict[str, Any]) -> dict[str, Any]:
+    unit_id = user_payload.get("unit_id", "unit-0001")
+    groups = user_payload.get("groups", [])
+    registry_groups = user_payload.get("registry_groups", [])
+
+    proposals: list[dict[str, Any]] = []
+    if registry_groups:
+        # Continue each unit group as continuation of first matching registry group
+        for i, g in enumerate(groups):
+            g_type = g.get("group_type", "other")
+            matched = next(
+                (r for r in registry_groups if r.get("group_type") == g_type),
+                None,
+            )
+            if matched:
+                proposals.append({
+                    "proposal_id": f"grp-res-{i + 1:04d}",
+                    "proposal_type": "continue",
+                    "unit_group_ref": g["group_id"],
+                    "registry_group_ref": matched["group_id"],
+                    "changes": {},
+                    "rationale": "Mock: matching group type in registry.",
+                    "uncertainty": [],
+                    "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+                })
+            else:
+                proposals.append({
+                    "proposal_id": f"grp-res-{i + 1:04d}",
+                    "proposal_type": "new_thread",
+                    "unit_group_ref": g["group_id"],
+                    "registry_group_ref": "",
+                    "changes": {},
+                    "rationale": "Mock: no matching group type in registry.",
+                    "uncertainty": [],
+                    "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+                })
+    else:
+        for i, g in enumerate(groups):
+            proposals.append({
+                "proposal_id": f"grp-res-{i + 1:04d}",
+                "proposal_type": "new_thread",
+                "unit_group_ref": g["group_id"],
+                "registry_group_ref": "",
+                "changes": {},
+                "rationale": "Mock: first unit, no registry groups.",
+                "uncertainty": [],
+                "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+            })
+
+    return {
+        "unit_id": unit_id,
+        "group_resolution_proposals": proposals,
+        "warnings": ["mock group resolution: placeholder"],
+    }
+
+
 # ── Orchestrator ─────────────────────────────────────────────────────────────
 
 
@@ -1202,16 +1752,14 @@ def run_reading_pipeline(
     context: dict[str, Any] | None = None,
     scope: str = "unit",
 ) -> ReadingPipelineRecord:
-    """Run the full reading pipeline: overview → per-segment → logical grouping.
-
-    Reuses the existing overview/segmentation pass, then runs deterministic
-    source block splitting, per-segment concept/item extraction, deterministic
-    concept merging, and unit-level logical grouping with optional concept deltas.
+    """Run the full reading pipeline (Phase 3): overview → per-segment → concept
+    resolution → logical grouping → group resolution.
 
     When *scope* is ``"book"``, loads the BookRegistry before extraction,
     builds a book context digest from prior registry state (if any), injects
-    it as extraction context, and computes/applies a registry delta after
-    extraction. The default ``"unit"`` scope is unchanged.
+    it as extraction context, runs cross-unit concept and group resolution,
+    and computes/applies a registry delta after extraction.
+    The default ``"unit"`` scope is unchanged (no registry, no cross-unit passes).
     """
     if scope not in ("unit", "book"):
         raise ValueError(f"scope must be 'unit' or 'book', got {scope!r}")
@@ -1222,7 +1770,7 @@ def run_reading_pipeline(
     llm = backend or MockReadingBackend()
     overview_backend = backend or MockExtractionBackend()
     pass_summaries: dict[str, dict[str, Any]] = {}
-    TOTAL_STEPS = 3
+    TOTAL_STEPS = 5
 
     book_path = Path(book_path).resolve()
     book_hash = sha256_text(str(book_path))[:12]
@@ -1242,9 +1790,6 @@ def run_reading_pipeline(
     registry: BookRegistry | None = None
     registry_cache_root: Path | None = None
     if scope == "book":
-        # BookRegistry lives under the parent of the reading_passes cache_dir
-        # so that registry state is shared across pipeline runs.  If the user
-        # passed a custom cache_dir that isn't nested, use it directly.
         _cache_path = Path(cache_dir)
         registry_cache_root = (
             _cache_path.parent
@@ -1262,7 +1807,7 @@ def run_reading_pipeline(
         else:
             print("  [book] first unit — no prior context", file=sys.stderr)
 
-    # ── Step 1: Overview segmentation (reuse existing) ──
+    # ── Step 1: Overview segmentation ──
     step = 1
     t0 = time.monotonic()
     try:
@@ -1369,8 +1914,56 @@ def run_reading_pipeline(
         },
     }
 
-    # ── Step 3: Unit logical grouping ──
+    # ── Phase 3: resolve concepts (book scope) before grouping ──
     step = 3
+    concept_resolution_record: ReadingPassRecord | None = None
+    concept_resolution_proposals: list[dict[str, Any]] = []
+    implicit_ref_map: dict[str, dict[str, Any]] = {}
+    if scope == "book" and registry is not None:
+        t0 = time.monotonic()
+        try:
+            reg_index = build_registry_index(registry)
+            candidate_index = select_concept_candidates(
+                stabilized["concepts"], reg_index,
+            )
+            concept_resolution_record = run_cross_unit_concept_resolution_pass(
+                unit_id=unit_id,
+                concepts=stabilized["concepts"],
+                registry_index=candidate_index,
+                unresolved_items=stabilized.get("unresolved_items", []),
+                backend=llm,
+                cache_dir=cache_root / "concept_resolution",
+                use_cache=use_cache,
+                source_blocks=stabilized.get("source_blocks", []),
+                context=None,
+            )
+            pass_summaries["cross_unit_concept_resolution"] = {
+                "cache_key": concept_resolution_record.cache_key,
+                "cache_dir": concept_resolution_record.cache_dir,
+                "cache_hit": concept_resolution_record.cache_hit,
+                "artifact_paths": concept_resolution_record.artifact_paths,
+                "elapsed_ms": _elapsed_ms(t0),
+            }
+            resolved_concepts = concept_resolution_record.data["concepts"]
+            implicit_ref_map = concept_resolution_record.data.get("implicit_refs", {})
+            concept_resolution_proposals = concept_resolution_record.data.get("resolution_proposals", [])
+            n_links = sum(1 for p in concept_resolution_proposals if p.get("proposal_type") == "link")
+            n_new = sum(1 for p in concept_resolution_proposals if p.get("proposal_type") == "new_concept")
+            _log_progress(step, TOTAL_STEPS, "Concept resolution", f"{n_links} links, {n_new} new", _elapsed_ms(t0))
+            print(
+                f"    = {n_links} links, {n_new} new, {len(implicit_ref_map)} implicit ref maps",
+                file=sys.stderr,
+            )
+        except Exception:
+            _log_progress(step, TOTAL_STEPS, "Concept resolution", "FAILED", _elapsed_ms(t0))
+            raise
+    else:
+        # Unit scope: no cross-unit resolution — skip step
+        resolved_concepts = stabilized["concepts"]
+        _log_progress(step, TOTAL_STEPS, "Concept resolution", "skipped (unit scope)", 0)
+
+    # ── Step 4: Unit logical grouping (v0.2 — concepts already resolved) ──
+    step = 4
     t0 = time.monotonic()
     try:
         grouping_record = run_unit_logical_grouping_pass(
@@ -1379,12 +1972,13 @@ def run_reading_pipeline(
             source=source,
             segments=segments,
             source_blocks=stabilized["source_blocks"],
-            concepts=stabilized["concepts"],
+            concepts=resolved_concepts,
             atomic_items=stabilized["atomic_items"],
             unresolved_items=stabilized.get("unresolved_items", []),
             backend=llm,
             cache_dir=cache_root / "logical_grouping",
             use_cache=use_cache,
+            implicit_refs=implicit_ref_map if implicit_ref_map else None,
             context=None,
         )
         pass_summaries["unit_logical_grouping"] = {
@@ -1396,11 +1990,10 @@ def run_reading_pipeline(
         }
         gdata = grouping_record.data
         n_groups = len(gdata.get("logical_groups", []))
-        n_deltas = len(gdata.get("concept_deltas", []))
         n_unresolved = len(gdata.get("unresolved_items", []))
-        _log_progress(step, TOTAL_STEPS, "Unit logical grouping", "OK", _elapsed_ms(t0))
+        _log_progress(step, TOTAL_STEPS, "Unit logical grouping", f"{n_groups} groups", _elapsed_ms(t0))
         print(
-            f"    = {n_groups} groups, {n_deltas} deltas, {n_unresolved} unresolved",
+            f"    = {n_groups} groups, {n_unresolved} unresolved",
             file=sys.stderr,
         )
     except Exception:
@@ -1409,8 +2002,54 @@ def run_reading_pipeline(
 
     metrics["counts"]["grouping"] = grouping_record.data.get("metrics", {}).get("counts", {}).get("grouping", {})
 
-    # ── Refresh segment_merge counts to reflect any concept deltas
-    #     applied during the logical grouping pass (merges, splits, etc.).
+    # ── Phase 3: resolve groups (book scope, skip for unit 1) ──
+    step = 5
+    group_resolution_record: ReadingPassRecord | None = None
+    group_resolution_proposals: list[dict[str, Any]] = []
+    cross_group_edges: list[dict[str, Any]] = []
+    if scope == "book" and registry is not None and registry.has_concepts():
+        t0 = time.monotonic()
+        try:
+            registry_groups_list = list(registry._groups.values())
+            candidate_groups = select_group_candidates(
+                grouping_record.data["logical_groups"],
+                registry_groups_list,
+                resolved_concepts,
+            )
+            group_resolution_record = run_cross_unit_group_resolution_pass(
+                unit_id=unit_id,
+                concepts=resolved_concepts,
+                groups=grouping_record.data["logical_groups"],
+                registry_groups=candidate_groups,
+                backend=llm,
+                cache_dir=cache_root / "group_resolution",
+                use_cache=use_cache,
+                source_blocks=stabilized.get("source_blocks", []),
+                context=None,
+            )
+            pass_summaries["cross_unit_group_resolution"] = {
+                "cache_key": group_resolution_record.cache_key,
+                "cache_dir": group_resolution_record.cache_dir,
+                "cache_hit": group_resolution_record.cache_hit,
+                "artifact_paths": group_resolution_record.artifact_paths,
+                "elapsed_ms": _elapsed_ms(t0),
+            }
+            group_resolution_proposals = group_resolution_record.data.get("group_resolution_proposals", [])
+            cross_group_edges = group_resolution_record.data.get("cross_group_edges", [])
+            n_continues = sum(1 for p in group_resolution_proposals if p.get("proposal_type") == "continue")
+            n_new = sum(1 for p in group_resolution_proposals if p.get("proposal_type") == "new_thread")
+            _log_progress(step, TOTAL_STEPS, "Group resolution", f"{n_continues} continues, {n_new} new", _elapsed_ms(t0))
+            print(
+                f"    = {n_continues} continues, {n_new} new, {len(cross_group_edges)} cross-group edges",
+                file=sys.stderr,
+            )
+        except Exception:
+            _log_progress(step, TOTAL_STEPS, "Group resolution", "FAILED", _elapsed_ms(t0))
+            raise
+    else:
+        _log_progress(step, TOTAL_STEPS, "Group resolution", "skipped (first unit or unit scope)", 0)
+
+    # ── Refresh segment_merge counts ──
     final_concepts = grouping_record.data["concepts"]
     final_unresolved = grouping_record.data.get("unresolved_items", [])
     segment_merge_before = metrics["counts"]["segment_merge"]["concepts_before_merge"]
@@ -1451,6 +2090,8 @@ def run_reading_pipeline(
     if scope == "book" and registry is not None:
         delta_result = compute_registry_delta(
             final_data, registry, unit_id=unit_id,
+            concept_resolution_proposals=concept_resolution_proposals,
+            group_resolution_proposals=group_resolution_proposals,
         )
         applied = apply_registry_delta(registry, delta_result)
         commit_hash = registry.save()
@@ -1462,7 +2103,7 @@ def run_reading_pipeline(
             file=sys.stderr,
         )
 
-        # ── Post-extraction digest update (Conversation C turn) ──
+        # ── Post-extraction digest update ──
         if grouping_record.conversation is not None:
             previous_digest = context.get("digest", "") if context else ""
             digest_update_msg = json.dumps(

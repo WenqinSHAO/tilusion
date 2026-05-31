@@ -117,6 +117,81 @@ def build_unit_logical_grouping_payload(
     }
 
 
+def build_concept_resolution_payload(
+    *,
+    unit_id: str,
+    concepts: list[dict[str, Any]],
+    registry_index: list[dict[str, Any]],
+    unresolved_items: list[dict[str, Any]] | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the payload for cross-unit concept resolution (Conversation D).
+
+    No unit_text — concept summaries provide semantic context for identity judgment.
+    """
+    return {
+        "task": "cross_unit_concept_resolution",
+        "schema_version": READING_UNIT_SCHEMA_VERSION,
+        "unit_id": unit_id,
+        "concepts": concepts,
+        "registry_index": registry_index,
+        "unresolved_items": unresolved_items or [],
+        "context": context or {},
+    }
+
+
+def build_unit_logical_grouping_payload_v0_2(
+    *,
+    unit_id: str,
+    unit_text: str,
+    source: dict[str, Any],
+    segments: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+    atomic_items: list[dict[str, Any]],
+    unresolved_items: list[dict[str, Any]],
+    implicit_refs: dict[str, list[dict[str, Any]]] | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the payload for unit logical grouping v0.2 (Conversation C revised).
+
+    Adds ``implicit_refs`` from the concept resolution pass and omits
+    concept_deltas from the expected output (the prompt handles this).
+    """
+    return {
+        "task": "unit_logical_grouping",
+        "schema_version": READING_UNIT_SCHEMA_VERSION,
+        "unit_id": unit_id,
+        "unit_text": unit_text,
+        "source": source,
+        "segments": segments,
+        "concepts": concepts,
+        "atomic_items": atomic_items,
+        "implicit_refs": implicit_refs or {},
+        "unresolved_items": unresolved_items or [],
+        "context": context or {},
+    }
+
+
+def build_group_resolution_payload(
+    *,
+    unit_id: str,
+    concepts: list[dict[str, Any]],
+    groups: list[dict[str, Any]],
+    registry_groups: list[dict[str, Any]],
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the payload for cross-unit group resolution (Conversation E)."""
+    return {
+        "task": "cross_unit_group_resolution",
+        "schema_version": READING_UNIT_SCHEMA_VERSION,
+        "unit_id": unit_id,
+        "concepts": concepts,
+        "groups": groups,
+        "registry_groups": registry_groups,
+        "context": context or {},
+    }
+
+
 def merge_segment_extraction_results(
     segment_results: list[dict[str, Any]],
     unit_id: str,

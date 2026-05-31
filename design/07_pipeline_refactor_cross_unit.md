@@ -1,5 +1,11 @@
 # Pipeline Refactor: Cross-Unit Extraction (Phase 2)
 
+> **Note (2026-05-31):** Phase 3 is now implemented. See
+> `design/08_cross_unit_llm_merge.md` for the LLM-backed cross-unit concept
+> resolution, group resolution, and dual-signal candidate detection layers.
+> The architecture diagram below reflects Phase 2; the Phase 3 pipeline has
+> 5 steps (added Conversations D and E).
+
 ## Context
 
 Phase 1 wired BookRegistry into the extraction pipeline with `scope="book"`,
@@ -36,16 +42,14 @@ from the digest may be empty — extraction still works correctly. This batch
 paves the way for full native integration with BookRegistry and multi-turn
 agentic backbone.
 
-## Deferred (not in this batch)
+## Deferred (now implemented in Phase 3)
 
-- LLM-driven concept/item/group merging (cross-unit merge proposals,
-  ambiguity resolution, group continuation)
-- Agentic repair loop (`repair.py`, `DeterministicAutoFixer`) — design/05
-  steps 3-5; Phase 2 only needs the multi-turn conversation infrastructure
-  (design/05 steps 1-2) to enable the Conversation C digest turn
-- `refine_concept` / `refine_item` (LLM summary rewriting)
-- `link_concept` as standalone operation
-- User feedback / correction engine
+- ~~LLM-driven concept/item/group merging (cross-unit merge proposals,
+  ambiguity resolution, group continuation)~~ → Done (2026-05-31, `design/08_cross_unit_llm_merge.md`)
+- ~~Agentic repair loop (`repair.py`, `DeterministicAutoFixer`)~~ → Done
+- `refine_concept` / `refine_item` (LLM summary rewriting) — still deferred
+- ~~`link_concept` as standalone operation~~ → Superseded by `link` proposals in Conversation D
+- User feedback / correction engine — still deferred
 
 ## Architecture (Phase 2 target)
 
