@@ -60,7 +60,7 @@ class DeterministicConceptMerger:
             surface=canonical or members[0].surface,
             concept_type=members[0].concept_type,
             canonical_name=canonical or None,
-            summary=DeterministicConceptMerger._first_nonempty(members, "summary"),
+            summary=DeterministicConceptMerger._merge_summaries(members),
             aliases=DeterministicConceptMerger._union(members, "aliases"),
             observed_surfaces=DeterministicConceptMerger._union(
                 members, "observed_surfaces"
@@ -105,6 +105,23 @@ class DeterministicConceptMerger:
             if v:
                 return v
         return ""
+
+    @staticmethod
+    def _merge_summaries(members: list[Concept]) -> str:
+        """Concatenate summaries with source-unit prefix when all are nonempty.
+
+        When all members carry a non-empty summary, each is prefixed with its
+        source unit (from provenance.source_unit) so the merged concept records
+        how understanding evolved across units. Falls back to first-nonempty
+        when any member lacks a summary.
+        """
+        if all(m.summary for m in members):
+            parts: list[str] = []
+            for m in members:
+                unit = (m.provenance or {}).get("source_unit", "?")
+                parts.append(f"[{unit}]: {m.summary}")
+            return "\n".join(parts)
+        return DeterministicConceptMerger._first_nonempty(members, "summary")
 
 
 class KeepExistingConceptMerger:
@@ -298,6 +315,12 @@ class BookRegistry:
     def get_group(self, group_id: str) -> dict[str, Any] | None:
         return self._groups.get(group_id)
 
+    # ── Introspection ──────────────────────────────────────────────────────
+
+    def has_concepts(self) -> bool:
+        """Return True if the registry contains at least one concept."""
+        return len(self._concepts) > 0
+
     # ── Persistence ───────────────────────────────────────────────────────
 
     def save(self) -> str:
@@ -360,6 +383,22 @@ class BookRegistry:
         registry = cls(book_path, cache_root)
         registry._from_dict(data)
         return registry
+
+    @classmethod
+    def load_or_init(
+        cls,
+        book_path: str | Path,
+        cache_root: str | Path = ".tilusion_cache",
+    ) -> BookRegistry:
+        """Load existing registry or return a new empty one.
+
+        Convenience for pipelines that don't know whether this is the first
+        unit of a book extraction.
+        """
+        try:
+            return cls.load(book_path, cache_root)
+        except FileNotFoundError:
+            return cls(book_path, cache_root)
 
     def rollback(self, commit_hash: str) -> None:
         self._ensure_git_repo()

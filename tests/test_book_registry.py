@@ -209,7 +209,12 @@ class TestMergeParity:
 
         assert new_result.canonical_name == old_result["canonical_name"]
         assert new_result.surface == old_result["surface"]
-        assert new_result.summary == old_result["summary"]
+        # Summary concatenation: when all members have nonempty summaries,
+        # DeterministicConceptMerger concatenates with source-unit prefix
+        # rather than picking first-nonempty (which is what the old dict-based
+        # _merge_concept_group does). Verify both original summaries appear.
+        assert "narrator" in new_result.summary
+        assert "husband" in new_result.summary
         assert new_result.provenance["merged_from"] == old_result["merged_from"]
         assert new_result.provenance["grounding"] == old_result["provenance"]["grounding"]
 
@@ -632,6 +637,78 @@ class TestEdgeCases:
             assert merged_id is not None
         finally:
             _cleanup(reg)
+
+
+# ── Load-or-init and introspection ──────────────────────────────────────────
+
+
+class TestLoadOrInit:
+    def test_load_or_init_creates_new(self, tmp_path: Path) -> None:
+        book_path = tmp_path / "new_book.txt"
+        book_path.write_text("test")
+        cache_root = tmp_path / "cache"
+        reg = BookRegistry.load_or_init(book_path, cache_root=cache_root)
+        assert isinstance(reg, BookRegistry)
+        assert not reg.has_concepts()
+
+    def test_load_or_init_loads_existing(self, tmp_path: Path) -> None:
+        book_path = tmp_path / "existing_book.txt"
+        book_path.write_text("test")
+        cache_root = tmp_path / "cache"
+
+        reg1 = BookRegistry(book_path, cache_root=cache_root)
+        reg1.add_concept(Concept(
+            concept_id="", surface="Test", concept_type="other",
+            observed_surfaces=["Test"],
+        ))
+        reg1.save()
+
+        reg2 = BookRegistry.load_or_init(book_path, cache_root=cache_root)
+        assert reg2.has_concepts()
+
+    def test_has_concepts_empty(self, tmp_path: Path) -> None:
+        book_path = tmp_path / "empty.txt"
+        book_path.write_text("test")
+        reg = BookRegistry(book_path, cache_root=tmp_path / "cache")
+        assert not reg.has_concepts()
+
+    def test_has_concepts_populated(self, tmp_path: Path) -> None:
+        book_path = tmp_path / "populated.txt"
+        book_path.write_text("test")
+        reg = BookRegistry(book_path, cache_root=tmp_path / "cache")
+        reg.add_concept(Concept(
+            concept_id="", surface="X", concept_type="other",
+            observed_surfaces=["X"],
+        ))
+        assert reg.has_concepts()
+
+
+class TestSummaryConcatenation:
+    def test_all_nonempty_summaries_concatenated(self) -> None:
+        c1 = Concept(concept_id="c1", surface="A", concept_type="person",
+                     summary="Summary 1", provenance={"source_unit": "unit-0001"})
+        c2 = Concept(concept_id="c2", surface="A", concept_type="person",
+                     summary="Summary 2", provenance={"source_unit": "unit-0003"})
+        merged = DeterministicConceptMerger.merge([c1, c2])
+        assert "[unit-0001]: Summary 1" in merged.summary
+        assert "[unit-0003]: Summary 2" in merged.summary
+
+    def test_one_empty_summary_falls_back_to_first_nonempty(self) -> None:
+        c1 = Concept(concept_id="c1", surface="A", concept_type="person",
+                     summary="", provenance={"source_unit": "unit-0001"})
+        c2 = Concept(concept_id="c2", surface="A", concept_type="person",
+                     summary="Only summary", provenance={"source_unit": "unit-0002"})
+        merged = DeterministicConceptMerger.merge([c1, c2])
+        assert merged.summary == "Only summary"
+
+    def test_no_source_unit_uses_question_mark(self) -> None:
+        c1 = Concept(concept_id="c1", surface="A", concept_type="person",
+                     summary="Alpha", provenance={})
+        c2 = Concept(concept_id="c2", surface="A", concept_type="person",
+                     summary="Beta", provenance={})
+        merged = DeterministicConceptMerger.merge([c1, c2])
+        assert "[?]: Alpha" in merged.summary
+        assert "[?]: Beta" in merged.summary
 
 
 # ── Import sanity (verified at import time) ─────────────────────────────────
