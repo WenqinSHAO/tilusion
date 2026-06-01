@@ -6,12 +6,10 @@ from tilusion.reading_schema import (
     READING_UNIT_SCHEMA_VERSION,
     AtomicItem,
     Concept,
-    DocumentStateSnapshot,
     ExtractionUnitPackage,
     GraphEdge,
     GraphNode,
     LogicalGroup,
-    RegistryDelta,
     SourceBlock,
     TemporalAttribute,
     is_open_type_string,
@@ -335,43 +333,6 @@ def test_package_with_all_filled():
     assert len(d["concepts"]) == 1
     assert len(d["atomic_items"]) == 1
     assert len(d["logical_groups"]) == 1
-
-
-# ── Document state ───────────────────────────────────────────────────────────
-
-
-def test_document_state_snapshot():
-    concept = Concept(concept_id="c-1", surface="X", concept_type="person")
-    snap = DocumentStateSnapshot(
-        document_id="doc-001",
-        snapshot_id="snap-001",
-        canonical_concepts=[concept],
-        reusable_item_summaries=[{"item_id": "item-0001", "summary": "Summary"}],
-    )
-    d = snap.to_dict()
-    assert d["document_id"] == "doc-001"
-    assert len(d["canonical_concepts"]) == 1
-    assert len(d["reusable_item_summaries"]) == 1
-
-
-def test_registry_delta():
-    delta = RegistryDelta(
-        delta_id="delta-001",
-        base_snapshot_id="snap-001",
-        unit_id="unit-0002",
-        operations=[
-            {
-                "operation_type": "new_concept",
-                "payload": {"concept_id": "concept-0002"},
-                "provenance": {"grounding": "source_grounded"},
-            }
-        ],
-    )
-    d = delta.to_dict()
-    assert d["schema_version"] == "registry-delta-v0.1"
-    assert d["base_snapshot_id"] == "snap-001"
-    assert len(d["operations"]) == 1
-    assert d["operations"][0]["operation_type"] == "new_concept"
 
 
 # ── Serialisation round-trips ────────────────────────────────────────────────

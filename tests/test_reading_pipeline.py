@@ -180,7 +180,7 @@ def test_write_reading_unit_package(tmp_path: Path) -> None:
         "unresolved_items": [],
         "validation": {},
         "context_metadata": {},
-        "metrics": {"validation": {}, "counts": {}},
+        "metrics": {"validation_counts": {}, "counts": {}},
     }
     package_path = write_reading_unit_package(
         unit_id="unit-0001",
@@ -201,7 +201,7 @@ def test_write_reading_unit_package(tmp_path: Path) -> None:
     assert written["schema_version"] == READING_UNIT_SCHEMA_VERSION
     assert written["logical_groups"] == []
     assert written["passes"]["per_segment_extraction"]["elapsed_ms"] == 42
-    assert written["metrics"] == {"validation": {}, "counts": {}}
+    assert written["metrics"] == {"validation_counts": {}, "counts": {}}
     assert "data" not in written
     assert "run_key" in written
 

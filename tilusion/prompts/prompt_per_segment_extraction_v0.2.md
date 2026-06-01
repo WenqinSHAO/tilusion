@@ -86,6 +86,7 @@ Rules:
 - Prior context may guide alias/continuity detection but must not be cited as evidence.
 - Every `source_block_refs` and temporal `source_block_ref` must cite a provided `source_blocks[*].block_id`. Do not invent block IDs.
 - A concept must cite source blocks when `source_grounded`; if inferred from broader context use `"grounding": "llm_inferred"` and omit `source_block_refs`. Atomic items are always source-grounded and must cite source blocks.
+- Atomic item `attributes` accepts the recommended keys (`argument_role`, `narrative_role`, `salience`) plus any additional keys that help downstream grouping and graph-building (e.g., `emotional_valence`, `pov_character`, `tension_level`). Use any attribute that captures information useful for forming logical groups.
 - Concept and item IDs are segment-local. Use stable simple IDs (`concept-0001`, `item-0001`); the caller scopes and reindexes them later.
 - `concept.surface` must be copied exactly from source block text inside the corresponding inline markers.
 - `concept_type` is schema-light but stay coarse. Prefer: `person`, `group`, `organization`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `emotion`, `social_role`, `institution`, `symbol`, `scene_element`, `technical_component`, `dataset`, `metric`, `source`, `other`. Use `other` or a custom string only when clearly needed.

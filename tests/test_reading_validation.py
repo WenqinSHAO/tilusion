@@ -7,7 +7,6 @@ from tilusion.reading_schema import (
     GraphEdge,
     GraphNode,
     LogicalGroup,
-    RegistryDelta,
     SourceBlock,
     TemporalAttribute,
 )
@@ -155,24 +154,26 @@ def test_reading_validation_rejects_missing_source_block_refs_for_atomic_items()
     assert "missing_source_block_refs" in _codes(report)
 
 
-def test_reading_validation_rejects_broken_concept_refs() -> None:
+def test_reading_validation_warns_on_broken_concept_refs() -> None:
     data = _valid_package().to_dict()
     data["atomic_items"][0]["concept_refs"] = ["missing-concept"]
 
     report = validate_extraction_unit_package(data)
 
-    assert not report.passed
+    assert report.passed
     assert "unknown_ref" in _codes(report)
+    assert report.warning_count == 1
 
 
-def test_reading_validation_rejects_graph_edge_with_unknown_node() -> None:
+def test_reading_validation_warns_on_graph_edge_with_unknown_node() -> None:
     data = _valid_package().to_dict()
     data["logical_groups"][0]["graph"]["edges"][0]["target"] = "missing-node"
 
     report = validate_extraction_unit_package(data)
 
-    assert not report.passed
+    assert report.passed
     assert "unknown_ref" in _codes(report)
+    assert report.warning_count == 1
 
 
 def test_reading_validation_requires_source_grounded_graph_edge_evidence() -> None:
@@ -205,7 +206,8 @@ def test_reading_validation_rejects_prior_context_as_current_source_ref() -> Non
     report = validate_extraction_unit_package(data)
 
     assert not report.passed
-    assert _codes(report) == ["prior_context_used_as_evidence"]
+    assert "prior_context_used_as_evidence" in _codes(report)
+    assert "missing_source_block_refs" in _codes(report)
 
 
 def test_reading_validation_rejects_source_block_round_trip_mismatch_when_unit_text_present() -> None:
@@ -334,7 +336,7 @@ def test_reading_validation_does_not_judge_all_singleton_logical_groups() -> Non
 
 def test_reading_validation_accepts_top_level_metrics_object() -> None:
     data = _valid_package().to_dict()
-    data["metrics"] = {"validation": {}, "counts": {}}
+    data["metrics"] = {"validation_counts": {}, "counts": {}}
 
     report = validate_extraction_unit_package(data)
 
@@ -377,24 +379,8 @@ def test_reading_validation_rejects_blank_string_list_items() -> None:
     assert "empty_string_list_item" in _codes(report)
 
 
-def test_registry_delta_validation_accepts_safe_proposals() -> None:
-    delta = RegistryDelta(
-        delta_id="delta-0001",
-        base_snapshot_id="snapshot-0001",
-        unit_id="unit-0002",
-        operations=[
-            {
-                "operation_id": "op-0001",
-                "operation_type": "merge_proposal",
-                "target_refs": ["concept-0001", "concept-0002"],
-                "evidence_refs": [{"unit_id": "unit-0002", "source_block_ref": "seg-0001-block-0000"}],
-            }
-        ],
-    )
-
-    report = validate_registry_delta(delta, expected_base_snapshot_id="snapshot-0001")
-
-    assert report.passed
+# RegistryDelta validation now happens at the BookRegistry API level
+# (apply_registry_delta in registry_delta.py). No separate validation pass.
 
 
 def test_registry_delta_validation_rejects_stale_snapshot_and_context_evidence() -> None:

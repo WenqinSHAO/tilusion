@@ -2077,7 +2077,7 @@ def run_reading_pipeline(
     final_validation_report = validate_extraction_unit_package(final_data)
     _raise_on_validation_errors("reading-unit-package", final_validation_report)
     final_validation = final_validation_report.to_dict()
-    metrics["validation"] = {
+    metrics["validation_counts"] = {
         "error_count": final_validation["error_count"],
         "warning_count": final_validation["warning_count"],
         "issue_count": final_validation["issue_count"],

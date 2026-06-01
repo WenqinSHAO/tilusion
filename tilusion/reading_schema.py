@@ -6,8 +6,6 @@ from typing import Any
 
 
 READING_UNIT_SCHEMA_VERSION = "reading-unit-v0.3"
-DOCUMENT_STATE_SCHEMA_VERSION = "document-state-v0.1"
-REGISTRY_DELTA_SCHEMA_VERSION = "registry-delta-v0.1"
 
 _CONCEPT_TYPE_NORMALIZATION: dict[str, str] = {
     "thing": "object",
@@ -373,45 +371,6 @@ class UserCorrectionOperation:
     rationale: str = ""
     created_at: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class DocumentStateSnapshot:
-    document_id: str
-    snapshot_id: str
-    canonical_concepts: list[Concept] = field(default_factory=list)
-    reusable_item_summaries: list[dict[str, Any]] = field(default_factory=list)
-    reusable_group_summaries: list[dict[str, Any]] = field(default_factory=list)
-    cross_unit_links: list[dict[str, Any]] = field(default_factory=list)
-    ambiguity_queue: list[AmbiguityQueueItem] = field(default_factory=list)
-    transactions: list[dict[str, Any]] = field(default_factory=list)
-    schema_version: str = DOCUMENT_STATE_SCHEMA_VERSION
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "document_id": self.document_id,
-            "snapshot_id": self.snapshot_id,
-            "canonical_concepts": [c.to_dict() for c in self.canonical_concepts],
-            "reusable_item_summaries": self.reusable_item_summaries,
-            "reusable_group_summaries": self.reusable_group_summaries,
-            "cross_unit_links": self.cross_unit_links,
-            "ambiguity_queue": [a.to_dict() for a in self.ambiguity_queue],
-            "transactions": self.transactions,
-        }
-
-
-@dataclass(slots=True)
-class RegistryDelta:
-    delta_id: str
-    base_snapshot_id: str
-    unit_id: str
-    operations: list[dict[str, Any]] = field(default_factory=list)
-    validation: dict[str, Any] = field(default_factory=dict)
-    schema_version: str = REGISTRY_DELTA_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
