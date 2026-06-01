@@ -321,6 +321,14 @@ class BookRegistry:
         """Return True if the registry contains at least one concept."""
         return len(self._concepts) > 0
 
+    def has_groups(self) -> bool:
+        """Return True if the registry contains at least one group."""
+        return len(self._groups) > 0
+
+    def list_concepts(self) -> list[Concept]:
+        """Return all concepts in the registry."""
+        return list(self._concepts.values())
+
     # ── Persistence ───────────────────────────────────────────────────────
 
     def save(self) -> str:

@@ -3,10 +3,23 @@ from __future__ import annotations
 import math
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any
 
 from .book_registry import BookRegistry
 from .reading_schema import normalize_concept_type
+
+
+@dataclass(slots=True)
+class CompactGroup:
+    """Compact one-line-per-group entry for the group resolution LLM prompt."""
+
+    group_id: str
+    group_type: str
+    summary: str  # truncated to ~120 chars
+    key_concept_ids: list[str]  # first 5 concept_refs
+    item_count: int
+
 
 # ── Lazy-loaded embedding model ────────────────────────────────────────────
 
@@ -126,6 +139,28 @@ def _build_unit_concept_text(uc: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _build_group_text(cg: CompactGroup) -> str:
+    """Build searchable text for a registry group's compact index entry."""
+    parts: list[str] = []
+    if cg.summary:
+        parts.append(cg.summary)
+    if cg.group_type:
+        parts.append(cg.group_type)
+    return " ".join(parts)
+
+
+def _build_unit_group_text(ug: dict[str, Any]) -> str:
+    """Build searchable text for a unit group."""
+    parts: list[str] = []
+    summary = ug.get("summary", "")
+    if summary:
+        parts.append(summary)
+    gtype = ug.get("group_type", "")
+    if gtype:
+        parts.append(gtype)
+    return " ".join(parts)
+
+
 # ── Reciprocal Rank Fusion ─────────────────────────────────────────────────
 
 
@@ -225,6 +260,71 @@ def _dual_signal_select(
     return candidate_ids
 
 
+def _dual_signal_select_groups(
+    unit_groups: list[dict[str, Any]],
+    compact_groups: list[CompactGroup],
+    *,
+    top_k: int = 20,
+) -> set[str]:
+    """BM25 + embedding similarity + RRF for group candidate selection.
+
+    Same dual-signal pattern as ``_dual_signal_select`` for concepts, but
+    operating on ``CompactGroup`` entries.
+    """
+    if not unit_groups or not compact_groups:
+        return set()
+
+    reg_texts = [_build_group_text(cg) for cg in compact_groups]
+    reg_ids = [cg.group_id for cg in compact_groups]
+    bm25 = BM25(reg_texts)
+    model = _get_embedding_model()
+
+    reg_embeddings = None
+    if model is not None:
+        try:
+            import numpy as np
+
+            reg_embeddings = model.encode(reg_texts, convert_to_numpy=True)
+            reg_norms = np.linalg.norm(reg_embeddings, axis=1)
+        except Exception:
+            reg_embeddings = None
+
+    candidate_ids: set[str] = set()
+
+    for ug in unit_groups:
+        ug_text = _build_unit_group_text(ug)
+
+        bm25_results = bm25.search(ug_text, top_k=top_k)
+        bm25_ranking = [reg_ids[idx] for idx, _ in bm25_results]
+
+        embedding_ranking: list[str] = []
+        if reg_embeddings is not None:
+            try:
+                ug_emb = model.encode(ug_text, convert_to_numpy=True)
+                ug_norm = float(np.linalg.norm(ug_emb))
+                sims = (
+                    np.dot(reg_embeddings, ug_emb) / (reg_norms * ug_norm + 1e-8)
+                )
+                top_indices = np.argsort(sims)[::-1][:top_k]
+                embedding_ranking = [
+                    reg_ids[int(i)]
+                    for i in top_indices
+                    if float(sims[int(i)]) > 0.3
+                ]
+            except Exception:
+                pass
+
+        rankings: list[list[str]] = [bm25_ranking]
+        if embedding_ranking:
+            rankings.append(embedding_ranking)
+
+        fused = _reciprocal_rank_fusion(rankings)
+        for group_id, _ in fused[:top_k]:
+            candidate_ids.add(group_id)
+
+    return candidate_ids
+
+
 # ── Deterministic pre-filter ───────────────────────────────────────────────
 
 
@@ -312,6 +412,30 @@ def build_registry_index(registry: BookRegistry) -> list[dict[str, Any]]:
     return index
 
 
+def build_group_index(registry: BookRegistry) -> list[CompactGroup]:
+    """Build a compact group index for the LLM group resolution pass.
+
+    One line per group: group_id, group_type, summary (truncated ~120 chars),
+    key_concept_ids (first 5 concept_refs), item_count.
+    """
+    if not registry.has_groups():
+        return []
+    index: list[CompactGroup] = []
+    for gid, g in registry._groups.items():
+        summary = g.get("summary", "")
+        if len(summary) > 120:
+            summary = summary[:117] + "..."
+        concept_refs = g.get("concept_refs", [])
+        index.append(CompactGroup(
+            group_id=gid,
+            group_type=g.get("group_type", "other"),
+            summary=summary,
+            key_concept_ids=list(dict.fromkeys(concept_refs))[:5],
+            item_count=len(g.get("item_refs", [])),
+        ))
+    return index
+
+
 def select_concept_candidates(
     unit_concepts: list[dict[str, Any]],
     registry_index: list[dict[str, Any]],
@@ -356,15 +480,16 @@ def select_group_candidates(
     registry_groups: list[dict[str, Any]],
     resolved_concepts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Pre-filter registry groups by concept overlap with unit groups.
+    """Pre-filter registry groups by concept overlap + dual-signal retrieval.
 
-    A registry group is a candidate if it shares at least one registry
-    concept with any unit group (via resolved concept registry_refs).
+    Always includes groups with concept overlap (deterministic). When the
+    registry has >50 groups, also applies BM25 + embedding + RRF dual-signal
+    retrieval for semantic matches without concept overlap.
     """
     if not registry_groups or not unit_groups:
         return registry_groups
 
-    if len(registry_groups) <= 20:
+    if len(registry_groups) <= 50:
         return registry_groups
 
     # Collect registry concept IDs that unit groups reference (via resolution)
@@ -374,21 +499,38 @@ def select_group_candidates(
         if ref:
             unit_registry_refs.add(ref)
 
-    if not unit_registry_refs:
-        # No cross-unit resolution — return groups matching by type
+    # Deterministic pre-filter: concept overlap
+    overlap_ids: set[str] = set()
+    for rg in registry_groups:
+        rg_concepts = set(rg.get("concept_refs", []))
+        if rg_concepts & unit_registry_refs:
+            overlap_ids.add(rg["group_id"])
+
+    # Dual-signal retrieval (when registry is large)
+    compact_groups = [
+        CompactGroup(
+            group_id=rg["group_id"],
+            group_type=rg.get("group_type", "other"),
+            summary=(
+                rg.get("summary", "")[:117] + "..."
+                if len(rg.get("summary", "")) > 120
+                else rg.get("summary", "")
+            ),
+            key_concept_ids=list(dict.fromkeys(rg.get("concept_refs", [])))[:5],
+            item_count=len(rg.get("item_refs", [])),
+        )
+        for rg in registry_groups
+    ]
+    dual_ids = _dual_signal_select_groups(unit_groups, compact_groups)
+
+    all_ids = overlap_ids | dual_ids
+
+    if not all_ids:
+        # Fallback: return groups matching by type
         unit_group_types = {g.get("group_type", "") for g in unit_groups}
         return [
             rg for rg in registry_groups
             if rg.get("group_type", "") in unit_group_types
         ]
 
-    candidate_ids: set[str] = set()
-    for rg in registry_groups:
-        rg_concepts = set(rg.get("concept_refs", []))
-        if rg_concepts & unit_registry_refs:
-            candidate_ids.add(rg["group_id"])
-
-    if not candidate_ids:
-        return []
-
-    return [rg for rg in registry_groups if rg["group_id"] in candidate_ids]
+    return [rg for rg in registry_groups if rg["group_id"] in all_ids]

@@ -389,6 +389,40 @@ class MockReadingBackend:
 
         conversation.append_user_message(user_message)
 
+        # Detect tool result messages (agentic v0.2)
+        try:
+            msg_data = json.loads(user_message)
+            if isinstance(msg_data, dict) and "tool_results" in msg_data:
+                task = conversation.initial_payload.get("task", "")
+                if task == "cross_unit_concept_resolution":
+                    resp = mock_concept_resolution_response(
+                        conversation.initial_payload
+                    )
+                    resp["status"] = "complete"
+                    assistant_response = json.dumps(resp, ensure_ascii=False)
+                elif task == "cross_unit_group_resolution":
+                    resp = mock_group_resolution_response(
+                        conversation.initial_payload
+                    )
+                    resp["status"] = "complete"
+                    assistant_response = json.dumps(resp, ensure_ascii=False)
+                else:
+                    assistant_response = json.dumps(
+                        {"status": "complete", "warnings": ["mock: unknown task"]},
+                        ensure_ascii=False,
+                    )
+                conversation.record_turn(
+                    assistant_response=assistant_response,
+                    metadata=TurnMetadata(
+                        turn_index=conversation.turn_count + 1,
+                        turn_type="tool_result_response",
+                        elapsed_ms=0,
+                    ),
+                )
+                return conversation
+        except (json.JSONDecodeError, ValueError):
+            pass
+
         # Detect digest update turn
         try:
             msg_data = json.loads(user_message)
@@ -1357,6 +1391,110 @@ def run_unit_logical_grouping_pass(
     return record
 
 
+# ── Agentic resolution pass (multi-round with tool calling) ────────────────
+
+
+def run_agentic_resolution_pass(
+    *,
+    backend: LLMBackend,
+    prompt: Any,
+    payload: dict[str, Any],
+    tool_context: dict[str, Any],
+    validation_subject_builder: Any,
+    max_turns: int = 10,
+    pass_name: str = "",
+    return_subject: bool = False,
+) -> tuple[dict[str, Any], Any, Any]:
+    """Run a pass with multi-turn tool-calling support.
+
+    Turn 1: LLM call with tool definitions in system prompt.
+    If response has ``tool_calls``, execute them and loop.
+    If response has resolution proposals and ``status: "complete"``, stop.
+    If ``max_turns`` exhausted, fall back to single-pass behavior.
+
+    Returns ``(data, conversation, final_validation_report)``.
+    """
+    from .conversation import TurnMetadata
+    from .reading_validation import ReadingValidationReport, validate_extraction_unit_package
+    from .registry_tools import execute_tool_call
+
+    # Turn 1: initial LLM call
+    conversation = backend.start_conversation(
+        system_prompt=prompt.content,
+        user_payload=payload,
+        pass_name=pass_name,
+    )
+    assistant_response = _last_assistant_content(conversation)
+    data = parse_json_response(assistant_response)
+
+    # Check for tool calls
+    tool_calls = data.get("tool_calls", [])
+
+    turn_count = 1
+    while tool_calls and turn_count < max_turns:
+        # Execute tool calls
+        tool_results: list[dict[str, Any]] = []
+        for tc in tool_calls:
+            result = execute_tool_call(tc, tool_context)
+            tool_results.append(result)
+
+        # Build tool result message
+        tool_msg = json.dumps(
+            {
+                "tool_results": tool_results,
+                "remaining_turns": max_turns - turn_count - 1,
+            },
+            ensure_ascii=False,
+        )
+
+        # Continue conversation with tool results
+        conversation = backend.continue_conversation(conversation, tool_msg)
+        assistant_response = _last_assistant_content(conversation)
+
+        try:
+            data = parse_json_response(assistant_response)
+        except Exception as exc:
+            print(
+                f"  {pass_name}: turn {turn_count + 1} response unparseable: {exc}",
+                file=sys.stderr,
+            )
+            break
+
+        tool_calls = data.get("tool_calls", [])
+        turn_count += 1
+
+        # If LLM signals completion, stop even if more turns remain
+        if data.get("status") == "complete" and not tool_calls:
+            break
+
+    # Validate: build the validation subject from data
+    validation_subject = validation_subject_builder(data)
+    report = validate_extraction_unit_package(validation_subject)
+
+    if report.passed:
+        result = validation_subject if return_subject else data
+        return result, conversation, report
+
+    # Fallback: run the existing single-pass repair loop
+    print(
+        f"  {pass_name}: agentic pass validation failed or max turns exhausted, "
+        f"falling back to single-pass",
+        file=sys.stderr,
+    )
+
+    from .repair import run_agentic_pass
+
+    return run_agentic_pass(
+        backend=backend,
+        prompt=prompt,
+        payload=payload,
+        validation_subject_builder=validation_subject_builder,
+        max_repair_turns=3,
+        pass_name=f"{pass_name}-fallback",
+        return_subject=return_subject,
+    )
+
+
 # ── Pass: cross-unit concept resolution ────────────────────────────────────
 
 
@@ -1371,13 +1509,23 @@ def run_cross_unit_concept_resolution_pass(
     use_cache: bool = True,
     source_blocks: list[dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
+    registry: Any | None = None,  # BookRegistry for agentic tool execution
 ) -> ReadingPassRecord:
     """Run cross-unit concept identity resolution (Conversation D).
 
     LLM reviews unit concepts against the registry index and emits
     resolution proposals: link, merge, split, refine, reclassify, new_concept.
+
+    When *registry* is provided, uses the v0.2 agentic prompt with multi-round
+    tool calling. When None, uses the v0.1 single-pass prompt.
     """
-    prompt = build_concept_resolution_composition()
+    agentic = registry is not None
+    if agentic:
+        from .reading_prompts import build_concept_resolution_v0_2_composition
+
+        prompt = build_concept_resolution_v0_2_composition()
+    else:
+        prompt = build_concept_resolution_composition()
     payload = build_concept_resolution_payload(
         unit_id=unit_id,
         concepts=concepts,
@@ -1423,14 +1571,31 @@ def run_cross_unit_concept_resolution_pass(
 
         from .repair import run_agentic_pass
 
-        data, conversation, validation_report = run_agentic_pass(
-            backend=backend,
-            prompt=prompt,
-            payload=payload,
-            validation_subject_builder=_build_subject,
-            pass_name="cross-unit-concept-resolution",
-            return_subject=True,
-        )
+        if agentic:
+            tool_context = {
+                "registry": registry,
+                "source_blocks": blocks,
+                "book_summary": context.get("digest", "") if context else "",
+            }
+            data, conversation, validation_report = run_agentic_resolution_pass(
+                backend=backend,
+                prompt=prompt,
+                payload=payload,
+                tool_context=tool_context,
+                validation_subject_builder=_build_subject,
+                max_turns=10,
+                pass_name="cross-unit-concept-resolution",
+                return_subject=True,
+            )
+        else:
+            data, conversation, validation_report = run_agentic_pass(
+                backend=backend,
+                prompt=prompt,
+                payload=payload,
+                validation_subject_builder=_build_subject,
+                pass_name="cross-unit-concept-resolution",
+                return_subject=True,
+            )
         raw_response = _last_assistant_content(conversation)
 
     if not cache_hit:
@@ -1506,14 +1671,24 @@ def run_cross_unit_group_resolution_pass(
     use_cache: bool = True,
     source_blocks: list[dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
+    registry: Any | None = None,  # BookRegistry for agentic tool execution
 ) -> ReadingPassRecord:
     """Run cross-unit group resolution (Conversation E).
 
     LLM reviews unit groups against candidate registry groups and emits
     group resolution proposals: continue, mutate, new_thread, cross_group_edge,
     merge_groups.
+
+    When *registry* is provided, uses the v0.2 agentic prompt with multi-round
+    tool calling. When None, uses the v0.1 single-pass prompt.
     """
-    prompt = build_group_resolution_composition()
+    agentic = registry is not None
+    if agentic:
+        from .reading_prompts import build_group_resolution_v0_2_composition
+
+        prompt = build_group_resolution_v0_2_composition()
+    else:
+        prompt = build_group_resolution_composition()
     payload = build_group_resolution_payload(
         unit_id=unit_id,
         concepts=concepts,
@@ -1559,14 +1734,31 @@ def run_cross_unit_group_resolution_pass(
 
         from .repair import run_agentic_pass
 
-        data, conversation, validation_report = run_agentic_pass(
-            backend=backend,
-            prompt=prompt,
-            payload=payload,
-            validation_subject_builder=_build_subject,
-            pass_name="cross-unit-group-resolution",
-            return_subject=True,
-        )
+        if agentic:
+            tool_context = {
+                "registry": registry,
+                "source_blocks": blocks,
+                "book_summary": context.get("digest", "") if context else "",
+            }
+            data, conversation, validation_report = run_agentic_resolution_pass(
+                backend=backend,
+                prompt=prompt,
+                payload=payload,
+                tool_context=tool_context,
+                validation_subject_builder=_build_subject,
+                max_turns=10,
+                pass_name="cross-unit-group-resolution",
+                return_subject=True,
+            )
+        else:
+            data, conversation, validation_report = run_agentic_pass(
+                backend=backend,
+                prompt=prompt,
+                payload=payload,
+                validation_subject_builder=_build_subject,
+                pass_name="cross-unit-group-resolution",
+                return_subject=True,
+            )
         raw_response = _last_assistant_content(conversation)
 
     if not cache_hit:
@@ -1936,6 +2128,7 @@ def run_reading_pipeline(
                 use_cache=use_cache,
                 source_blocks=stabilized.get("source_blocks", []),
                 context=None,
+                registry=registry,
             )
             pass_summaries["cross_unit_concept_resolution"] = {
                 "cache_key": concept_resolution_record.cache_key,
@@ -2026,6 +2219,7 @@ def run_reading_pipeline(
                 use_cache=use_cache,
                 source_blocks=stabilized.get("source_blocks", []),
                 context=None,
+                registry=registry,
             )
             pass_summaries["cross_unit_group_resolution"] = {
                 "cache_key": group_resolution_record.cache_key,
