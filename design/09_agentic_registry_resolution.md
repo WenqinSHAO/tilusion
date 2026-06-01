@@ -30,7 +30,10 @@ Turn 1:
   user:   merged unit concepts + compact registry index (shortlisted)
   assistant: initial screening — for each unit concept, either:
     a) "clearly new" → new_concept proposal
-    b) "clearly same" → link proposal (confident from compact index)
+    b) "clearly same" → link proposal (confident from compact index). Link
+       proposals may carry optional `changes` — e.g., updated summary,
+       added aliases, or new observed_surfaces — when the unit contributes
+       fresh information about an existing registry concept.
     c) "need more detail" → requests raw concept data via tool call
 
 Turn 2..N:
@@ -40,8 +43,19 @@ Turn 2..N:
              proposal, or tool call for more candidates
 
 Final turn:
-  assistant: complete resolution_proposals + unresolved_items + warnings
+  assistant: emits final_response with `status: "complete"` — all unit concepts
+             have a decision. The app deterministically verifies every unit
+             concept has a corresponding proposal before accepting the result.
 ```
+
+**Stop discipline.** The LLM must explicitly signal `status: "complete"` when it
+has assigned a decision to every unit concept. The app validates this: if any
+unit concept lacks a proposal, the loop continues (up to the turn budget). This
+prevents the LLM from silently dropping concepts.
+
+**Turn budget.** Maximum 10 turns. The system prompt includes the budget and
+the number of remaining turns so the LLM can pace itself (e.g., "6 turns
+remaining — enough to investigate 2-3 more candidates").
 
 The key efficiency property: Turns 2..N only carry the tool call/response
 payloads — the system prompt and unit data hit KV-cache. Each additional
@@ -56,6 +70,8 @@ The LLM is given these tools in the system prompt:
 ```
 get_concept(concept_id: str) → Concept
 ```
+The `concept_id` comes from the compact registry index (the `CompactConcept.concept_id`
+field), which is always included so the LLM has valid ids to call.
 Returns the full Concept record (all fields: canonical_name, summary, aliases,
 observed_surfaces, facets, provenance, source_block_refs, merged_from, etc.).
 Used when the compact index suggests a potential match but the LLM needs the
@@ -65,6 +81,7 @@ full record to confirm.
 ```
 get_group(group_id: str) → LogicalGroup
 ```
+The `group_id` comes from the compact group index (`CompactGroup.group_id`).
 Returns the full LogicalGroup record including all item_refs, concept_refs,
 and graph edges. Used when the compact group index suggests potential
 continuation but the LLM needs the full structure to decide continue vs.
@@ -79,6 +96,10 @@ candidates). Returns compact one-line-per-concept results. Used when the LLM
 suspects a match exists but the shortlisted candidates don't include it (e.g.,
 a known character appearing under a completely new surface — "the old man"
 with no surface collision in the shortlist).
+
+The LLM should craft queries using the most discriminative fields it has:
+canonical_name, observed_surfaces, or key phrases from the summary. A good
+query is specific (e.g., "Opium War British plenipotentiary" not "person").
 
 ### `search_groups`
 ```
@@ -165,6 +186,23 @@ BM25 lexical + Qwen3-Embedding-0.6B semantic + RRF fusion. The deterministic
 pre-filter for groups adds concept-overlap as an always-include gate
 (concepts already resolved by Conversation D).
 
+### Additional Context Tools
+
+The LLM may need source text to verify a candidate match. Two additional tools
+provide this without bloating the conversation:
+
+**`get_source_block(block_id: str) → SourceBlock`** — Returns the full text
+and metadata for a source block referenced by a concept or edge. Lets the LLM
+read the original passage to confirm identity.
+
+**`get_book_summary() → str`** — Returns the book-level overview summary
+produced by Conversation A. Provides domain context (e.g., "this is a history
+textbook about the Opium Wars") to help the LLM interpret concept surfaces.
+
+These are optional — the pipeline works without them — but can improve
+resolution quality for ambiguous cases where the compact index alone is
+insufficient.
+
 ## Inclusive Recall Property
 
 The shortlisting must be **inclusive**: false positives are acceptable (LLM
@@ -182,6 +220,11 @@ the match). The hybrid approach ensures this:
    identity (e.g., Chinese surface → English registry concept).
 4. **RRF fusion** ensures no single signal dominates. A concept that ranks
    poorly in BM25 but highly in embedding still gets a strong fused score.
+
+**Candidate count**: use a fixed `top_k` cap (default 20) rather than elbow
+detection. A fixed cap is simpler, predictable, and the escape hatch
+(`search_concepts` / `search_groups`) catches any misses. Elbow detection on
+RRF scores is a potential future optimization if we find the cap is too rigid.
 
 ### Measuring Recall
 
@@ -238,26 +281,21 @@ Same pattern:
 
 ### Tool Call Schema
 
-Tools follow the OpenAI function-calling format (compatible with our
-backend's `complete_json` interface):
+Tools use a simple `{"action": ..., "args": {...}}` format embedded in the
+JSON response, compatible with the existing `complete_json()` backend:
 
 ```json
 {
   "tool_calls": [
-    {
-      "id": "call-001",
-      "type": "function",
-      "function": {
-        "name": "get_concept",
-        "arguments": "{\"concept_id\": \"book-concept-0042\"}"
-      }
-    }
+    {"action": "get_concept", "args": {"concept_id": "book-concept-0042"}}
   ]
 }
 ```
 
 The backend executes the tool call and returns the result as a `tool` role
-message in the conversation. The LLM sees the result and continues.
+message in the conversation. The LLM sees the result and continues. When
+the LLM has resolved all concepts, it omits `tool_calls` and emits the
+final `resolution_proposals` response.
 
 ## Implementation Plan
 
@@ -289,7 +327,8 @@ message in the conversation. The LLM sees the result and continues.
   1. Send user payload + tool definitions
   2. Parse assistant response: if `tool_calls`, execute and append to
      conversation; if `resolution_proposals`, break
-  3. Max turns limit (e.g., 20) to prevent infinite loops
+  3. Max turns limit of 10 to prevent infinite loops; system prompt makes
+     the budget and remaining turns visible to the LLM
   4. Validation on final output
 - Replaces the single-turn `run_cross_unit_concept_resolution_pass` and
   `run_cross_unit_group_resolution_pass`
@@ -323,31 +362,47 @@ message in the conversation. The LLM sees the result and continues.
 
 ## Open Questions
 
-1. **Tool call format**: OpenAI-style function calling vs. a simpler
-   `{"action": "get_concept", "args": {...}}` embedded in the JSON response?
-   The current backend uses `complete_json()` which expects a single JSON
-   response. Tool calling requires either extending the backend interface
-   or fitting tool calls into the JSON response schema.
+1. **Tool call format — RESOLVED: simple `{"action": ..., "args": {...}}`**.
+   The LLM response JSON includes an optional `tool_calls` key:
 
-2. **Max turns**: What limit prevents runaway loops? 20 turns is generous
-   (most cases resolve in 2-4). A cost ceiling per resolution pass may be
-   better than a hard turn limit.
+   ```json
+   {
+     "tool_calls": [
+       {"action": "get_concept", "args": {"concept_id": "book-concept-0042"}}
+     ]
+   }
+   ```
 
-3. **Within-unit merges in agentic mode**: When the LLM calls
-   `merge_concepts(c1, c2)` for a within-unit merge, the unit's concept
-   list changes mid-conversation. Should subsequent turns see the updated
-   list? Yes — the tool execution updates the in-flight state.
+   This is simpler than OpenAI-style, fits directly in `complete_json()`'s
+   expected JSON response schema, and requires no backend interface changes.
+   The backend parses `tool_calls`, executes the requested function, and
+   appends a `tool_result` role message to the conversation. OpenAI-style
+   function calling offers no advantage here since we control the full stack.
 
-4. **Cache invalidation**: The agentic pass can't use simple cache keys
-   based on input payload — the tool call sequence is non-deterministic.
-   Cache the final output only (resolution_proposals), not intermediate
-   turns. Or skip caching for agentic passes entirely and rely on the
-   deterministic passes for reproducibility.
+2. **Max turns — RESOLVED: 10 turns with budget awareness**. The system prompt
+   includes the turn budget and remaining turns. Most cases resolve in 2-4
+   turns; 10 is a generous safety cap. If the budget is exhausted before all
+   concepts are resolved, remaining concepts fall back to the deterministic
+   `new_concept` path.
 
-5. **Fallback**: If the agentic loop fails (timeout, max turns exceeded,
-   tool execution errors), fall back to single-pass resolution with the
-   current implementation. The agentic pass is a quality upgrade, not a
-   correctness dependency.
+3. **Within-unit merges in agentic mode — RESOLVED: tool execution updates
+   in-flight state**. When the LLM calls `merge_concepts(c1, c2)`, subsequent
+   turns see the merged concept list. This is why concept resolution precedes
+   group forming — group references must target the post-merge concept ids.
+
+4. **Cache invalidation — RESOLVED: same strategy as other passes**. The
+   cache key is computed from the first-turn message signature (system prompt
+   + user payload), same as segmentation and per-segment extraction. The
+   non-deterministic nature of the LLM call doesn't affect caching — the
+   key is on the input, not the output. An `ignore_cache` flag (already
+   supported by the pass infrastructure) allows forcing a fresh run when
+   needed.
+
+5. **Fallback — RESOLVED: fall back to single-pass**. If the agentic loop
+   fails (timeout, max turns exhausted, tool execution errors), fall back to
+   the current single-pass implementation. The agentic pass is a quality
+   upgrade, not a correctness dependency. Single-pass is always available as
+   a safe baseline.
 
 ## Files
 
