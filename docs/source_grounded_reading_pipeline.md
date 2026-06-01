@@ -19,7 +19,7 @@ source text
 -> cross-unit registry deltas (deterministic + LLM proposals)
 ```
 
-Timelines, discourse graphs, claim maps, and theme maps are all logical groups — graph-shaped views over atomic items. They are not core package fields or separate top-level models.
+Timelines, discourse graphs, claim maps, and theme maps are all logical groups. They share the same `LogicalGroup` schema with an optional `graph` — there is no separate `Timeline` class, `DiscourseGraph` class, etc. The `logical_groups` array is a core package field; individual group types are differentiated by the `group_type` string and the edge types used in their graph, not by having their own top-level model.
 
 The key correction after the unit-0002 reading trial: source blocks must be deterministic before LLM extraction begins. The LLM cites source blocks; it does not invent them.
 
@@ -77,7 +77,7 @@ The core unit package (schema version `reading-unit-v0.3`):
   "validation": {},
   "context_metadata": {},
   "metrics": {
-    "validation": {},
+    "validation_counts": {},
     "counts": {}
   }
 }
@@ -143,6 +143,8 @@ Replaces both the old per-segment `ConceptMention` and unit-level `UnitConcept`.
 }
 ```
 
+`facets` are machine-actionable behavioral/situational tags orthogonal to `concept_type`: `behaves_like_person`, `speaker`, `antagonist`, `unreliable_narrator`, `disputed_identity`, etc. They help deterministic concept merging disambiguate same-surface concepts in different roles, and help the grouping LLM understand character functions without parsing prose summaries. They are kept separate from `summary` (which is prose) so deterministic code can filter/group by facet without NL parsing.
+
 ### AtomicItem
 
 Per-segment extraction product. Replaces the old `logical_groups` (which were per-segment meaning units like events, claims, observations).
@@ -176,6 +178,8 @@ Per-segment extraction product. Replaces the old `logical_groups` (which were pe
 ```
 
 Atomic items stop at source-grounded compressions. They do not build cross-segment concept unification, logical groups, dense link graphs, timelines, discourse graphs, or theme maps.
+
+The `attributes` dict uses `argument_role`, `narrative_role`, and `salience` as recommended keys. Additional keys beyond these are accepted — use any attribute that helps downstream grouping and graph-building (e.g., `emotional_valence`, `pov_character`, `tension_level`). The grouping LLM sees these attributes and can use them to form richer groups.
 
 ### LogicalGroup
 
@@ -217,6 +221,19 @@ Unit-level derived view over stabilized atomic items. Replaces the old `derived_
 }
 ```
 
+**Edge `source_block_refs`** attests to the edge inference itself — the text passage that supports the relationship claim (e.g., "and then," "the next day," a date expression linking two events). It is not a duplication of the source/target node source blocks. It answers: "where in the text does the LLM derive this relationship?" It is optional — purely structural edges (`related_to` without a specific passage) may omit it. In visualization, it enables "show me the passage supporting this edge" on click; in review, it lets a human verify edge fidelity.
+
+**Edge provenance rules:**
+
+| Condition | `grounding` |
+|---|---|
+| Edge has non-empty `source_block_refs` that directly support the relationship | `source_grounded` |
+| Edge is inferred from structure, pattern, or cross-item reasoning without a direct textual statement | `synthesis` |
+
+A `synthesis` edge may still carry `source_block_refs` — the LLM cited relevant passages but the relationship itself is an inference (e.g., two events both describe economic hardship → `related_to`).
+
+**Group-level provenance rule:** `source_grounded` if **all** edges in the group's graph are `source_grounded`. `synthesis` if any edge is `synthesis`, or if the group itself is a constructed view (e.g., a `theme_set` pulling items from across the unit without direct textual connective tissue). Downstream: `source_grounded` groups get a verified badge in the reading UI; cross-unit group continuation prefers `source_grounded` groups as anchors.
+
 **Cross-group references:** the same atomic item can appear as a node in multiple logical groups. Edges live within a group's graph and connect nodes within that group. If two items in different groups are related, that relationship is expressed by including both items in a shared group or by creating a cross-cutting group. There is no top-level `links` array — graphs are the only edge container.
 
 A simple group can omit `graph` and behave like a stack/list of atomic items. A timeline is a `LogicalGroup` with `group_type: "timeline"` and a graph whose edges usually include `precedes`, `continues`, or `causes`. A discourse graph is the same base structure with argument-oriented edge types.
@@ -243,42 +260,33 @@ Recommended provenance values:
 
 - `source_grounded`, `synthesis`, `deterministic`, `llm_inferred`, `user_corrected`
 
-## Document State And Registry Delta
+## Book Registry And Registry Delta
 
-### DocumentStateSnapshot
+### Snapshots
 
-```json
-{
-  "snapshot_id": "snapshot-...",
-  "document_id": "doc-...",
-  "canonical_concepts": [],
-  "reusable_item_summaries": [],
-  "reusable_group_summaries": [],
-  "cross_unit_links": [],
-  "ambiguity_queue": [],
-  "transactions": []
-}
-```
+The BookRegistry (`tilusion/book_registry.py`) uses git to version `registry.json`. A snapshot is simply the registry state at a given commit SHA — no separate snapshot data structure is needed. `registry.save()` writes the current state as a git commit; `registry.rollback(sha)` restores a prior commit. The git log serves as the audit trail.
 
 ### RegistryDelta
 
+`RegistryDeltaResult` (`tilusion/registry_delta.py`) is a sequence of BookRegistry API calls derived from LLM resolution proposals plus deterministic operations:
+
 ```json
 {
-  "delta_id": "delta-...",
-  "base_snapshot_id": "snapshot-...",
   "unit_id": "unit-0003",
   "operations": [
-    {
-      "operation_type": "new_concept|alias_candidate|merge_proposal|summary_update|logical_group_continuation|cross_unit_link|ambiguity_item|user_review_needed",
-      "payload": {},
-      "provenance": {}
-    }
+    {"op_type": "merge_concepts", "unit_concept": {...}, "book_concept_id": "book-concept-0042", "match_reason": "llm_link_proposal"},
+    {"op_type": "add_concept", "concept": {...}, "unit_id": "unit-0003"},
+    {"op_type": "add_item", "item": {...}, "unit_id": "unit-0003"},
+    {"op_type": "continue_group", "group": {...}, "book_group_id": "book-group-0017", "unit_id": "unit-0003"},
+    {"op_type": "mutate_group", "group": {...}, "book_group_id": "book-group-0004", "unit_id": "unit-0003"}
   ],
-  "validation": {}
+  "ambiguity_items": [...],
+  "id_remap": {"unit-concept-0001": "book-concept-0042"},
+  "stats": {"merge_concepts": 1, "add_concept": 1, "add_item": 12, "add_group": 0, "continue_group": 1}
 }
 ```
 
-No raw LLM output should destructively mutate document state. It proposes a delta. Deterministic validation and, when needed, user approval apply the delta to a new snapshot.
+The flow is: LLM resolution proposals → `compute_registry_delta()` → `RegistryDeltaResult.operations` → `apply_registry_delta()` → BookRegistry method calls (`add_concept`, `merge_concepts`, `add_item`, `add_group`) → `registry.save()` (git commit). Each operation maps directly to a BookRegistry API call. The LLM proposes identity judgments; deterministic code validates and executes via the API. No raw LLM output mutates registry state directly.
 
 ## Pipeline Stages (Current — 8 stages, 5 LLM-backed)
 
@@ -434,6 +442,20 @@ Backend: deterministic — `registry_delta.py` with LLM proposals from steps 6-7
 
 Note: Step 6 runs for all units (including unit 1 with empty registry for within-unit corrections). Step 7 is skipped for unit 1 (no prior registry groups).
 
+**LLM → BookRegistry API translation** happens in `compute_registry_delta()`. The translation is direct and reliable:
+
+| LLM proposal type | RegistryDelta op_type | BookRegistry API call |
+|---|---|---|
+| `link` | `merge_concepts` | `registry.add_concept(force=True)` + `registry.merge_concepts([book_id, new_id])` |
+| `new_concept` | `add_concept` | `registry.add_concept(concept)` |
+| (deterministic) | `add_item` | `registry.add_item(item)` |
+| `continue` | `continue_group` | `registry.add_group(group)` |
+| `mutate` | `mutate_group` | `registry.add_group(group)` |
+
+Concept and group operations flow through this path. Item-level deltas are currently deterministic-only (no LLM item merging). The LLM's `changes` field (canonical_name updates, new surfaces, summary refinements) is applied to unit concepts before they reach the registry, so the registry always receives well-formed `Concept` objects. If the LLM produces malformed `changes`, the `Concept` constructor or validation catches it.
+
+The mapping is already BookRegistry API-friendly: the LLM proposes identity/continuation judgments, and `compute_registry_delta` + `apply_registry_delta` translate them into API calls deterministically. Each operation is a trackable record before any git commit.
+
 ### Registry Index And Dual-Signal Candidate Detection
 
 `tilusion/registry_index.py` builds the compact registry concept index for LLM concept resolution and selects candidate concepts/groups:
@@ -441,6 +463,8 @@ Note: Step 6 runs for all units (including unit 1 with empty registry for within
 - **`build_registry_index()`**: One-line-per-concept compact representation (concept_id, canonical_name, type, summary truncated to ~120 chars, observed_surfaces first 10).
 - **`select_concept_candidates()`**: Hybrid candidate selection. When registry ≤50 concepts, returns the full index. When larger, unions deterministic pre-filter (surface collision + type family + canonical_name) with dual-signal retrieval (BM25 lexical + Qwen3-Embedding-0.6B semantic similarity + Reciprocal Rank Fusion).
 - **`select_group_candidates()`**: Pre-filters registry groups by concept overlap with unit groups.
+
+Current limitations and next iteration — groups lack a compact index and embedding-based shortlisting (only concepts have dual-signal). The single-pass LLM can't request more detail for ambiguous cases. See `design/09_agentic_registry_resolution.md` for the planned agentic multi-round approach with registry API tool calling and unified concept/group shortlisting.
 
 The dual-signal approach uses Qwen3-Embedding-0.6B (Apache 2.0, 0.6B params, 32K context, 0.988 R@1 on ZH→EN cross-lingual retrieval) for semantic similarity. Degrades gracefully to BM25-only if the model is unavailable.
 
@@ -495,7 +519,7 @@ Each stage reports factual counts as part of its cached output. The final unit p
 }
 ```
 
-Metrics are not quality judgments. Validation checks structural correctness and only records validation counts under `metrics.validation`; it does not interpret thresholds such as "low density" or "weak grouping" at this stage.
+Metrics are not quality judgments. Validation checks structural correctness and records aggregate counts under `metrics.validation_counts` (e.g., `{"errors": 0, "warnings": 2}`). The outer `validation` field on the unit package is the full `ReadingValidationReport` (issues list, pass/fail boolean) — the gating signal for downstream operations. `metrics.validation_counts` is the dashboard/telemetry summary of the same report; it does not interpret thresholds such as "low density" or "weak grouping."
 
 Overview counts:
 - Segment count requested by the overview pass
