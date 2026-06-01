@@ -425,7 +425,7 @@ class TestAgenticResolutionPass:
             }
         )
 
-        data, conv, report = run_agentic_resolution_pass(
+        result = run_agentic_resolution_pass(
             backend=backend,
             prompt=prompt,
             payload=payload,
@@ -433,7 +433,9 @@ class TestAgenticResolutionPass:
             validation_subject_builder=_build_subject,
             pass_name="test",
         )
-        assert report.passed
+        assert result.validation_report.passed
+        assert result.raw_data["resolution_proposals"] == []
+        assert result.applied_subject["unit_id"] == "u1"
 
     def test_single_tool_call_then_complete(self, registry, tmp_path):
         """Turn 1: tool_calls, Turn 2: status=complete with proposals."""
@@ -478,7 +480,7 @@ class TestAgenticResolutionPass:
             },
         )
 
-        data, conv, report = run_agentic_resolution_pass(
+        result = run_agentic_resolution_pass(
             backend=backend,
             prompt=prompt,
             payload=payload,
@@ -486,7 +488,9 @@ class TestAgenticResolutionPass:
             validation_subject_builder=_build_subject,
             pass_name="test",
         )
-        assert report.passed
+        assert result.validation_report.passed
+        assert result.raw_data["resolution_proposals"] == []
+        assert result.turns_used == 2
 
     def test_max_turns_exhausted_fallback(self, registry, tmp_path):
         """When max_turns reached, falls back to single-pass."""
@@ -528,7 +532,7 @@ class TestAgenticResolutionPass:
             },
         )
 
-        data, conv, report = run_agentic_resolution_pass(
+        result = run_agentic_resolution_pass(
             backend=backend,
             prompt=prompt,
             payload=payload,
@@ -537,8 +541,9 @@ class TestAgenticResolutionPass:
             max_turns=3,
             pass_name="test",
         )
-        # After max_turns (3), falls back to single-pass (which may also fail
-        # since mock data doesn't match, but the fallback path is exercised)
+        assert result.exhausted
+        assert "max turns exhausted" in result.failure_reason
+        assert "tool_calls" in result.raw_data
 
 
 # ── BookRegistry helpers ─────────────────────────────────────────────────────

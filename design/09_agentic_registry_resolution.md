@@ -259,8 +259,9 @@ The system prompt defines the tools above and instructs:
 3. **Search when suspicious.** If no candidate matches but the concept
    summary suggests a known entity, call `search_concepts(query)`. This is
    the "new surface" escape hatch.
-4. **Emit proposals incrementally.** Don't wait until all concepts are
-   resolved. Propose clear cases first, investigate ambiguous ones.
+4. **Keep decisions internal until final.** Decide clear cases as they become
+   obvious, then investigate ambiguous ones with tool calls. Emit all proposals
+   only in the final `status: complete` response.
 5. **Stop condition.** When all unit concepts have a decision (link,
    new_concept, merge, split, refine, reclassify), emit final response with
    `resolution_proposals`, `implicit_refs`, `unresolved_items`, `warnings`.

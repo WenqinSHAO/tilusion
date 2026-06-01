@@ -180,8 +180,8 @@ def render_tool_definitions_markdown(
         "You can call tools by including a `tool_calls` key in your "
         "JSON response. Each tool call has an `action` and `args.`\n",
         "When you call tools, the system will execute them and return "
-        "results in the next turn. You will NOT include "
-        "`resolution_proposals` keys in tool-calling turns.\n",
+        "results in the next turn. Tool-calling turns must contain only "
+        "`tool_calls`; emit proposal lists only in the final response.\n",
     ]
     for name in names:
         td = TOOL_DEFINITIONS.get(name)

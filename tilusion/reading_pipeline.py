@@ -194,6 +194,26 @@ class ReadingPipelineRecord:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
 
 
+@dataclass(slots=True)
+class AgenticResolutionResult:
+    """Result of a multi-round registry resolution pass.
+
+    raw_data is the model's final proposal JSON. applied_subject is the
+    validated extraction-package-shaped view built from those proposals. Keeping
+    them separate prevents proposal lists from being lost when the applied
+    subject is used for validation.
+    """
+
+    raw_data: dict[str, Any]
+    applied_subject: dict[str, Any]
+    conversation: Any
+    validation_report: ReadingValidationReport
+    turns_used: int
+    exhausted: bool = False
+    fallback_used: bool = False
+    failure_reason: str = ""
+
+
 # ── Mock response functions ──────────────────────────────────────────────────
 
 
@@ -1394,6 +1414,60 @@ def run_unit_logical_grouping_pass(
 # ── Agentic resolution pass (multi-round with tool calling) ────────────────
 
 
+def _resolution_proposal_key(payload: dict[str, Any]) -> str:
+    task = payload.get("task", "")
+    if task == "cross_unit_group_resolution":
+        return "group_resolution_proposals"
+    return "resolution_proposals"
+
+
+def _is_complete_resolution_response(
+    data: dict[str, Any],
+    proposal_key: str,
+) -> tuple[bool, str]:
+    if data.get("tool_calls"):
+        return False, "response still contains tool_calls"
+    if data.get("status") != "complete":
+        return False, "response missing status=complete"
+    if proposal_key not in data:
+        return False, f"response missing {proposal_key}"
+    if not isinstance(data.get(proposal_key), list):
+        return False, f"{proposal_key} must be a list"
+    return True, ""
+
+
+def _run_resolution_fallback(
+    *,
+    backend: LLMBackend,
+    fallback_prompt: Any,
+    payload: dict[str, Any],
+    validation_subject_builder: Any,
+    pass_name: str,
+    failure_reason: str,
+) -> AgenticResolutionResult:
+    from .repair import run_agentic_pass
+
+    raw_data, conversation, report = run_agentic_pass(
+        backend=backend,
+        prompt=fallback_prompt,
+        payload=payload,
+        validation_subject_builder=validation_subject_builder,
+        max_repair_turns=3,
+        pass_name=f"{pass_name}-fallback",
+        return_subject=False,
+    )
+    applied_subject = validation_subject_builder(raw_data)
+    return AgenticResolutionResult(
+        raw_data=raw_data,
+        applied_subject=applied_subject,
+        conversation=conversation,
+        validation_report=report,
+        turns_used=1,
+        fallback_used=True,
+        failure_reason=failure_reason,
+    )
+
+
 def run_agentic_resolution_pass(
     *,
     backend: LLMBackend,
@@ -1403,22 +1477,13 @@ def run_agentic_resolution_pass(
     validation_subject_builder: Any,
     max_turns: int = 10,
     pass_name: str = "",
-    return_subject: bool = False,
-) -> tuple[dict[str, Any], Any, Any]:
-    """Run a pass with multi-turn tool-calling support.
-
-    Turn 1: LLM call with tool definitions in system prompt.
-    If response has ``tool_calls``, execute them and loop.
-    If response has resolution proposals and ``status: "complete"``, stop.
-    If ``max_turns`` exhausted, fall back to single-pass behavior.
-
-    Returns ``(data, conversation, final_validation_report)``.
-    """
-    from .conversation import TurnMetadata
-    from .reading_validation import ReadingValidationReport, validate_extraction_unit_package
+    fallback_prompt: Any | None = None,
+) -> AgenticResolutionResult:
+    """Run a registry resolution pass with multi-turn tool-calling support."""
     from .registry_tools import execute_tool_call
 
-    # Turn 1: initial LLM call
+    proposal_key = _resolution_proposal_key(payload)
+
     conversation = backend.start_conversation(
         system_prompt=prompt.content,
         user_payload=payload,
@@ -1427,18 +1492,14 @@ def run_agentic_resolution_pass(
     assistant_response = _last_assistant_content(conversation)
     data = parse_json_response(assistant_response)
 
-    # Check for tool calls
     tool_calls = data.get("tool_calls", [])
-
     turn_count = 1
     while tool_calls and turn_count < max_turns:
-        # Execute tool calls
         tool_results: list[dict[str, Any]] = []
         for tc in tool_calls:
             result = execute_tool_call(tc, tool_context)
             tool_results.append(result)
 
-        # Build tool result message
         tool_msg = json.dumps(
             {
                 "tool_results": tool_results,
@@ -1447,51 +1508,98 @@ def run_agentic_resolution_pass(
             ensure_ascii=False,
         )
 
-        # Continue conversation with tool results
         conversation = backend.continue_conversation(conversation, tool_msg)
         assistant_response = _last_assistant_content(conversation)
 
         try:
             data = parse_json_response(assistant_response)
         except Exception as exc:
-            print(
-                f"  {pass_name}: turn {turn_count + 1} response unparseable: {exc}",
-                file=sys.stderr,
+            reason = f"turn {turn_count + 1} response unparseable: {exc}"
+            print(f"  {pass_name}: {reason}", file=sys.stderr)
+            if fallback_prompt is not None:
+                return _run_resolution_fallback(
+                    backend=backend,
+                    fallback_prompt=fallback_prompt,
+                    payload=payload,
+                    validation_subject_builder=validation_subject_builder,
+                    pass_name=pass_name,
+                    failure_reason=reason,
+                )
+            applied_subject = validation_subject_builder({})
+            report = validate_extraction_unit_package(applied_subject)
+            return AgenticResolutionResult(
+                raw_data={},
+                applied_subject=applied_subject,
+                conversation=conversation,
+                validation_report=report,
+                turns_used=turn_count + 1,
+                failure_reason=reason,
             )
-            break
 
         tool_calls = data.get("tool_calls", [])
         turn_count += 1
 
-        # If LLM signals completion, stop even if more turns remain
-        if data.get("status") == "complete" and not tool_calls:
-            break
+    complete, reason = _is_complete_resolution_response(data, proposal_key)
+    if not complete:
+        exhausted = bool(data.get("tool_calls")) and turn_count >= max_turns
+        if exhausted:
+            reason = f"max turns exhausted with pending tool_calls ({max_turns})"
+        print(
+            f"  {pass_name}: agentic resolution incomplete ({reason}), falling back",
+            file=sys.stderr,
+        )
+        if fallback_prompt is not None:
+            result = _run_resolution_fallback(
+                backend=backend,
+                fallback_prompt=fallback_prompt,
+                payload=payload,
+                validation_subject_builder=validation_subject_builder,
+                pass_name=pass_name,
+                failure_reason=reason,
+            )
+            result.exhausted = exhausted
+            return result
+        applied_subject = validation_subject_builder(data)
+        report = validate_extraction_unit_package(applied_subject)
+        return AgenticResolutionResult(
+            raw_data=data,
+            applied_subject=applied_subject,
+            conversation=conversation,
+            validation_report=report,
+            turns_used=turn_count,
+            exhausted=exhausted,
+            failure_reason=reason,
+        )
 
-    # Validate: build the validation subject from data
-    validation_subject = validation_subject_builder(data)
-    report = validate_extraction_unit_package(validation_subject)
-
+    applied_subject = validation_subject_builder(data)
+    report = validate_extraction_unit_package(applied_subject)
     if report.passed:
-        result = validation_subject if return_subject else data
-        return result, conversation, report
+        return AgenticResolutionResult(
+            raw_data=data,
+            applied_subject=applied_subject,
+            conversation=conversation,
+            validation_report=report,
+            turns_used=turn_count,
+        )
 
-    # Fallback: run the existing single-pass repair loop
-    print(
-        f"  {pass_name}: agentic pass validation failed or max turns exhausted, "
-        f"falling back to single-pass",
-        file=sys.stderr,
-    )
-
-    from .repair import run_agentic_pass
-
-    return run_agentic_pass(
-        backend=backend,
-        prompt=prompt,
-        payload=payload,
-        validation_subject_builder=validation_subject_builder,
-        max_repair_turns=3,
-        pass_name=f"{pass_name}-fallback",
-        return_subject=return_subject,
+    reason = "agentic final response failed validation"
+    print(f"  {pass_name}: {reason}, falling back", file=sys.stderr)
+    if fallback_prompt is not None:
+        return _run_resolution_fallback(
+            backend=backend,
+            fallback_prompt=fallback_prompt,
+            payload=payload,
+            validation_subject_builder=validation_subject_builder,
+            pass_name=pass_name,
+            failure_reason=reason,
+        )
+    return AgenticResolutionResult(
+        raw_data=data,
+        applied_subject=applied_subject,
+        conversation=conversation,
+        validation_report=report,
+        turns_used=turn_count,
+        failure_reason=reason,
     )
 
 
@@ -1571,13 +1679,16 @@ def run_cross_unit_concept_resolution_pass(
 
         from .repair import run_agentic_pass
 
+        agentic_status = "not_used"
+        agentic_turns_used = 0
+        agentic_failure_reason = ""
         if agentic:
             tool_context = {
                 "registry": registry,
                 "source_blocks": blocks,
                 "book_summary": context.get("digest", "") if context else "",
             }
-            data, conversation, validation_report = run_agentic_resolution_pass(
+            result = run_agentic_resolution_pass(
                 backend=backend,
                 prompt=prompt,
                 payload=payload,
@@ -1585,8 +1696,15 @@ def run_cross_unit_concept_resolution_pass(
                 validation_subject_builder=_build_subject,
                 max_turns=10,
                 pass_name="cross-unit-concept-resolution",
-                return_subject=True,
+                fallback_prompt=build_concept_resolution_composition(),
             )
+            data = result.raw_data
+            applied_subject = result.applied_subject
+            conversation = result.conversation
+            validation_report = result.validation_report
+            agentic_status = "fallback" if result.fallback_used else "complete"
+            agentic_turns_used = result.turns_used
+            agentic_failure_reason = result.failure_reason
         else:
             data, conversation, validation_report = run_agentic_pass(
                 backend=backend,
@@ -1594,13 +1712,14 @@ def run_cross_unit_concept_resolution_pass(
                 payload=payload,
                 validation_subject_builder=_build_subject,
                 pass_name="cross-unit-concept-resolution",
-                return_subject=True,
+                return_subject=False,
             )
+            applied_subject = _build_subject(data)
         raw_response = _last_assistant_content(conversation)
 
     if not cache_hit:
-        updated_concepts = data.get("concepts", [])
-        all_unresolved = data.get("unresolved_items", [])
+        updated_concepts = applied_subject.get("concepts", [])
+        all_unresolved = applied_subject.get("unresolved_items", [])
     else:
         _normalize_uncertainty_fields(data)
         proposals = data.get("resolution_proposals", [])
@@ -1636,6 +1755,9 @@ def run_cross_unit_concept_resolution_pass(
             "implicit_refs": implicit_ref_map,
             "unresolved_items": all_unresolved,
             "validation": validation_report.to_dict() if not cache_hit else {},
+            "agentic_status": locals().get("agentic_status", "cache_hit" if cache_hit else "not_used"),
+            "agentic_turns_used": locals().get("agentic_turns_used", 0),
+            "agentic_failure_reason": locals().get("agentic_failure_reason", ""),
         },
         validation_report=validation_report if not cache_hit else ReadingValidationReport(True, 0, 0, 0, []),
         artifact_paths=paths,
@@ -1734,13 +1856,16 @@ def run_cross_unit_group_resolution_pass(
 
         from .repair import run_agentic_pass
 
+        agentic_status = "not_used"
+        agentic_turns_used = 0
+        agentic_failure_reason = ""
         if agentic:
             tool_context = {
                 "registry": registry,
                 "source_blocks": blocks,
                 "book_summary": context.get("digest", "") if context else "",
             }
-            data, conversation, validation_report = run_agentic_resolution_pass(
+            result = run_agentic_resolution_pass(
                 backend=backend,
                 prompt=prompt,
                 payload=payload,
@@ -1748,8 +1873,15 @@ def run_cross_unit_group_resolution_pass(
                 validation_subject_builder=_build_subject,
                 max_turns=10,
                 pass_name="cross-unit-group-resolution",
-                return_subject=True,
+                fallback_prompt=build_group_resolution_composition(),
             )
+            data = result.raw_data
+            applied_subject = result.applied_subject
+            conversation = result.conversation
+            validation_report = result.validation_report
+            agentic_status = "fallback" if result.fallback_used else "complete"
+            agentic_turns_used = result.turns_used
+            agentic_failure_reason = result.failure_reason
         else:
             data, conversation, validation_report = run_agentic_pass(
                 backend=backend,
@@ -1757,12 +1889,13 @@ def run_cross_unit_group_resolution_pass(
                 payload=payload,
                 validation_subject_builder=_build_subject,
                 pass_name="cross-unit-group-resolution",
-                return_subject=True,
+                return_subject=False,
             )
+            applied_subject = _build_subject(data)
         raw_response = _last_assistant_content(conversation)
 
     if not cache_hit:
-        updated_groups = data.get("logical_groups", [])
+        updated_groups = applied_subject.get("logical_groups", [])
     else:
         _normalize_uncertainty_fields(data)
         proposals = data.get("group_resolution_proposals", [])
@@ -1790,6 +1923,9 @@ def run_cross_unit_group_resolution_pass(
             "group_resolution_proposals": raw_proposals,
             "cross_group_edges": cross_group_edges,
             "warnings": data.get("warnings", []),
+            "agentic_status": locals().get("agentic_status", "cache_hit" if cache_hit else "not_used"),
+            "agentic_turns_used": locals().get("agentic_turns_used", 0),
+            "agentic_failure_reason": locals().get("agentic_failure_reason", ""),
         },
         validation_report=validation_report if not cache_hit else ReadingValidationReport(True, 0, 0, 0, []),
         artifact_paths=paths,

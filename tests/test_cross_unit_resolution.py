@@ -70,6 +70,31 @@ def _make_registry_concept(
     }
 
 
+class _ControlledResolutionBackend:
+    model_identity = "controlled-resolution-test"
+
+    def __init__(self, response: dict):
+        self.response = response
+
+    def start_conversation(self, system_prompt, user_payload, *, pass_name=""):
+        from tilusion.conversation import ConversationContext, TurnMetadata
+
+        ctx = ConversationContext.create(
+            model_identity=self.model_identity,
+            pass_name=pass_name,
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+        )
+        ctx.record_turn(
+            assistant_response=json.dumps(self.response, ensure_ascii=False),
+            metadata=TurnMetadata(turn_index=1, turn_type="initial", elapsed_ms=0),
+        )
+        return ctx
+
+    def continue_conversation(self, conversation, user_message):
+        raise AssertionError("unexpected continuation")
+
+
 # ── TestBuildRegistryIndex ────────────────────────────────────────────────────
 
 
@@ -745,6 +770,48 @@ class TestConceptResolutionPass:
         assert "resolution_proposals" in record.data
         assert "implicit_refs" in record.data
 
+    def test_agentic_run_preserves_raw_link_proposals(self, tmp_path: Path) -> None:
+        from tilusion.book_registry import BookRegistry
+
+        backend = _ControlledResolutionBackend({
+            "status": "complete",
+            "unit_id": "unit-0002",
+            "resolution_proposals": [{
+                "proposal_id": "res-0001",
+                "proposal_type": "link",
+                "target_refs": ["c-0001"],
+                "registry_ref": "book-1",
+                "changes": {},
+                "rationale": "same person",
+                "implicit_refs": [{
+                    "item_ref": "book-item-1",
+                    "concept_ref": "book-concept-1",
+                    "reason": "implicit reference",
+                }],
+                "uncertainty": [],
+                "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+            }],
+            "unresolved_items": [],
+            "warnings": [],
+        })
+        registry = BookRegistry(book_path="book", cache_root=tmp_path / "registry")
+        record = run_cross_unit_concept_resolution_pass(
+            unit_id="unit-0002",
+            concepts=[_make_concept("c-0001", "孔子", "person", source_block_refs=["b1"])],
+            registry_index=[_make_registry_concept("book-1", "孔子", "person")],
+            unresolved_items=[],
+            backend=backend,
+            cache_dir=tmp_path / "cache",
+            use_cache=False,
+            source_blocks=[{"block_id": "b1", "unit_id": "unit-0002", "segment_id": "seg-0001", "block_index": 0, "block_type": "paragraph", "text": "孔子", "char_start": 0, "char_end": 2, "start": 0, "end": 2, "text_hash": "hash-b1"}],
+            registry=registry,
+        )
+        assert len(record.data["resolution_proposals"]) == 1
+        assert record.data["resolution_proposals"][0]["registry_ref"] == "book-1"
+        assert record.data["concepts"][0]["registry_ref"] == "book-1"
+        assert record.data["implicit_refs"]["book-1"]["implicit_refs"]
+        assert record.data["agentic_status"] == "complete"
+
 
 class TestGroupResolutionPass:
     def test_run_with_mock_backend(self, tmp_path: Path) -> None:
@@ -767,6 +834,47 @@ class TestGroupResolutionPass:
         assert record.pass_name == "cross-unit-group-resolution"
         assert record.data["unit_id"] == "unit-0002"
         assert "group_resolution_proposals" in record.data
+
+    def test_agentic_run_preserves_raw_continue_proposals(self, tmp_path: Path) -> None:
+        from tilusion.book_registry import BookRegistry
+
+        backend = _ControlledResolutionBackend({
+            "status": "complete",
+            "unit_id": "unit-0002",
+            "group_resolution_proposals": [{
+                "proposal_id": "grp-res-0001",
+                "proposal_type": "continue",
+                "unit_group_ref": "g-0001",
+                "registry_group_ref": "book-g-1",
+                "changes": {},
+                "edge": {},
+                "rationale": "same thread",
+                "uncertainty": [],
+                "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+            }],
+            "warnings": [],
+        })
+        registry = BookRegistry(book_path="book", cache_root=tmp_path / "registry")
+        record = run_cross_unit_group_resolution_pass(
+            unit_id="unit-0002",
+            concepts=[_make_concept("c-0001", "孔子", "person", source_block_refs=["b1"])],
+            groups=[{"group_id": "g-0001", "group_type": "timeline", "summary": "Timeline."}],
+            registry_groups=[{
+                "group_id": "book-g-1",
+                "group_type": "timeline",
+                "summary": "Book timeline.",
+                "concept_refs": ["book-1"],
+            }],
+            backend=backend,
+            cache_dir=tmp_path / "cache",
+            use_cache=False,
+            source_blocks=[{"block_id": "b1", "unit_id": "unit-0002", "segment_id": "seg-0001", "block_index": 0, "block_type": "paragraph", "text": "孔子", "char_start": 0, "char_end": 2, "start": 0, "end": 2, "text_hash": "hash-b1"}],
+            registry=registry,
+        )
+        assert len(record.data["group_resolution_proposals"]) == 1
+        assert record.data["group_resolution_proposals"][0]["registry_group_ref"] == "book-g-1"
+        assert record.data["logical_groups"][0]["registry_group_ref"] == "book-g-1"
+        assert record.data["agentic_status"] == "complete"
 
 
 # ── Integration: two-unit book scope pipeline ─────────────────────────────────

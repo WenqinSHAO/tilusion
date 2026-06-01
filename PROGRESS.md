@@ -70,6 +70,7 @@
     (1) `resolve_overview_segments` no longer drops segments when only one anchor fails; fills missing boundary from neighbours,
     (2) `source_window_needles` tries clause suffixes to catch LLM-fabricated quote prefixes,
     (3) reading view template `.info-item` clicks now highlight item cards and graph nodes.
+  - Agentic registry resolution fix slice 2026-06-01: raw LLM proposal JSON is now preserved separately from applied validation subjects; incomplete tool-call loops are rejected before validation; agentic fallback now uses the v0.1 single-pass prompt; v0.2 prompt/tool wording no longer implies incremental proposal emission. Remaining plan items: registry search caching, compact group search results, and registry-backed source-block lookup.
   - **Next step:** Re-run unit-0007 pipeline to verify segment-0002 is no longer dropped, and unit-0002/unit-0003 trials to validate the repair loop end-to-end.
 
 ## Implementation Status

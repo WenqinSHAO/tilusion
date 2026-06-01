@@ -14,7 +14,7 @@ This is a multi-round conversation. You have access to tools (defined below — 
 
 3. **Search when suspicious.** If no candidate matches but the concept summary suggests a known entity, call `search_concepts(query)`. This searches the FULL registry (not just the shortlisted candidates). Craft queries using the most discriminative fields: canonical_name, observed_surfaces, or key phrases from the summary. A good query is specific (e.g., "Opium War British plenipotentiary" not "person").
 
-4. **Emit proposals incrementally.** Don't wait until all concepts are resolved. Propose clear cases first (link/new_concept), then investigate ambiguous ones. Use tool calls to gather evidence for difficult cases.
+4. **Keep decisions internal until final.** Decide clear cases as you go, then investigate ambiguous ones with tool calls. Emit all proposals only in the final `status: complete` response.
 
 5. **Stop condition.** When ALL unit concepts have a decision (link, new_concept, merge, split, refine, reclassify), emit your final response with `"status": "complete"` and your `resolution_proposals`. Do NOT include `tool_calls` in the final response.
 
