@@ -7,6 +7,8 @@ from .book_registry import BookRegistry
 from .reading_schema import (
     AtomicItem,
     Concept,
+    GraphEdge,
+    GraphNode,
     LogicalGroup,
     TemporalAttribute,
     normalize_concept_type,
@@ -254,16 +256,7 @@ def apply_registry_delta(
             group_dict["concept_refs"] = _remap_refs(
                 group_dict.get("concept_refs", []), delta.id_remap
             )
-            group = LogicalGroup(
-                group_id="",  # registry assigns
-                group_type=group_dict.get("group_type", "other"),
-                summary=group_dict.get("summary", ""),
-                item_refs=group_dict.get("item_refs", []),
-                concept_refs=group_dict["concept_refs"],
-                graph=group_dict.get("graph", {}),
-                uncertainty=group_dict.get("uncertainty", []),
-                provenance=group_dict.get("provenance", {}),
-            )
+            group = _dict_to_logical_group(group_dict)
             group_id = registry.add_group(group)
             applied_ids.append(group_id)
 
@@ -273,16 +266,7 @@ def apply_registry_delta(
             group_dict["concept_refs"] = _remap_refs(
                 group_dict.get("concept_refs", []), delta.id_remap
             )
-            group = LogicalGroup(
-                group_id="",  # registry assigns
-                group_type=group_dict.get("group_type", "other"),
-                summary=group_dict.get("summary", ""),
-                item_refs=group_dict.get("item_refs", []),
-                concept_refs=group_dict["concept_refs"],
-                graph=group_dict.get("graph", {}),
-                uncertainty=group_dict.get("uncertainty", []),
-                provenance=group_dict.get("provenance", {}),
-            )
+            group = _dict_to_logical_group(group_dict)
             group_id = registry.add_group(group)
             applied_ids.append(group_id)
 
@@ -292,16 +276,7 @@ def apply_registry_delta(
             group_dict["concept_refs"] = _remap_refs(
                 group_dict.get("concept_refs", []), delta.id_remap
             )
-            group = LogicalGroup(
-                group_id="",  # registry assigns
-                group_type=group_dict.get("group_type", "other"),
-                summary=group_dict.get("summary", ""),
-                item_refs=group_dict.get("item_refs", []),
-                concept_refs=group_dict["concept_refs"],
-                graph=group_dict.get("graph", {}),
-                uncertainty=group_dict.get("uncertainty", []),
-                provenance=group_dict.get("provenance", {}),
-            )
+            group = _dict_to_logical_group(group_dict)
             group_id = registry.add_group(group)
             applied_ids.append(group_id)
 
@@ -338,6 +313,56 @@ def _dict_to_temporal_attribute(value: Any) -> TemporalAttribute:
         surface=value.get("surface", ""),
         normalized_hint=value.get("normalized_hint", ""),
         source_block_ref=value.get("source_block_ref", ""),
+        uncertainty=list(value.get("uncertainty", [])),
+    )
+
+
+def _dict_to_logical_group(d: dict[str, Any]) -> LogicalGroup:
+    return LogicalGroup(
+        group_id="",  # registry assigns
+        group_type=d.get("group_type", "other"),
+        summary=d.get("summary", ""),
+        item_refs=list(d.get("item_refs", [])),
+        concept_refs=list(d.get("concept_refs", [])),
+        graph=_dict_to_graph(d.get("graph", {})),
+        uncertainty=list(d.get("uncertainty", [])),
+        provenance=d.get("provenance", {}),
+    )
+
+
+def _dict_to_graph(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"nodes": [], "edges": []}
+    return {
+        "nodes": [_dict_to_graph_node(node) for node in value.get("nodes", [])],
+        "edges": [_dict_to_graph_edge(edge) for edge in value.get("edges", [])],
+    }
+
+
+def _dict_to_graph_node(value: Any) -> GraphNode:
+    if isinstance(value, GraphNode):
+        return value
+    if not isinstance(value, dict):
+        return GraphNode(node_id="", item_ref="", label=str(value))
+    return GraphNode(
+        node_id=value.get("node_id", ""),
+        item_ref=value.get("item_ref", ""),
+        label=value.get("label", ""),
+    )
+
+
+def _dict_to_graph_edge(value: Any) -> GraphEdge:
+    if isinstance(value, GraphEdge):
+        return value
+    if not isinstance(value, dict):
+        return GraphEdge(source="", target="", edge_type="other", summary=str(value))
+    return GraphEdge(
+        source=value.get("source", ""),
+        target=value.get("target", ""),
+        edge_type=value.get("edge_type", "other"),
+        summary=value.get("summary", ""),
+        source_block_refs=list(value.get("source_block_refs", [])),
+        provenance=value.get("provenance", {}),
         uncertainty=list(value.get("uncertainty", [])),
     )
 

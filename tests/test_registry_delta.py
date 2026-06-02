@@ -271,7 +271,22 @@ class TestComputeRegistryDelta:
                     "summary": "Teachings of Confucius",
                     "item_refs": ["item-0001"],
                     "concept_refs": ["c1"],
-                    "graph": {},
+                    "graph": {
+                        "nodes": [
+                            {"node_id": "node-0001", "item_ref": "item-0001", "label": "teaching"},
+                        ],
+                        "edges": [
+                            {
+                                "source": "node-0001",
+                                "target": "node-0001",
+                                "edge_type": "continues",
+                                "summary": "self-contained teaching thread",
+                                "source_block_refs": ["seg-0001-block-0001"],
+                                "provenance": {"grounding": "source_grounded"},
+                                "uncertainty": [],
+                            },
+                        ],
+                    },
                     "uncertainty": [],
                     "provenance": {"grounding": "synthesis"},
                 }
@@ -286,6 +301,9 @@ class TestComputeRegistryDelta:
         assert applied
         item = next(iter(reg._items.values()))
         assert item["temporal_attributes"][0]["kind"] == "explicit"
+        group = next(iter(reg._groups.values()))
+        assert group["graph"]["nodes"][0]["node_id"] == "node-0001"
+        assert group["graph"]["edges"][0]["edge_type"] == "continues"
 
 
 class TestApplyRegistryDelta:
