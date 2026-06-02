@@ -30,6 +30,16 @@ def load_package(path: str) -> dict[str, Any]:
         return json.load(f)
 
 
+def load_registry(path: str) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_source_index(path: str) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def load_source_text(book_path: str, unit_id: str | None = None) -> str:
     path = Path(book_path)
     suffix = path.suffix.lower()
@@ -190,25 +200,36 @@ def build_source_html(
 
     concept_surfaces = _build_concept_surfaces(concepts)
 
-    # Sort blocks by start position so rendering follows source order
-    sorted_blocks = sorted(source_blocks, key=lambda b: b["start"])
+    def _block_sort_key(block: dict[str, Any]) -> tuple[int, int, str]:
+        return (int(block.get("book_start", block.get("start", 0))), int(block.get("start", 0)), block.get("block_id", ""))
 
-    # Auto-detect the book-level offset (e.g. front matter before unit text)
-    offset = _resolve_source_offset(sorted_blocks, source_text)
+    sorted_blocks = sorted(source_blocks, key=_block_sort_key)
 
-    def _resolve_pos(pos: int) -> int:
-        return pos + offset
+    has_book_offsets = any("book_start" in block for block in sorted_blocks)
+    offset = 0 if has_book_offsets else _resolve_source_offset(sorted_blocks, source_text)
+
+    def _resolve_pos(block: dict[str, Any], field: str) -> int:
+        if has_book_offsets:
+            key = "book_start" if field == "start" else "book_end"
+            return int(block.get(key, block.get(field, 0)))
+        return int(block.get(field, 0)) + offset
 
     parts: list[str] = []
-    cursor = _resolve_pos(sorted_blocks[0]["start"]) if sorted_blocks else 0
+    cursor = _resolve_pos(sorted_blocks[0], "start") if sorted_blocks else 0
 
+    current_unit = None
     for block in sorted_blocks:
         block_id = block["block_id"]
-        unit_start = block["start"]
-        unit_end = block["end"]
-        start = _resolve_pos(unit_start)
-        end = _resolve_pos(unit_end)
+        unit_start = int(block.get("unit_start", block.get("start", 0)))
+        unit_end = int(block.get("unit_end", block.get("end", 0)))
+        start = _resolve_pos(block, "start")
+        end = _resolve_pos(block, "end")
         block_text = source_text[start:end]
+
+        unit_id = block.get("unit_id")
+        if has_book_offsets and unit_id and unit_id != current_unit:
+            current_unit = unit_id
+            parts.append(f'<h2 class="unit-break" data-unit="{html.escape(unit_id)}">{html.escape(unit_id)}</h2>')
 
         # Verify round-trip against block's stored text
         if block_text != block["text"]:
@@ -218,8 +239,8 @@ def build_source_html(
         if start > cursor:
             gap_text = source_text[cursor:start]
             if gap_text.strip():
-                gap_start = cursor - offset
-                gap_end = start - offset
+                gap_start = cursor if has_book_offsets else cursor - offset
+                gap_end = start if has_book_offsets else start - offset
                 parts.append(
                     f'<p class="src-block" data-start="{gap_start}" data-end="{gap_end}">'
                     f'{html.escape(gap_text)}</p>'
@@ -234,19 +255,19 @@ def build_source_html(
         ref_concepts = block_concepts.get(block_id, [])
         inner = _annotate_text(block_text, block_id, ref_concepts, concept_surfaces)
 
-        # Wrap in block element with unit-level data attributes (matching source_blocks)
-        pos_attrs = f' data-start="{unit_start}" data-end="{unit_end}"'
-        parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{item_data}{pos_attrs}>{inner}</p>')
+        pos_attrs = f' data-start="{unit_start}" data-end="{unit_end}" data-book-start="{start}" data-book-end="{end}"'
+        unit_attr = f' data-unit="{html.escape(str(block.get("unit_id", "")))}"' if block.get("unit_id") else ""
+        parts.append(f'<p class="src-block" data-block="{html.escape(block_id)}"{unit_attr}{item_data}{pos_attrs}>{inner}</p>')
 
         cursor = max(cursor, end)
 
     # Render any trailing text after the last block
-    max_end = _resolve_pos(sorted_blocks[-1]["end"]) if sorted_blocks else 0
+    max_end = _resolve_pos(sorted_blocks[-1], "end") if sorted_blocks else 0
     if cursor < max_end:
         tail_text = source_text[cursor:max_end]
         if tail_text.strip():
-            tail_start = cursor - offset
-            tail_end = max_end - offset
+            tail_start = cursor if has_book_offsets else cursor - offset
+            tail_end = max_end if has_book_offsets else max_end - offset
             parts.append(
                 f'<p class="src-block" data-start="{tail_start}" data-end="{tail_end}">'
                 f'{html.escape(tail_text)}</p>'
@@ -277,6 +298,93 @@ def slim_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dict_values(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        return [v for v in data.values() if isinstance(v, dict)]
+    if isinstance(data, list):
+        return [v for v in data if isinstance(v, dict)]
+    return []
+
+
+def _registry_records(registry: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    return (
+        _dict_values(registry.get("concepts", {})),
+        _dict_values(registry.get("items", {})),
+        _dict_values(registry.get("groups", {})),
+    )
+
+
+def _source_index_blocks(source_index: dict[str, Any]) -> list[dict[str, Any]]:
+    return sorted(
+        _dict_values(source_index.get("blocks", {})),
+        key=lambda b: (int(b.get("book_start", b.get("start", 0))), b.get("block_id", "")),
+    )
+
+
+def _stitched_source_text(blocks: list[dict[str, Any]]) -> str:
+    if not blocks:
+        return ""
+    max_end = max(int(block.get("book_end", block.get("end", 0))) for block in blocks)
+    chars = [" "] * max_end
+    for block in blocks:
+        start = int(block.get("book_start", block.get("start", 0)))
+        text = str(block.get("text", ""))
+        end = start + len(text)
+        if end > len(chars):
+            chars.extend(" " for _ in range(end - len(chars)))
+        chars[start:end] = list(text)
+    return "".join(chars)
+
+
+def _evidence_diagnostics(
+    source_blocks: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+    atomic_items: list[dict[str, Any]],
+    logical_groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    known = {block.get("block_id") for block in source_blocks}
+    missing: dict[str, list[str]] = defaultdict(list)
+
+    def check(owner: str, refs: Any) -> None:
+        for ref in refs or []:
+            if ref and ref not in known:
+                missing[str(ref)].append(owner)
+
+    for concept in concepts:
+        check(f"concept:{concept.get('concept_id', '')}", concept.get("source_block_refs"))
+    for item in atomic_items:
+        check(f"item:{item.get('item_id', '')}", item.get("source_block_refs"))
+    for group in logical_groups:
+        for edge in (group.get("graph") or {}).get("edges", []):
+            check(f"group:{group.get('group_id', '')}:edge", edge.get("source_block_refs"))
+
+    return {
+        "missing_source_block_ref_count": len(missing),
+        "missing_source_block_refs": [
+            {"block_id": block_id, "owners": owners[:8]}
+            for block_id, owners in sorted(missing.items())[:200]
+        ],
+    }
+
+
+def _diagnostic_html(diagnostics: dict[str, Any]) -> str:
+    count = diagnostics.get("missing_source_block_ref_count", 0)
+    if not count:
+        return ""
+    examples = diagnostics.get("missing_source_block_refs", [])[:8]
+    lines = "".join(
+        f'<li><code>{html.escape(str(entry.get("block_id", "")))}</code> '
+        f'{html.escape(", ".join(entry.get("owners", [])))}</li>'
+        for entry in examples
+    )
+    return (
+        '<div class="source-diagnostic">'
+        f'<strong>{count} unresolved source block reference{"s" if count != 1 else ""}</strong>'
+        '<ul>' + lines + '</ul>'
+        '</div>'
+    )
+
+
 def build_data_script(
     source_blocks: list[dict[str, Any]],
     concepts: list[dict[str, Any]],
@@ -285,16 +393,23 @@ def build_data_script(
     unit_id: str,
     source_info: dict[str, Any],
     metrics: dict[str, Any],
+    *,
+    scope: str = "unit",
+    source_index: dict[str, Any] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> str:
     """Return a <script> block embedding structured data as JSON."""
     payload = {
+        "scope": scope,
         "unit_id": unit_id,
         "source": source_info,
+        "source_index": source_index or {},
         "source_blocks": source_blocks,
         "concepts": [slim_concept(c) for c in concepts],
         "atomic_items": [slim_item(it) for it in atomic_items],
         "logical_groups": logical_groups,
         "metrics": metrics,
+        "diagnostics": diagnostics or {},
     }
     return (
         '<script type="application/json" id="readerData">\n'
@@ -310,6 +425,134 @@ def render(template: str, replacements: dict[str, str]) -> str:
     for key, value in replacements.items():
         result = result.replace(key, value)
     return result
+
+
+def _render_view(
+    *,
+    template: str,
+    output_path: str,
+    unit_id: str,
+    unit_label: str,
+    book_title: str,
+    source_info: dict[str, Any],
+    source_html: str,
+    source_blocks: list[dict[str, Any]],
+    concepts: list[dict[str, Any]],
+    atomic_items: list[dict[str, Any]],
+    logical_groups: list[dict[str, Any]],
+    unresolved: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    scope: str,
+    source_index: dict[str, Any] | None = None,
+    diagnostics: dict[str, Any] | None = None,
+) -> None:
+    data_script = build_data_script(
+        source_blocks, concepts, atomic_items, logical_groups,
+        unit_id, source_info, metrics,
+        scope=scope, source_index=source_index, diagnostics=diagnostics,
+    )
+
+    group_types = defaultdict(int)
+    groups_with_graph = 0
+    groups_without_graph = 0
+    for g in logical_groups:
+        group_types[g.get("group_type", "other")] += 1
+        if g.get("graph"):
+            groups_with_graph += 1
+        else:
+            groups_without_graph += 1
+
+    replacements = {
+        "{{UNIT_ID}}": html.escape(unit_id),
+        "{{UNIT_LABEL}}": html.escape(unit_label),
+        "{{BOOK_TITLE}}": html.escape(book_title),
+        "{{CONCEPT_COUNT}}": str(len(concepts)),
+        "{{ITEM_COUNT}}": str(len(atomic_items)),
+        "{{GROUP_COUNT}}": str(len(logical_groups)),
+        "{{UNRESOLVED_COUNT}}": str(len(unresolved)),
+        "{{BLOCK_COUNT}}": str(len(source_blocks)),
+        "{{GROUPS_WITH_GRAPH}}": str(groups_with_graph),
+        "{{GROUPS_WITHOUT_GRAPH}}": str(groups_without_graph),
+        "<!-- SOURCE_HTML -->": source_html,
+        "<!-- DATA_SCRIPT -->": data_script,
+    }
+
+    rendered = render(template, replacements)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(rendered)
+
+    print(f"Wrote {output_path}")
+    print(f"  Scope: {scope}")
+    print(f"  Source blocks: {len(source_blocks)}")
+    print(f"  Concepts: {len(concepts)}")
+    print(f"  Atomic items: {len(atomic_items)}")
+    print(f"  Logical groups: {len(logical_groups)} ({groups_with_graph} with graph, {groups_without_graph} without)")
+    print(f"  Group types: {dict(group_types)}")
+    print(f"  Unresolved: {len(unresolved)}")
+    if diagnostics and diagnostics.get("missing_source_block_ref_count"):
+        print(f"  Missing source block refs: {diagnostics['missing_source_block_ref_count']}")
+
+
+def generate_book(
+    template_path: str,
+    registry_path: str,
+    source_index_path: str,
+    output_path: str,
+) -> None:
+    with open(template_path, encoding="utf-8") as f:
+        template = f.read()
+
+    registry = load_registry(registry_path)
+    source_index = load_source_index(source_index_path)
+    concepts, atomic_items, logical_groups = _registry_records(registry)
+    source_blocks = _source_index_blocks(source_index)
+    diagnostics = _evidence_diagnostics(source_blocks, concepts, atomic_items, logical_groups)
+    source_text = _stitched_source_text(source_blocks)
+    source_html_inner = build_source_html(source_text, source_blocks, concepts, atomic_items)
+    source_html = f'<div class="source-text">{_diagnostic_html(diagnostics)}{source_html_inner}</div>'
+
+    source_info = {
+        "book_path": source_index.get("source_path", ""),
+        "book_title": Path(source_index.get("source_path", registry_path)).stem,
+        "book_id": source_index.get("book_id", ""),
+        "source_index_id": source_index.get("source_index_id", ""),
+        "registry_path": str(registry_path),
+        "source_index_path": str(source_index_path),
+    }
+    metrics = {
+        "source_index": source_index.get("metrics", {}),
+        "registry": {
+            "concept_count": len(concepts),
+            "item_count": len(atomic_items),
+            "group_count": len(logical_groups),
+        },
+    }
+
+    _render_view(
+        template=template,
+        output_path=output_path,
+        unit_id="book",
+        unit_label="Book Registry",
+        book_title=source_info["book_title"],
+        source_info=source_info,
+        source_html=source_html,
+        source_blocks=source_blocks,
+        concepts=concepts,
+        atomic_items=atomic_items,
+        logical_groups=logical_groups,
+        unresolved=[],
+        metrics=metrics,
+        scope="book",
+        source_index={
+            "schema_version": source_index.get("schema_version", ""),
+            "source_index_id": source_index.get("source_index_id", ""),
+            "book_id": source_index.get("book_id", ""),
+            "units": source_index.get("units", {}),
+            "metrics": source_index.get("metrics", {}),
+        },
+        diagnostics=diagnostics,
+    )
 
 
 def generate(
@@ -400,13 +643,17 @@ def generate(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate a self-contained reading view HTML from a v0.3 unit package."
+        description="Generate a self-contained reading view HTML from a unit package or book registry."
     )
-    parser.add_argument("package", help="Path to unit_package.json")
+    parser.add_argument("package", nargs="?", help="Path to unit_package.json for unit scope")
     parser.add_argument("-o", "--output", default="reading_view.html",
                         help="Output HTML path (default: reading_view.html)")
     parser.add_argument("--book", default=None,
                         help="Path to the source book .txt file (auto-detected from package if omitted)")
+    parser.add_argument("--registry", default=None,
+                        help="Path to book registry.json for book-scope rendering")
+    parser.add_argument("--source-index", default=None,
+                        help="Path to book source_index.json for book-scope rendering")
     parser.add_argument("--template", default=None,
                         help="Path to template HTML (default: tools/reading_view_template.html)")
     args = parser.parse_args()
@@ -418,6 +665,22 @@ def main() -> None:
     if not Path(template_path).exists():
         print(f"Error: template not found at {template_path}", file=sys.stderr)
         sys.exit(1)
+
+    if args.registry or args.source_index:
+        if not args.registry or not args.source_index:
+            print("Error: --registry and --source-index must be provided together", file=sys.stderr)
+            sys.exit(2)
+        generate_book(
+            template_path=template_path,
+            registry_path=args.registry,
+            source_index_path=args.source_index,
+            output_path=args.output,
+        )
+        return
+
+    if not args.package:
+        print("Error: package path is required unless --registry and --source-index are provided", file=sys.stderr)
+        sys.exit(2)
 
     generate(
         template_path=template_path,
