@@ -250,7 +250,15 @@ class TestComputeRegistryDelta:
                     "summary": "Confucius taught students",
                     "source_block_refs": ["seg-0001-block-0001"],
                     "concept_refs": ["c1"],
-                    "temporal_attributes": [],
+                    "temporal_attributes": [
+                        {
+                            "kind": "explicit",
+                            "surface": "yesterday",
+                            "normalized_hint": "relative past day",
+                            "source_block_ref": "seg-0001-block-0001",
+                            "uncertainty": [],
+                        }
+                    ],
                     "attributes": {},
                     "uncertainty": [],
                     "provenance": {"grounding": "source_grounded"},
@@ -274,6 +282,10 @@ class TestComputeRegistryDelta:
         assert "add_concept" in delta.stats
         assert "add_item" in delta.stats
         assert "add_group" in delta.stats
+        applied = apply_registry_delta(reg, delta)
+        assert applied
+        item = next(iter(reg._items.values()))
+        assert item["temporal_attributes"][0]["kind"] == "explicit"
 
 
 class TestApplyRegistryDelta:

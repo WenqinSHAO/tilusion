@@ -8,6 +8,7 @@ from .reading_schema import (
     AtomicItem,
     Concept,
     LogicalGroup,
+    TemporalAttribute,
     normalize_concept_type,
 )
 
@@ -237,7 +238,10 @@ def apply_registry_delta(
                 summary=item_dict.get("summary", ""),
                 source_block_refs=item_dict.get("source_block_refs", []),
                 concept_refs=item_dict["concept_refs"],
-                temporal_attributes=item_dict.get("temporal_attributes", []),
+                temporal_attributes=[
+                    _dict_to_temporal_attribute(ta)
+                    for ta in item_dict.get("temporal_attributes", [])
+                ],
                 attributes=item_dict.get("attributes", {}),
                 uncertainty=item_dict.get("uncertainty", []),
                 provenance=item_dict.get("provenance", {}),
@@ -320,6 +324,21 @@ def _dict_to_concept(d: dict[str, Any], *, source_unit: str) -> Concept:
         facets=list(d.get("facets", [])),
         uncertainty=list(d.get("uncertainty", [])),
         provenance=provenance,
+    )
+
+
+def _dict_to_temporal_attribute(value: Any) -> TemporalAttribute:
+    """Convert serialized temporal attributes back to schema objects."""
+    if isinstance(value, TemporalAttribute):
+        return value
+    if not isinstance(value, dict):
+        return TemporalAttribute(kind="none", uncertainty=[str(value)])
+    return TemporalAttribute(
+        kind=value.get("kind", "none"),
+        surface=value.get("surface", ""),
+        normalized_hint=value.get("normalized_hint", ""),
+        source_block_ref=value.get("source_block_ref", ""),
+        uncertainty=list(value.get("uncertainty", [])),
     )
 
 
