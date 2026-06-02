@@ -441,3 +441,35 @@ class TestApplyRegistryDelta:
         assert delta.stats == {}
         applied = apply_registry_delta(reg, delta)
         assert applied == []
+
+
+def test_registry_delta_binds_empty_registry_to_source_index(tmp_path: Path) -> None:
+    reg = _make_registry(tmp_path)
+    unit_data = {
+        "context_metadata": {"source_index_id": "source-index-a"},
+        "concepts": [_make_concept_dict("c1", "沈复", source_block_refs=["block-000001"])],
+        "atomic_items": [],
+        "logical_groups": [],
+        "unresolved_items": [],
+    }
+
+    delta = compute_registry_delta(unit_data, reg, unit_id="unit-0001")
+    apply_registry_delta(reg, delta)
+
+    assert delta.source_index_id == "source-index-a"
+    assert reg.source_index_id() == "source-index-a"
+
+
+def test_registry_delta_rejects_source_index_mismatch(tmp_path: Path) -> None:
+    reg = _make_registry(tmp_path)
+    reg.ensure_source_index_id("source-index-a")
+    unit_data = {
+        "context_metadata": {"source_index_id": "source-index-b"},
+        "concepts": [_make_concept_dict("c1", "沈复", source_block_refs=["block-000001"])],
+        "atomic_items": [],
+        "logical_groups": [],
+        "unresolved_items": [],
+    }
+
+    with pytest.raises(ValueError, match="source_index_id mismatch"):
+        compute_registry_delta(unit_data, reg, unit_id="unit-0001")

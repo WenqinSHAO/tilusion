@@ -72,6 +72,7 @@
     (3) reading view template `.info-item` clicks now highlight item cards and graph nodes.
   - Agentic registry resolution fix slice 2026-06-01: raw LLM proposal JSON is now preserved separately from applied validation subjects; incomplete tool-call loops are rejected before validation; agentic fallback now uses the v0.1 single-pass prompt; v0.2 prompt/tool wording no longer implies incremental proposal emission. Remaining plan items: registry search caching, compact group search results, and registry-backed source-block lookup.
   - Cache layout refactor 2026-06-02: design doc `design/13_cache_layout_redesign.md` added; implementation now writes source index, registry, run manifests, unit packages, cross-unit pass caches, and book-scope `runs.json` under a clean `.tilusion_cache/book-{hash}/` root. Registry metadata now binds to `source_index_id` before book-scope deltas.
+  - Source-index Phase 4/5 hardening 2026-06-02: package validation rejects legacy segment-derived block IDs when `source_index_id` is present; registry deltas carry/enforce `source_index_id`; per-segment extraction prompt now presents book-scoped `block-*` IDs as the normal evidence shape.
   - **Next step:** Run a real book-scope extraction from a clean `.tilusion_cache/book-{hash}/` root and inspect `runs.json`, `run.json`, registry `source_index_id`, and book-view evidence resolution before Phase 4 registry migration.
 
 ## Implementation Status

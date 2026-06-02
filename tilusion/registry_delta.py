@@ -19,6 +19,7 @@ from .reading_schema import (
 class RegistryDeltaResult:
     """Deterministic diff of a unit extraction against the current BookRegistry."""
 
+    source_index_id: str = ""
     operations: list[dict[str, Any]] = field(default_factory=list)
     ambiguity_items: list[dict[str, Any]] = field(default_factory=list)
     id_remap: dict[str, str] = field(default_factory=dict)
@@ -54,7 +55,9 @@ def compute_registry_delta(
         ``RegistryDeltaResult`` with safe operations, ambiguity items,
         unit→book ID remapping, and operation counts.
     """
-    result = RegistryDeltaResult()
+    result = RegistryDeltaResult(source_index_id=_source_index_id_from_unit_data(unit_data))
+    if result.source_index_id:
+        registry.ensure_source_index_id(result.source_index_id)
     stats: dict[str, int] = {}
 
     unit_concepts_dicts: list[dict[str, Any]] = unit_data.get("concepts", [])
@@ -198,6 +201,9 @@ def apply_registry_delta(
     ``force=True`` (bypassing collision checks) then immediately merged
     with the existing book concept via ``DeterministicConceptMerger``.
     """
+    if delta.source_index_id:
+        registry.ensure_source_index_id(delta.source_index_id)
+
     applied_ids: list[str] = []
 
     for op in delta.operations:
@@ -281,6 +287,13 @@ def apply_registry_delta(
             applied_ids.append(group_id)
 
     return applied_ids
+
+
+def _source_index_id_from_unit_data(unit_data: dict[str, Any]) -> str:
+    context_metadata = unit_data.get("context_metadata")
+    if isinstance(context_metadata, dict):
+        return str(context_metadata.get("source_index_id") or "")
+    return ""
 
 
 def _dict_to_concept(d: dict[str, Any], *, source_unit: str) -> Concept:

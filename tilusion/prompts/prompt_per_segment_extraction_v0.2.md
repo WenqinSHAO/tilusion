@@ -8,7 +8,7 @@ The larger pipeline builds reusable reading structures from long documents. Each
 
 - A book is split into extraction units (chapters, sections, or large chunks).
 - Each unit is split into segments for manageable local reading.
-- Each segment is split deterministically into **source blocks** — the smallest navigation and evidence units. Source blocks carry `block_id`, `block_type`, `start`, and `end` (unit-level character offsets).
+- Each segment receives selected **book-scoped source blocks** — the smallest navigation and evidence units. Source blocks carry stable `block_id` values such as `block-000001`, plus `block_type`, `start`, and `end` (unit-level character offsets).
 - **This pass** extracts local concepts and atomic items grounded in the provided source blocks.
 - Atomic items declare which source blocks they draw from via `source_block_refs`. The reverse mapping — which items reference a given block — is computed deterministically by the application. **Do not** maintain or emit a block→items index.
 - Later unit-level passes group atomic items into logical groups (timelines, discourse graphs, claim maps, theme maps). Logical groups are built from atomic items; they do not reference source blocks directly.
@@ -21,7 +21,7 @@ The caller provides JSON with:
 - `schema_version`: `reading-unit-v0.3`.
 - `unit_id`: parent reader unit identifier.
 - `segment`: restored segment metadata (`segment_id`, optional region classification, summary).
-- `source_blocks`: deterministic source block metadata for this segment. Each block has `block_id`, `block_type`, `start`, and `end` (unit-level character offsets). Block text is NOT included here — read it from the `text` field via the inline block markers.
+- `source_blocks`: book-scoped source block metadata for this segment. Each block has a stable `block_id` such as `block-000001`, `block_type`, `start`, `end`, and source-index metadata. Block text is NOT included here — read it from the `text` field via the inline block markers.
 - `text`: exact segment source text with inline block boundary markers. Each block's text is wrapped as `{block_id:block_type}` ... `{/block_id}`. The markers are machine-generated and never appear in the original source. Read the text inside each marker pair as the block's exact content.
 - `context`: optional per-segment attention hints produced by the overview pass. Contains `extraction_hints` — segment-specific natural language cues for what narrative threads, entities, or developments to watch for. Hints are guidance, not evidence; every concept must still be grounded in the source blocks of this segment. Hints may be empty or absent — extraction must work correctly without them.
 
@@ -49,7 +49,7 @@ Minimum shape:
       "summary": "brief source-grounded note",
       "aliases": [],
       "observed_surfaces": ["exact source surface"],
-      "source_block_refs": ["seg-0001-block-0000"],
+      "source_block_refs": ["block-000001"],
       "facets": [],
       "uncertainty": [],
       "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"}
@@ -60,14 +60,14 @@ Minimum shape:
       "item_id": "item-0001",
       "item_type": "event|scene|action|claim|argument|statement|observation|description|method|habit|question|other|custom",
       "summary": "short source-grounded compression",
-      "source_block_refs": ["seg-0001-block-0000"],
+      "source_block_refs": ["block-000001"],
       "concept_refs": ["concept-0001"],
       "temporal_attributes": [
         {
           "kind": "explicit|implicit|relative|none",
           "surface": "source text time expression if present",
           "normalized_hint": "optional normalization hint",
-          "source_block_ref": "seg-0001-block-0000",
+          "source_block_ref": "block-000001",
           "uncertainty": []
         }
       ],
@@ -84,7 +84,7 @@ Rules:
 
 - Current `source_blocks` are the only evidence source. Read each block's text from the inline `{block_id:block_type}...{/block_id}` markers in `text`.
 - Prior context may guide alias/continuity detection but must not be cited as evidence.
-- Every `source_block_refs` and temporal `source_block_ref` must cite a provided `source_blocks[*].block_id`. Do not invent block IDs.
+- Every `source_block_refs` and temporal `source_block_ref` must cite a provided `source_blocks[*].block_id`. Use the exact book-scoped `block-*` IDs supplied by the caller. Do not invent block IDs or derive IDs from segment IDs.
 - A concept must cite source blocks when `source_grounded`; if inferred from broader context use `"grounding": "llm_inferred"` and omit `source_block_refs`. Atomic items are always source-grounded and must cite source blocks.
 - Atomic item `attributes` accepts the recommended keys (`argument_role`, `narrative_role`, `salience`) plus any additional keys that help downstream grouping and graph-building (e.g., `emotional_valence`, `pov_character`, `tension_level`). Use any attribute that captures information useful for forming logical groups.
 - Concept and item IDs are segment-local. Use stable simple IDs (`concept-0001`, `item-0001`); the caller scopes and reindexes them later.

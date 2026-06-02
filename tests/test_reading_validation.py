@@ -407,3 +407,29 @@ def test_registry_delta_validation_rejects_stale_snapshot_and_context_evidence()
     assert "unsupported_delta_operation" in codes
     assert "destructive_auto_merge" in codes
     assert "prior_context_used_as_evidence" in codes
+
+
+def test_reading_validation_rejects_legacy_block_ids_when_source_indexed() -> None:
+    data = _valid_package().to_dict()
+    data["context_metadata"] = {"source_index_id": "source-index-a"}
+    data["source_blocks"][0]["block_id"] = "overview-segment-0001-block-0000"
+    data["source_blocks"][0]["provenance"] = {"source_index_id": "source-index-a"}
+    data["concepts"][0]["source_block_refs"] = ["overview-segment-0001-block-0000"]
+    data["atomic_items"][0]["source_block_refs"] = ["overview-segment-0001-block-0000"]
+
+    report = validate_extraction_unit_package(data)
+
+    assert "legacy_source_block_id" in _codes(report)
+
+
+def test_reading_validation_rejects_source_index_mismatch() -> None:
+    data = _valid_package().to_dict()
+    data["context_metadata"] = {"source_index_id": "source-index-a"}
+    data["source_blocks"][0]["block_id"] = "block-000001"
+    data["source_blocks"][0]["provenance"] = {"source_index_id": "source-index-b"}
+    data["concepts"][0]["source_block_refs"] = ["block-000001"]
+    data["atomic_items"][0]["source_block_refs"] = ["block-000001"]
+
+    report = validate_extraction_unit_package(data)
+
+    assert "source_index_id_mismatch" in _codes(report)

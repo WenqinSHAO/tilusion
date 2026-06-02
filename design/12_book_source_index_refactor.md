@@ -274,3 +274,12 @@ Add `--verbose-context` later if full previews are needed.
   passes overlapping book-scoped blocks into per-segment extraction. Segments
   expand to full source-block boundaries so stable `block-*` IDs are not
   clipped into transient sub-block IDs.
+- Phase 4 complete: book registries persist `source_index_id`; pipeline,
+  registry-delta computation/application, and package validation reject
+  mismatched source indexes. Indexed packages reject legacy segment-derived
+  block IDs.
+- Phase 5 advanced: extraction prompt examples and rules now describe
+  book-scoped `block-*` evidence IDs. The legacy splitter remains for
+  `split-blocks`, source-index construction, and non-indexed compatibility
+  tests/tools, but indexed extraction paths no longer rely on segment-derived
+  block IDs.

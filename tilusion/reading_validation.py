@@ -116,6 +116,8 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
     concepts = _list(data.get("concepts"))
     atomic_items = _list(data.get("atomic_items"))
     groups = _list(data.get("logical_groups"))
+    context_metadata = data.get("context_metadata") if isinstance(data.get("context_metadata"), dict) else {}
+    expected_source_index_id = str(context_metadata.get("source_index_id") or "")
 
     block_ids = _collect_ids(blocks, "block_id", "source_blocks", issues)
     concept_ids = _collect_ids(concepts, "concept_id", "concepts", issues)
@@ -135,6 +137,7 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
         _require_type(block, "text", str, issues, path)
         _require_type(block, "text_hash", str, issues, path)
         _validate_provenance(block.get("provenance"), f"{path}.provenance", issues, allow_missing=True)
+        _validate_source_index_block(block, expected_source_index_id, path, issues)
         if block.get("unit_id") != data.get("unit_id"):
             issues.append(
                 _issue(
@@ -387,6 +390,41 @@ def _validate_temporal_attributes(
         if source_block_ref:
             _validate_single_ref(source_block_ref, block_ids, f"{attr_path}.source_block_ref", issues)
         _validate_string_list(attr.get("uncertainty", []), f"{attr_path}.uncertainty", issues)
+
+
+def _validate_source_index_block(
+    block: dict[str, Any],
+    expected_source_index_id: str,
+    path: str,
+    issues: list[ReadingValidationIssue],
+) -> None:
+    if not expected_source_index_id:
+        return
+    block_id = block.get("block_id")
+    if not isinstance(block_id, str) or not block_id.startswith("block-"):
+        issues.append(
+            _issue(
+                "error",
+                "legacy_source_block_id",
+                f"{path}.block_id",
+                "Packages with source_index_id must use book-scoped block-* source block IDs.",
+                "Use source blocks selected from the book source index.",
+            )
+        )
+    actual_source_index_id = str(block.get("source_index_id") or "")
+    provenance = block.get("provenance")
+    if not actual_source_index_id and isinstance(provenance, dict):
+        actual_source_index_id = str(provenance.get("source_index_id") or "")
+    if actual_source_index_id != expected_source_index_id:
+        issues.append(
+            _issue(
+                "error",
+                "source_index_id_mismatch",
+                f"{path}.source_index_id",
+                "Source block source_index_id must match package context_metadata.source_index_id.",
+                "Regenerate the package from the matching book source index.",
+            )
+        )
 
 
 def _validate_optional_round_trip(
