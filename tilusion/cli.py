@@ -8,6 +8,7 @@ import sys
 from .book_reader import build_book_index, extract_unit_text
 from .reading_pipeline import ReadingPipelineRecord, run_reading_pipeline
 from .source_blocks import split_source_blocks
+from .source_index import build_book_source_index, save_book_source_index
 from .backend import (
     DEEPSEEK_DEFAULT_MAX_RETRIES,
     DEEPSEEK_DEFAULT_TIMEOUT,
@@ -57,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true",
         help="Print full pipeline record as JSON to stdout (default: compact summary)",
     )
+
+    source_index_parser = subparsers.add_parser(
+        "source-index",
+        help="Build the deterministic book-scoped source block index",
+    )
+    source_index_parser.add_argument("book")
+    source_index_parser.add_argument("--cache-dir", default=".tilusion_cache")
+    source_index_parser.add_argument("--format", choices=["json", "text"], default="text")
 
     split_blocks_parser = subparsers.add_parser(
         "split-blocks",
@@ -125,6 +134,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"package: {record.unit_package_path}", file=sys.stderr)
         return 0
 
+    if args.command == "source-index":
+        try:
+            payload = build_book_source_index(args.book)
+            output_path = save_book_source_index(payload, args.book, cache_root=args.cache_dir)
+        except (OSError, ValueError, KeyError) as error:
+            print(f"source index failed: {error}", file=sys.stderr)
+            return 1
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(format_source_index_text(payload, output_path=output_path))
+        return 0
+
     if args.command == "split-blocks":
         try:
             payload = split_unit_source_blocks(
@@ -186,6 +208,23 @@ def format_pipeline_record_text(record: ReadingPipelineRecord) -> str:
         if "repair_hint_count" in summary:
             parts.append(f"{summary['repair_hint_count']} repairs")
         lines.append(" ".join(parts))
+    return "\n".join(lines)
+
+
+def format_source_index_text(payload: dict, *, output_path: Path) -> str:
+    metrics = payload.get("metrics", {})
+    lines = [
+        f"source_index_id: {payload.get('source_index_id', '')}",
+        f"book_id: {payload.get('book_id', '')}",
+        f"source_format: {payload.get('source_format', '')}",
+        (
+            f"units: {metrics.get('unit_count', 0)}, "
+            f"blocks: {metrics.get('block_count', 0)}, "
+            f"chars: {metrics.get('total_chars', 0)}, "
+            f"avg_block_size: {metrics.get('avg_block_size', 0)}"
+        ),
+        f"path: {output_path}",
+    ]
     return "\n".join(lines)
 
 
