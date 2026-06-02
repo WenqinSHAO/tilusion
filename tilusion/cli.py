@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from .book_reader import build_book_index, extract_unit_text
-from .reading_pipeline import run_reading_pipeline
+from .reading_pipeline import ReadingPipelineRecord, run_reading_pipeline
 from .source_blocks import split_source_blocks
 from .backend import (
     DEEPSEEK_DEFAULT_MAX_RETRIES,
@@ -52,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_reading_parser.add_argument(
         "--scope", choices=["unit", "book"], default="unit",
         help="Extraction scope: unit (isolated, default) or book (cross-unit with registry)",
+    )
+    run_reading_parser.add_argument(
+        "--json", action="store_true",
+        help="Print full pipeline record as JSON to stdout (default: compact summary)",
     )
 
     split_blocks_parser = subparsers.add_parser(
@@ -114,7 +118,10 @@ def main(argv: list[str] | None = None) -> int:
         except (ExtractionError, OSError, ValueError, KeyError) as error:
             print(f"reading pipeline failed: {error}", file=sys.stderr)
             return 1
-        print(record.to_json())
+        if args.json:
+            print(record.to_json())
+        else:
+            print(format_pipeline_record_text(record))
         print(f"package: {record.unit_package_path}", file=sys.stderr)
         return 0
 
@@ -154,6 +161,32 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error("unknown command")
     return 2
+
+
+def format_pipeline_record_text(record: ReadingPipelineRecord) -> str:
+    """Compact human-readable summary of a pipeline run (no LLM output dump)."""
+    validation = record.validation
+    lines = [
+        f"unit_id: {record.unit_id}",
+        f"elapsed: {record.elapsed_ms}ms",
+        f"package: {record.unit_package_path}",
+        f"validation: {'PASSED' if validation.get('passed') else 'FAILED'} "
+        f"({validation.get('error_count', 0)} errors, "
+        f"{validation.get('warning_count', 0)} warnings)",
+        "passes:",
+    ]
+    for name, summary in record.passes.items():
+        cache_status = "cached" if summary.get("cache_hit") else "live"
+        elapsed = summary.get("elapsed_ms", 0)
+        parts = [f"  {name}: {cache_status} ({elapsed}ms)"]
+        if "segment_count" in summary:
+            parts.append(f"{summary['segment_count']} segments")
+        if "resolved_segment_count" in summary:
+            parts.append(f"{summary['resolved_segment_count']} resolved")
+        if "repair_hint_count" in summary:
+            parts.append(f"{summary['repair_hint_count']} repairs")
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
 
 
 def format_quality_report_text(report) -> str:

@@ -2153,8 +2153,12 @@ def run_reading_pipeline(
                 digest_source = "generated"
         context = make_context_dict(digest)
         if digest:
+            preview = digest.replace("\n", " ")[:300]
+            if len(digest) > 300:
+                preview += "..."
             print(
-                f"  [book] digest {digest_source}: {len(digest)} chars",
+                f"  [book] digest {digest_source}: {len(digest)} chars — "
+                f"{preview}",
                 file=sys.stderr,
             )
         elif registry.has_concepts():
@@ -2221,11 +2225,18 @@ def run_reading_pipeline(
                 seg_record = future.result()
                 segment_records.append(seg_record)
                 counts = seg_record.data.get("metrics", {}).get("counts", {}).get("per_segment", {})
+                seg_ctx = segment_hint_payload(seg)
+                hint_str = ""
+                if seg.title:
+                    hint_str += f" \"{seg.title}\""
+                if seg_ctx.get("extraction_hints"):
+                    hint_str += f" {len(seg_ctx['extraction_hints'])} hints"
                 print(
-                    f"    [{i + 1}/{len(segments)}] {seg.segment_id}  "
+                    f"    [{i + 1}/{len(segments)}] {seg.segment_id}"
+                    f"{hint_str}  "
                     f"{counts.get('source_blocks', 0)} blocks  "
                     f"{counts.get('concepts', 0)} concepts  "
-                    f"{counts.get('atomic_items', 0)} items  ",
+                    f"{counts.get('atomic_items', 0)} items",
                     file=sys.stderr,
                 )
         pass_summaries["per_segment_extraction"] = {
