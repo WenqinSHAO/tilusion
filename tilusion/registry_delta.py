@@ -89,6 +89,18 @@ def compute_registry_delta(
         # 1) LLM link override: confirmed cross-unit identity
         if uc_id in llm_links:
             existing_id = llm_links[uc_id]
+            # Ensure the unit concept carries a canonical_name for the
+            # deterministic merge validator. If the registry concept has none,
+            # auto-populate from the unit concept so both share an identity
+            # signal (fixes "merging distinct time_anchor concepts with
+            # different surfaces" when the LLM correctly links same-entity
+            # concepts whose registry entry lacks a canonical_name).
+            uc_cname = uc.get("canonical_name", "")
+            if uc_cname:
+                reg_concept = registry.get_concept(existing_id)
+                if reg_concept is not None and not reg_concept.canonical_name:
+                    uc = dict(uc)
+                    uc["canonical_name"] = uc_cname
             result.id_remap[uc_id] = existing_id
             stats["merge_concepts"] = stats.get("merge_concepts", 0) + 1
             result.operations.append({

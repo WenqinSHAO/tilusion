@@ -210,8 +210,14 @@ def _dual_signal_select(
     registry_index: list[dict[str, Any]],
     *,
     top_k: int = 20,
+    type_filter: bool = False,
 ) -> set[str]:
-    """BM25 + embedding similarity + RRF candidate selection."""
+    """BM25 + embedding similarity + RRF candidate selection.
+
+    When *type_filter* is True (default), restricts each query to registry
+    concepts in the same type family, avoiding meaningless cross-type
+    comparisons and reducing noise in the candidate set.
+    """
     if not unit_concepts or not registry_index:
         return set()
 
@@ -219,10 +225,28 @@ def _dual_signal_select(
     reg_texts = [_build_concept_text(c) for c in registry_index]
     reg_ids = [c["concept_id"] for c in registry_index]
     unit_texts = [_build_unit_concept_text(uc) for uc in unit_concepts]
+    filter_label = "type-filtered " if type_filter else ""
     print(
-        f"  [registry-index] concept selection: {len(unit_concepts)} queries, {len(registry_index)} registry concepts",
+        f"  [registry-index] concept selection: {len(unit_concepts)} queries, "
+        f"{len(registry_index)} registry concepts ({filter_label}dual-signal)",
         file=sys.stderr,
     )
+
+    # Pre-compute type-family masks for each unique unit concept type
+    type_mask: dict[str, list[int]] = {}
+    if type_filter:
+        all_indices = list(range(len(registry_index)))
+        for uc in unit_concepts:
+            uc_type = normalize_concept_type(uc.get("concept_type", ""))
+            if uc_type not in type_mask:
+                relaxed = _relaxed_types(uc_type)
+                if "*" in relaxed:
+                    type_mask[uc_type] = all_indices
+                else:
+                    type_mask[uc_type] = [
+                        i for i, r in enumerate(registry_index)
+                        if r.get("concept_type", "") in relaxed
+                    ]
 
     bm25 = BM25(reg_texts)
     model = _get_embedding_model()
@@ -255,22 +279,61 @@ def _dual_signal_select(
                 file=sys.stderr,
             )
 
+    # ── Per-concept query loop ────────────────────────────────────────────
+    bm25_total_ms = 0
+    cosine_total_ms = 0
     candidate_ids: set[str] = set()
     traced = 0
     for idx, (uc, uc_text) in enumerate(zip(unit_concepts, unit_texts)):
+        # --- BM25 ---
+        t_bm25 = time.monotonic()
         bm25_results = bm25.search(uc_text, top_k=top_k)
-        bm25_ranking = [reg_ids[i] for i, _ in bm25_results]
+        bm25_total_ms += (time.monotonic() - t_bm25) * 1000
 
+        # Type-family filter mask for this concept
+        allowed_indices: set[int] | None = None
+        if type_filter:
+            uc_type = normalize_concept_type(uc.get("concept_type", ""))
+            allowed = type_mask.get(uc_type)
+            if allowed is not None:
+                allowed_indices = set(allowed)
+
+        # Filter BM25 results
+        if allowed_indices is not None:
+            bm25_ranking = [reg_ids[i] for i, _ in bm25_results if i in allowed_indices]
+        else:
+            bm25_ranking = [reg_ids[i] for i, _ in bm25_results]
+
+        # --- Embedding similarity ---
         embedding_ranking: list[str] = []
         if reg_embeddings is not None and unit_embeddings is not None:
             try:
                 import numpy as np
 
+                t_cos = time.monotonic()
                 uc_emb = unit_embeddings[idx]
                 uc_norm = float(unit_norms[idx]) if unit_norms is not None else float(np.linalg.norm(uc_emb))
-                sims = np.dot(reg_embeddings, uc_emb) / (reg_norms * uc_norm + 1e-8)
-                top_indices = np.argsort(sims)[::-1][:top_k]
-                embedding_ranking = [reg_ids[int(i)] for i in top_indices if float(sims[int(i)]) > 0.3]
+
+                if allowed_indices is not None and allowed_indices:
+                    # Restrict to type-compatible subset
+                    subset_indices = sorted(allowed_indices)
+                    subset_embs = reg_embeddings[subset_indices]
+                    subset_norms = reg_norms[subset_indices]
+                    sims = np.dot(subset_embs, uc_emb) / (subset_norms * uc_norm + 1e-8)
+                    top_k_eff = min(top_k, len(subset_indices))
+                    top_local = np.argsort(sims)[::-1][:top_k_eff]
+                    embedding_ranking = [
+                        reg_ids[subset_indices[int(i)]]
+                        for i in top_local if float(sims[int(i)]) > 0.3
+                    ]
+                else:
+                    # Full comparison
+                    sims = np.dot(reg_embeddings, uc_emb) / (reg_norms * uc_norm + 1e-8)
+                    top_indices = np.argsort(sims)[::-1][:top_k]
+                    embedding_ranking = [
+                        reg_ids[int(i)] for i in top_indices if float(sims[int(i)]) > 0.3
+                    ]
+                cosine_total_ms += (time.monotonic() - t_cos) * 1000
             except Exception as exc:
                 print(
                     f"  [registry-index] concept query {uc.get('concept_id', idx)} embedding failed: {exc}",
@@ -298,8 +361,12 @@ def _dual_signal_select(
             f"    [registry-index] ... {len(unit_concepts) - traced} more concept queries omitted",
             file=sys.stderr,
         )
+    timing_parts = [f"bm25={int(bm25_total_ms)}ms"]
+    if reg_embeddings is not None:
+        timing_parts.append(f"cosine={int(cosine_total_ms)}ms")
     print(
-        f"  [registry-index] concept selection picked {len(candidate_ids)} candidates in {int((time.monotonic() - total_start) * 1000)}ms",
+        f"  [registry-index] concept selection picked {len(candidate_ids)} candidates "
+        f"in {int((time.monotonic() - total_start) * 1000)}ms ({' '.join(timing_parts)})",
         file=sys.stderr,
     )
     return candidate_ids
@@ -397,37 +464,49 @@ def _dual_signal_select_groups(
     return candidate_ids
 
 
+# ── Type families for relaxed type matching ──────────────────────────────────
+
+TYPE_FAMILIES: dict[str, set[str]] = {
+    "person": {"person", "group", "organization", "social_role"},
+    "group": {"person", "group", "organization"},
+    "organization": {"person", "group", "organization", "institution"},
+    "institution": {"organization", "institution"},
+    "place": {"place", "scene_element"},
+    "scene_element": {"place", "scene_element"},
+}
+
+
+def _relaxed_types(concept_type: str) -> set[str]:
+    t = normalize_concept_type(concept_type)
+    if t == "other":
+        # "other" is an uncertain type — allow matching anything
+        return {"*"}
+    return TYPE_FAMILIES.get(t, {t})
+
+
 # ── Deterministic pre-filter ───────────────────────────────────────────────
 
 
 def _deterministic_filter(
     unit_concepts: list[dict[str, Any]],
     registry_index: list[dict[str, Any]],
-) -> set[str]:
+) -> tuple[set[str], set[str]]:
     """Deterministic pre-filter by surface collision + type family + canonical_name.
 
-    Returns set of registry concept_ids that match deterministically.
+    Returns ``(candidate_registry_ids, matched_unit_concept_ids)`` where the
+    second set tracks which unit concepts found at least one deterministic
+    candidate so the caller can skip expensive semantic search for them.
     """
-    type_families: dict[str, set[str]] = {
-        "person": {"person", "group", "organization", "social_role"},
-        "group": {"person", "group", "organization"},
-        "organization": {"person", "group", "organization", "institution"},
-        "institution": {"organization", "institution"},
-        "place": {"place", "scene_element"},
-        "scene_element": {"place", "scene_element"},
-    }
-
-    def _relaxed_types(concept_type: str) -> set[str]:
-        t = normalize_concept_type(concept_type)
-        return type_families.get(t, {t})
-
     candidate_ids: set[str] = set()
+    matched_unit_ids: set[str] = set()
 
     for uc in unit_concepts:
         uc_type = uc.get("concept_type", "")
         relaxed = _relaxed_types(uc_type)
         uc_surface = (uc.get("surface") or "").lower()
         uc_cname = (uc.get("canonical_name") or "").lower()
+        uc_id = uc.get("concept_id", "")
+        got_match = False
 
         for reg in registry_index:
             rid = reg["concept_id"]
@@ -441,10 +520,13 @@ def _deterministic_filter(
             reg_cname = (reg.get("canonical_name") or "").lower()
             if uc_surface and uc_surface in reg_surfaces:
                 candidate_ids.add(rid)
+                got_match = True
             elif uc_cname and uc_cname == reg_cname:
                 candidate_ids.add(rid)
+                got_match = True
             elif uc_surface and reg_cname and uc_surface == reg_cname:
                 candidate_ids.add(rid)
+                got_match = True
 
         # Also match by canonical_name across any type
         if uc_cname:
@@ -454,8 +536,12 @@ def _deterministic_filter(
                     continue
                 if (reg.get("canonical_name") or "").lower() == uc_cname:
                     candidate_ids.add(rid)
+                    got_match = True
 
-    return candidate_ids
+        if got_match and uc_id:
+            matched_unit_ids.add(uc_id)
+
+    return candidate_ids, matched_unit_ids
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -533,11 +619,28 @@ def select_concept_candidates(
     if len(registry_index) <= 50:
         return registry_index
 
-    # Deterministic pre-filter: surface collision + type family
-    det_ids = _deterministic_filter(unit_concepts, registry_index)
+    # Deterministic pre-filter: surface collision + type family.
+    # Also returns which unit concepts already found candidates so we can
+    # skip expensive dual-signal retrieval for them.
+    det_ids, matched_unit_ids = _deterministic_filter(unit_concepts, registry_index)
 
-    # Dual-signal: BM25 + embedding + RRF
-    dual_ids = _dual_signal_select(unit_concepts, registry_index)
+    # Only run dual-signal (BM25 + embedding) for concepts that the
+    # deterministic filter found NOTHING for.
+    unmatched = [uc for uc in unit_concepts if uc.get("concept_id") not in matched_unit_ids]
+    dual_ids: set[str] = set()
+    if unmatched:
+        print(
+            f"  [registry-index] deterministic filter: {len(matched_unit_ids)}/{len(unit_concepts)} concepts matched; "
+            f"running dual-signal on {len(unmatched)} unmatched",
+            file=sys.stderr,
+        )
+        dual_ids = _dual_signal_select(unmatched, registry_index, type_filter=False)
+    else:
+        print(
+            f"  [registry-index] deterministic filter: all {len(matched_unit_ids)}/{len(unit_concepts)} concepts matched; "
+            f"skipping dual-signal",
+            file=sys.stderr,
+        )
 
     all_ids = det_ids | dual_ids
 
