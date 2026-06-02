@@ -46,7 +46,7 @@ from .reading_validation import (
     ReadingValidationReport,
     validate_extraction_unit_package,
 )
-from .book_digest import make_context_dict
+from .book_digest import build_book_digest, make_context_dict
 from .book_registry import BookRegistry
 from .registry_index import (
     build_registry_index,
@@ -895,6 +895,7 @@ def _load_cached_digest(registry_cache_root: Path) -> str | None:
 
 def _save_cached_digest(registry_cache_root: Path, digest: str) -> None:
     """Save the book digest to the registry directory."""
+    registry_cache_root.mkdir(parents=True, exist_ok=True)
     path = registry_cache_root / "book_digest.json"
     path.write_text(
         json.dumps({"digest": digest}, ensure_ascii=False, indent=2),
@@ -2127,6 +2128,7 @@ def run_reading_pipeline(
     # ── Scope "book" pre-extraction: load registry, build digest ──
     registry: BookRegistry | None = None
     registry_cache_root: Path | None = None
+    registry_digest_dir: Path | None = None
     if scope == "book":
         _cache_path = Path(cache_dir)
         registry_cache_root = (
@@ -2135,11 +2137,31 @@ def run_reading_pipeline(
             else _cache_path
         )
         registry = BookRegistry.load_or_init(book_path, cache_root=registry_cache_root)
-        digest = _load_cached_digest(registry_cache_root)
+        registry_digest_dir = registry.cache_dir
+        digest = _load_cached_digest(registry_digest_dir)
+        digest_source = "cached" if digest else ""
+        if not digest and registry.has_concepts():
+            digest = build_book_digest(
+                llm,
+                registry,
+                unit_id,
+                cache_dir=cache_root / "book_digest",
+                use_cache=use_cache,
+            )
+            if digest:
+                _save_cached_digest(registry_digest_dir, digest)
+                digest_source = "generated"
         context = make_context_dict(digest)
         if digest:
             print(
-                f"  [book] digest loaded: {len(digest)} chars",
+                f"  [book] digest {digest_source}: {len(digest)} chars",
+                file=sys.stderr,
+            )
+        elif registry.has_concepts():
+            print(
+                f"  [book] registry loaded: {len(registry._concepts)} concepts, "
+                f"{len(registry._items)} items, {len(registry._groups)} groups; "
+                "no digest context",
                 file=sys.stderr,
             )
         else:
@@ -2434,16 +2456,9 @@ def run_reading_pipeline(
             group_resolution_proposals=group_resolution_proposals,
         )
         applied = apply_registry_delta(registry, delta_result)
-        commit_hash = registry.save()
-        print(
-            f"  [book] delta: {len(delta_result.operations)} ops "
-            f"({delta_result.stats}), "
-            f"{len(delta_result.ambiguity_items)} ambiguities — "
-            f"saved at {commit_hash}",
-            file=sys.stderr,
-        )
 
         # ── Post-extraction digest update ──
+        digest_for_next = ""
         if grouping_record.conversation is not None:
             previous_digest = context.get("digest", "") if context else ""
             digest_update_msg = json.dumps(
@@ -2455,12 +2470,30 @@ def run_reading_pipeline(
             )
             digest_response = json.loads(_last_assistant_content(updated_conv))
             digest_for_next = digest_response.get("digest", "")
-            if digest_for_next:
-                _save_cached_digest(registry_cache_root, digest_for_next)
-                print(
-                    f"  [book] digest updated: {len(digest_for_next)} chars",
-                    file=sys.stderr,
-                )
+        if not digest_for_next and registry.has_concepts():
+            digest_for_next = build_book_digest(
+                llm,
+                registry,
+                unit_id,
+                previous_digest=context.get("digest", "") if context else None,
+                cache_dir=cache_root / "book_digest",
+                use_cache=use_cache,
+            ) or ""
+        if digest_for_next and registry_digest_dir is not None:
+            _save_cached_digest(registry_digest_dir, digest_for_next)
+            print(
+                f"  [book] digest updated: {len(digest_for_next)} chars",
+                file=sys.stderr,
+            )
+
+        commit_hash = registry.save()
+        print(
+            f"  [book] delta: {len(delta_result.operations)} ops "
+            f"({delta_result.stats}), "
+            f"{len(delta_result.ambiguity_items)} ambiguities — "
+            f"saved at {commit_hash}",
+            file=sys.stderr,
+        )
 
     # ── Write unit package ──
     package_path = write_reading_unit_package(

@@ -947,11 +947,13 @@ def test_two_unit_book_scope_pipeline_with_concept_linking(tmp_path: Path) -> No
         scope="book",
     )
 
-    # Verify registry has concepts after unit 1
+    # Verify registry and digest are persisted after unit 1
     registry = BookRegistry.load(str(book_path), cache_root=cache_dir)
     assert registry.has_concepts()
+    digest_path = registry.cache_dir / "book_digest.json"
+    assert digest_path.exists()
 
-    # Unit 2 — should find link proposals
+    # Unit 2 — should find link proposals and load prior digest context
     record2 = run_reading_pipeline(
         str(book_path), "unit-0002",
         backend=None,

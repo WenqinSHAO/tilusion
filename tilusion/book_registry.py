@@ -317,6 +317,11 @@ class BookRegistry:
 
     # ── Introspection ──────────────────────────────────────────────────────
 
+    @property
+    def cache_dir(self) -> Path:
+        """Directory containing this book registry's persisted files."""
+        return self._cache_dir
+
     def has_concepts(self) -> bool:
         """Return True if the registry contains at least one concept."""
         return len(self._concepts) > 0
