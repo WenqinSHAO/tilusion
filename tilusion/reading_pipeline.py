@@ -14,6 +14,17 @@ from .backend import (
     parse_json_response,
     sha256_text,
 )
+from .cache_layout import (
+    book_root,
+    compute_cross_unit_run_hash,
+    compute_unit_run_hash,
+    cross_unit_run_dir,
+    model_config_for_cache,
+    prepend_to_runs_catalog,
+    unit_run_dir,
+    write_run_manifest,
+)
+from .extraction_prompts import build_overview_composition
 from .overview import (
     ResolvedOverviewSegment,
     resolve_overview_segments,
@@ -35,7 +46,9 @@ from .reading_payloads import (
 from .reading_schema import SourceBlock, normalize_concept_type
 from .reading_prompts import (
     build_concept_resolution_composition,
+    build_concept_resolution_v0_2_composition,
     build_group_resolution_composition,
+    build_group_resolution_v0_2_composition,
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
     build_unit_logical_grouping_v0_2_composition,
@@ -2128,7 +2141,7 @@ def run_reading_pipeline(
     unit_id: str,
     *,
     backend: LLMBackend | None = None,
-    cache_dir: str | Path = ".tilusion_cache/reading_passes",
+    cache_dir: str | Path = ".tilusion_cache",
     use_cache: bool = True,
     context: dict[str, Any] | None = None,
     scope: str = "unit",
@@ -2154,14 +2167,8 @@ def run_reading_pipeline(
     TOTAL_STEPS = 5
 
     book_path = Path(book_path).resolve()
-    book_hash = sha256_text(str(book_path))[:12]
-    cache_root = Path(cache_dir) / book_hash
-    _cache_path = Path(cache_dir)
-    book_cache_root = (
-        _cache_path.parent
-        if _cache_path.name == "reading_passes"
-        else _cache_path
-    )
+    cache_base = Path(cache_dir)
+    book_cache_root = book_root(cache_base, book_path)
     index = build_book_index(book_path)
     unit = index.unit_map()[unit_id]
     text = extract_unit_text(book_path, unit)
@@ -2174,13 +2181,13 @@ def run_reading_pipeline(
     }
 
     # Build/load the deterministic book source index before LLM extraction.
-    source_index_path = source_index_cache_path(book_path, book_cache_root)
+    source_index_path = source_index_cache_path(book_path, cache_base)
     if source_index_path.exists():
         book_source_index = load_book_source_index(source_index_path)
         source_index_status = "loaded"
     else:
         book_source_index = build_book_source_index(book_path)
-        source_index_path = save_book_source_index(book_source_index, book_path, cache_root=book_cache_root)
+        source_index_path = save_book_source_index(book_source_index, book_path, cache_root=cache_base)
         source_index_status = "built"
     source_index_id = str(book_source_index.get("source_index_id", ""))
     print(
@@ -2191,12 +2198,14 @@ def run_reading_pipeline(
 
     # ── Scope "book" pre-extraction: load registry, build digest ──
     registry: BookRegistry | None = None
-    registry_cache_root: Path | None = None
     registry_digest_dir: Path | None = None
+    registry_head_commit = ""
+    digest = ""
     if scope == "book":
-        registry_cache_root = book_cache_root
-        registry = BookRegistry.load_or_init(book_path, cache_root=registry_cache_root)
+        registry = BookRegistry.load_or_init(book_path, cache_root=cache_base)
+        registry.ensure_source_index_id(source_index_id)
         registry_digest_dir = registry.cache_dir
+        registry_head_commit = registry.head_commit_hash()
         digest = _load_cached_digest(registry_digest_dir)
         digest_source = "cached" if digest else ""
         if not digest and registry.has_concepts():
@@ -2204,7 +2213,7 @@ def run_reading_pipeline(
                 llm,
                 registry,
                 unit_id,
-                cache_dir=cache_root / "book_digest",
+                cache_dir=book_cache_root / "book_digest",
                 use_cache=use_cache,
             )
             if digest:
@@ -2230,6 +2239,45 @@ def run_reading_pipeline(
         else:
             print("  [book] first unit — no prior context", file=sys.stderr)
 
+    model_config = model_config_for_cache(llm)
+    context_identity = {
+        "registry_commit": registry_head_commit,
+        "book_digest_hash": f"digest-{sha256_text(digest)[:16]}" if digest else "",
+        "context_pack_hash": "",
+    }
+    unit_prompt_versions = {
+        "overview": build_overview_composition().composition_id,
+        "per_segment": build_per_segment_extraction_composition().composition_id,
+        "logical_grouping": build_unit_logical_grouping_v0_2_composition().composition_id,
+    }
+    unit_run_hash = compute_unit_run_hash(
+        source_index_id=source_index_id,
+        unit_id=unit_id,
+        scope=scope,
+        model_identity=llm.model_identity,
+        model_config=model_config,
+        context_identity=context_identity,
+        prompt_versions=unit_prompt_versions,
+    )
+    unit_cache_root = unit_run_dir(cache_base, book_path, unit_id, unit_run_hash)
+    cross_unit_run_hash = ""
+    cross_unit_cache_root: Path | None = None
+    if scope == "book":
+        cross_prompt_versions = {
+            "concept_resolution": build_concept_resolution_v0_2_composition().composition_id,
+            "group_resolution": build_group_resolution_v0_2_composition().composition_id,
+        }
+        cross_unit_run_hash = compute_cross_unit_run_hash(
+            source_index_id=source_index_id,
+            triggering_run_hash=unit_run_hash,
+            triggering_unit_id=unit_id,
+            registry_state_hash=registry_head_commit,
+            model_identity=llm.model_identity,
+            model_config=model_config,
+            prompt_versions=cross_prompt_versions,
+        )
+        cross_unit_cache_root = cross_unit_run_dir(cache_base, book_path, cross_unit_run_hash)
+
     # ── Step 1: Overview segmentation ──
     step = 1
     t0 = time.monotonic()
@@ -2238,7 +2286,7 @@ def run_reading_pipeline(
             unit=unit,
             text=text,
             backend=overview_backend,
-            cache_dir=cache_root / "overview",
+            cache_dir=unit_cache_root / "overview",
             use_cache=use_cache,
             context=context,
         )
@@ -2283,7 +2331,7 @@ def run_reading_pipeline(
                     unit_id=unit_id,
                     segment=seg,
                     backend=llm,
-                    cache_dir=cache_root / "per_segment",
+                    cache_dir=unit_cache_root / "per_segment",
                     use_cache=use_cache,
                     context=seg_context,
                     unit_text=text,
@@ -2375,7 +2423,7 @@ def run_reading_pipeline(
                 registry_index=candidate_index,
                 unresolved_items=stabilized.get("unresolved_items", []),
                 backend=llm,
-                cache_dir=cache_root / "concept_resolution",
+                cache_dir=(cross_unit_cache_root or unit_cache_root) / "concept_resolution",
                 use_cache=use_cache,
                 source_blocks=stabilized.get("source_blocks", []),
                 context=None,
@@ -2420,7 +2468,7 @@ def run_reading_pipeline(
             atomic_items=stabilized["atomic_items"],
             unresolved_items=stabilized.get("unresolved_items", []),
             backend=llm,
-            cache_dir=cache_root / "logical_grouping",
+            cache_dir=unit_cache_root / "logical_grouping",
             use_cache=use_cache,
             implicit_refs=implicit_ref_map if implicit_ref_map else None,
             context=None,
@@ -2466,7 +2514,7 @@ def run_reading_pipeline(
                 groups=grouping_record.data["logical_groups"],
                 registry_groups=candidate_groups,
                 backend=llm,
-                cache_dir=cache_root / "group_resolution",
+                cache_dir=(cross_unit_cache_root or unit_cache_root) / "group_resolution",
                 use_cache=use_cache,
                 source_blocks=stabilized.get("source_blocks", []),
                 context=None,
@@ -2520,6 +2568,7 @@ def run_reading_pipeline(
             "context_injection": context is not None,
             "source_index_id": source_index_id,
             "source_index_path": str(source_index_path),
+            "run_hash": unit_run_hash,
         },
         "metrics": metrics,
     }
@@ -2563,7 +2612,7 @@ def run_reading_pipeline(
                 registry,
                 unit_id,
                 previous_digest=context.get("digest", "") if context else None,
-                cache_dir=cache_root / "book_digest",
+                cache_dir=book_cache_root / "book_digest",
                 use_cache=use_cache,
             ) or ""
         if digest_for_next and registry_digest_dir is not None:
@@ -2573,7 +2622,7 @@ def run_reading_pipeline(
                 file=sys.stderr,
             )
 
-        commit_hash = registry.save()
+        commit_hash = registry.save(run_hash=cross_unit_run_hash or None)
         print(
             f"  [book] delta: {len(delta_result.operations)} ops "
             f"({delta_result.stats}), "
@@ -2589,10 +2638,83 @@ def run_reading_pipeline(
         data=final_data,
         validation=final_validation,
         passes=pass_summaries,
-        cache_root=cache_root,
+        run_hash=unit_run_hash,
+        run_dir=unit_cache_root,
     )
 
+    unit_manifest = {
+        "run_hash": unit_run_hash,
+        "run_type": "unit_extraction",
+        "unit_id": unit_id,
+        "scope": scope,
+        "source_index_id": source_index_id,
+        "model_identity": llm.model_identity,
+        "model_config": model_config,
+        "context_identity": context_identity,
+        "prompt_versions": unit_prompt_versions,
+        "pass_cache_keys": {
+            "overview": pass_summaries.get("overview_segmentation", {}).get("cache_key", ""),
+            "per_segment": pass_summaries.get("per_segment_extraction", {}).get("segment_cache_keys", []),
+            "logical_grouping": pass_summaries.get("unit_logical_grouping", {}).get("cache_key", ""),
+        },
+        "unit_package_path": package_path,
+        "validation_passed": bool(final_validation.get("passed", False)),
+    }
+    write_run_manifest(unit_cache_root, unit_manifest)
+
     total_elapsed = _elapsed_ms(total_start)
+    unit_manifest["elapsed_ms"] = total_elapsed
+    write_run_manifest(unit_cache_root, unit_manifest)
+    if scope == "book":
+        unit_catalog_entry = {
+            "run_hash": unit_run_hash,
+            "run_type": "unit_extraction",
+            "unit_id": unit_id,
+            "source_index_id": source_index_id,
+            "model_identity": llm.model_identity,
+            "elapsed_ms": total_elapsed,
+            "validation_passed": bool(final_validation.get("passed", False)),
+            "triggered_cross_unit": cross_unit_run_hash,
+        }
+        prepend_to_runs_catalog(cache_base, book_path, unit_catalog_entry)
+        if cross_unit_cache_root is not None and cross_unit_run_hash:
+            cross_manifest = {
+                "run_hash": cross_unit_run_hash,
+                "run_type": "cross_unit_resolution",
+                "triggered_by": {
+                    "run_hash": unit_run_hash,
+                    "unit_id": unit_id,
+                },
+                "source_index_id": source_index_id,
+                "registry_state_hash": registry_head_commit,
+                "model_identity": llm.model_identity,
+                "model_config": model_config,
+                "prompt_versions": {
+                    "concept_resolution": build_concept_resolution_v0_2_composition().composition_id,
+                    "group_resolution": build_group_resolution_v0_2_composition().composition_id,
+                },
+                "pass_cache_keys": {
+                    "concept_resolution": pass_summaries.get("cross_unit_concept_resolution", {}).get("cache_key", ""),
+                    "group_resolution": pass_summaries.get("cross_unit_group_resolution", {}).get("cache_key", ""),
+                },
+                "registry_commit": registry.head_commit_hash() if registry is not None else "",
+            }
+            write_run_manifest(cross_unit_cache_root, cross_manifest)
+            prepend_to_runs_catalog(
+                cache_base,
+                book_path,
+                {
+                    "run_hash": cross_unit_run_hash,
+                    "run_type": "cross_unit_resolution",
+                    "triggered_by": {
+                        "run_hash": unit_run_hash,
+                        "unit_id": unit_id,
+                    },
+                    "source_index_id": source_index_id,
+                    "registry_commit": cross_manifest["registry_commit"],
+                },
+            )
+
     print(f"Reading pipeline complete: {package_path} ({total_elapsed}ms)", file=sys.stderr)
 
     return ReadingPipelineRecord(
@@ -2644,27 +2766,6 @@ def _write_reading_pass_artifacts(
         )
 
 
-def _derive_run_key(passes: dict[str, dict[str, Any]]) -> str:
-    """Derive a stable run fingerprint from pass cache keys.
-
-    Flattens per-segment cache key lists so every cache key that contributed
-    to a run is included in the fingerprint. Different runs → different keys.
-    """
-    import hashlib
-
-    parts: list[str] = []
-    for pass_name in sorted(passes):
-        p = passes[pass_name]
-        cache_key = p.get("cache_key", "")
-        if cache_key:
-            parts.append(f"{pass_name}:{cache_key}")
-        segment_keys = p.get("segment_cache_keys") or []
-        for sk in segment_keys:
-            parts.append(f"{pass_name}:seg:{sk}")
-    canonical = "\n".join(parts)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-
-
 def write_reading_unit_package(
     *,
     unit_id: str,
@@ -2672,18 +2773,12 @@ def write_reading_unit_package(
     data: dict[str, Any],
     validation: dict[str, Any],
     passes: dict[str, dict[str, Any]],
-    cache_root: Path,
+    run_hash: str,
+    run_dir: Path,
 ) -> str:
-    """Write the ExtractionUnitPackage to disk under a content-addressed run key.
-
-    The run key is derived from all pass cache keys, so different runs
-    never overwrite each other. A ``latest`` pointer is kept for convenience.
-    """
-    run_key = _derive_run_key(passes)
-    unit_dir = cache_root / "units" / unit_id
-    package_dir = unit_dir / run_key
-    package_dir.mkdir(parents=True, exist_ok=True)
-    package_path = package_dir / "unit_package.json"
+    """Write the ExtractionUnitPackage into the unit run directory."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    package_path = run_dir / "unit_package.json"
 
     package = dict(data)
     package.setdefault("schema_version", READING_UNIT_SCHEMA_VERSION)
@@ -2691,20 +2786,7 @@ def write_reading_unit_package(
     package["source"] = data.get("source") or source
     package["passes"] = passes
     package["validation"] = validation
-    package["run_key"] = run_key
+    package["run_hash"] = run_hash
     package_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    # Write run metadata alongside the package
-    run_info_path = package_dir / "run_info.json"
-    run_info = {
-        "unit_id": unit_id,
-        "run_key": run_key,
-        "passes": passes,
-    }
-    run_info_path.write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    # Update latest pointer
-    latest_path = unit_dir / "latest"
-    latest_path.write_text(run_key, encoding="utf-8")
 
     return str(package_path)

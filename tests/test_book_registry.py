@@ -497,9 +497,7 @@ class TestPersistence:
             ))
 
             reg.save()
-            # cache_root is the parent of the "books/{book_hash}" directory,
-            # i.e. the directory that contains "books/"
-            cache_root = reg._cache_dir.parents[1]
+            cache_root = reg._cache_dir.parent
             loaded = BookRegistry.load(
                 reg._book_path, cache_root=cache_root,
             )
@@ -729,3 +727,29 @@ def test_book_registry_imports_do_not_reference_reading_pipeline() -> None:
         assert "reading_pipeline" not in line, (
             f"book_registry.py imports from reading_pipeline: {line}"
         )
+
+
+def test_registry_source_index_id_is_bound_once(tmp_path: Path) -> None:
+    book_path = tmp_path / "book.txt"
+    book_path.write_text("test", encoding="utf-8")
+    reg = BookRegistry(book_path, cache_root=tmp_path / "cache")
+
+    reg.ensure_source_index_id("source-index-a")
+    reg.ensure_source_index_id("source-index-a")
+
+    assert reg.source_index_id() == "source-index-a"
+    with pytest.raises(ValueError, match="source_index_id mismatch"):
+        reg.ensure_source_index_id("source-index-b")
+
+
+def test_registry_source_index_id_persists(tmp_path: Path) -> None:
+    book_path = tmp_path / "book.txt"
+    book_path.write_text("test", encoding="utf-8")
+    cache_root = tmp_path / "cache"
+    reg = BookRegistry(book_path, cache_root=cache_root)
+    reg.ensure_source_index_id("source-index-a")
+    reg.save()
+
+    loaded = BookRegistry.load(book_path, cache_root=cache_root)
+
+    assert loaded.source_index_id() == "source-index-a"

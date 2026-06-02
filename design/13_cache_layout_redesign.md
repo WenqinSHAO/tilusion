@@ -12,12 +12,12 @@ book_cache_root = _cache_path.parent if _cache_path.name == "reading_passes" els
 
 Before Phase 4 (registry migration) and Phase 5 (legacy ID removal) of the
 source index refactor, we unify run artifacts and book artifacts under the
-existing book-scoped root with a consistent hash.
+a clean book-scoped root with a consistent hash.
 
 ## Guiding principles
 
 - **One book, one root.** All artifacts — source index, registry, digest, unit
-  runs, cross-unit passes — live under `.tilusion_cache/books/book-{hash}/`.
+  runs, cross-unit passes — live under `.tilusion_cache/book-{hash}/`.
 - **Run-level grouping.** Overview, per-segment extraction, and logical grouping
   pass caches are bundled into a run directory. A run is a single end-to-end
   extraction of one unit.
@@ -40,29 +40,28 @@ existing book-scoped root with a consistent hash.
 
 ```
 .tilusion_cache/
-  books/
-    book-{hash}/
-      .git/                        # git repo tracking book-level state
-      .gitignore                   # excludes unit-*/, cross-unit/
-      runs.json                    # book-level catalog of all runs
-      source_index.json            # deterministic, content-addressed (tracked)
-      book_digest.json             # book-level digest (book scope only, tracked)
-      registry.json                # current registry state (book scope only, tracked)
+  book-{hash}/
+    .git/                          # git repo tracking book-level state
+    .gitignore                     # excludes unit-*/, cross-unit/
+    runs.json                      # book-level catalog of all runs
+    source_index.json              # deterministic, content-addressed (tracked)
+    book_digest.json               # book-level digest (book scope only, tracked)
+    registry.json                  # current registry state (book scope only, tracked)
 
-      unit-{unit_id}/
-        {run-hash}/
-          run.json                 # manifest: what went into this run
-          overview/{cache_key}/
-          per_segment/{cache_key}/
-          logical_grouping/{cache_key}/
-          metrics.json
-          unit_package.json
+    {unit_id}/
+      {run-hash}/
+        run.json                   # manifest: what went into this run
+        overview/{cache_key}/
+        per_segment/{cache_key}/
+        logical_grouping/{cache_key}/
+        metrics.json
+        unit_package.json
 
-      cross-unit/
-        {run-hash}/                # cross-unit's own run hash
-          run.json
-          concept_resolution/{cache_key}/
-          group_resolution/{cache_key}/
+    cross-unit/
+      {run-hash}/                  # cross-unit's own run hash
+        run.json
+        concept_resolution/{cache_key}/
+        group_resolution/{cache_key}/
 ```
 
 ### Book hash
@@ -76,9 +75,8 @@ def stable_book_id(book_path: str | Path) -> str:
 ```
 
 The pipeline's ad-hoc `book_hash = sha256_text(str(book_path))[:12]` is removed.
-The `books/` directory layer stays because existing registry and context-pack
-helpers already use it. It is not a cache-consultation problem; the problem is
-the split between `books/` and `reading_passes/`.
+The old `books/` directory layer is removed for this refactor. Existing local
+book caches are disposable; new runs start from the clean root.
 
 ### Unit extraction run hash
 
@@ -316,7 +314,7 @@ then, the proposal exists only in the cross-unit pass cache.
 
 ## Registry commit model (git-backed)
 
-The git repo lives at `.tilusion_cache/books/book-{hash}/.git`. `.gitignore`:
+The git repo lives at `.tilusion_cache/book-{hash}/.git`. `.gitignore`:
 
 ```
 unit-*/
@@ -360,7 +358,7 @@ cross-unit resolution for unit-0002 [run-cu-abc123]
 
 First book-scope extraction:
 1. `source_index.json` built (always, even in unit scope)
-2. Book root directory created: `.tilusion_cache/books/book-{hash}/`
+2. Book root directory created: `.tilusion_cache/book-{hash}/`
 3. Git repo initialized, `.gitignore` written
 4. `source_index.json` committed (initial commit)
 5. `BookRegistry` created, `registry.json` committed
@@ -408,22 +406,21 @@ Old layout:
 New layout:
 ```
 .tilusion_cache/
-  books/{book_id}/
+  {book_id}/
     source_index.json
     registry.json
     book_digest.json
     runs.json
-    unit-{unit_id}/{run_hash}/...
+    {unit_id}/{run_hash}/...
     cross-unit/{run_hash}/...
 ```
 
 Migration:
 1. New runs write to the new layout only.
-2. On load, check new layout first; fall back to old `reading_passes/` caches
-   for read-only access to legacy run artifacts.
-3. Old caches are never deleted automatically.
-4. Existing book-level git history under `books/{book_id}/.git` is preserved
-   because the book root does not move.
+2. No legacy `reading_passes/` fallback is implemented.
+3. Old caches are never deleted automatically, but new code does not consult them.
+4. Existing book-level git history under `books/{book_id}/.git` is treated as
+   pre-refactor state and is not migrated automatically.
 
 ## Files changed
 

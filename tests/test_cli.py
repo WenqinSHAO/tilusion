@@ -11,7 +11,7 @@ def test_parser_accepts_run_reading_defaults() -> None:
 
     assert args.command == "run-reading"
     assert args.backend == "mock"
-    assert args.cache_dir == ".tilusion_cache/reading_passes"
+    assert args.cache_dir == ".tilusion_cache"
     assert args.no_cache is False
 
 
@@ -74,6 +74,7 @@ def test_run_reading_cli_mock_writes_package(tmp_path: Path, capsys) -> None:
         "--cache-dir",
         str(cache_dir),
         "--no-cache",
+        "--json",
     ])
 
     captured = capsys.readouterr()

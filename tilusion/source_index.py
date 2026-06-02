@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from .backend import sha256_json
-from .book_context import book_cache_dir, stable_book_id
+from .book_context import stable_book_id
+from .cache_layout import source_index_path
 from .book_reader import BookIndex, StructureUnit, build_book_index, extract_unit_text
 from .reading_schema import SourceBlock
 from .source_blocks import SOURCE_BLOCK_SPLITTER_VERSION, split_source_blocks
@@ -122,8 +123,7 @@ def build_book_source_index(book_path: str | Path) -> dict[str, Any]:
 
 
 def source_index_cache_path(book_path: str | Path, cache_root: str | Path = ".tilusion_cache") -> Path:
-    book_id = stable_book_id(Path(book_path).resolve())
-    return book_cache_dir(cache_root, book_id) / "source_index.json"
+    return source_index_path(cache_root, Path(book_path).resolve())
 
 
 def save_book_source_index(

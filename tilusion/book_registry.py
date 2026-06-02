@@ -149,6 +149,7 @@ class BookRegistry:
         self._concepts: dict[str, Concept] = {}
         self._items: dict[str, dict[str, Any]] = {}
         self._groups: dict[str, dict[str, Any]] = {}
+        self._metadata: dict[str, Any] = {}
 
         # (surface, normalized_type) → [concept_id, ...]
         self._surface_type_index: dict[tuple[str, str], list[str]] = {}
@@ -334,9 +335,23 @@ class BookRegistry:
         """Return all concepts in the registry."""
         return list(self._concepts.values())
 
+    def source_index_id(self) -> str:
+        return str(self._metadata.get("source_index_id") or "")
+
+    def ensure_source_index_id(self, source_index_id: str) -> None:
+        if not source_index_id:
+            raise ValueError("source_index_id is required for book registry updates")
+        existing = self.source_index_id()
+        if existing and existing != source_index_id:
+            raise ValueError(
+                "registry source_index_id mismatch: "
+                f"registry={existing!r}, current={source_index_id!r}"
+            )
+        self._metadata["source_index_id"] = source_index_id
+
     # ── Persistence ───────────────────────────────────────────────────────
 
-    def save(self) -> str:
+    def save(self, run_hash: str | None = None) -> str:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_git_repo()
 
@@ -352,15 +367,15 @@ class BookRegistry:
             capture_output=True,
         )
 
-        # Stage digest alongside registry so they are versioned together
-        digest_path = self._cache_dir / "book_digest.json"
-        if digest_path.exists():
-            subprocess.run(
-                ["git", "add", "book_digest.json"],
-                cwd=self._cache_dir,
-                check=True,
-                capture_output=True,
-            )
+        # Stage book-level state alongside registry so it is versioned together.
+        for path in ("book_digest.json", "source_index.json", ".gitignore"):
+            if (self._cache_dir / path).exists():
+                subprocess.run(
+                    ["git", "add", path],
+                    cwd=self._cache_dir,
+                    check=True,
+                    capture_output=True,
+                )
 
         # Only commit if there are staged changes
         diff_result = subprocess.run(
@@ -377,6 +392,8 @@ class BookRegistry:
             f"{len(self._items)} items, "
             f"{len(self._groups)} groups"
         )
+        if run_hash:
+            msg = f"{msg} [{run_hash}]"
         subprocess.run(
             ["git", "commit", "-m", msg],
             cwd=self._cache_dir,
@@ -485,6 +502,15 @@ class BookRegistry:
     def _registry_path(self) -> Path:
         return self._cache_dir / "registry.json"
 
+    def head_commit_hash(self) -> str:
+        git_dir = self._cache_dir / ".git"
+        if not git_dir.exists():
+            return ""
+        try:
+            return self._head_commit_hash()
+        except subprocess.CalledProcessError:
+            return ""
+
     def _ensure_git_repo(self) -> None:
         git_dir = self._cache_dir / ".git"
         if not git_dir.exists():
@@ -495,6 +521,9 @@ class BookRegistry:
                 check=True,
                 capture_output=True,
             )
+        gitignore_path = self._cache_dir / ".gitignore"
+        if not gitignore_path.exists():
+            gitignore_path.write_text("unit-*\ncross-unit/\nruns.json\n", encoding="utf-8")
 
     def _head_commit_hash(self) -> str:
         result = subprocess.run(
@@ -508,6 +537,7 @@ class BookRegistry:
 
     def _to_dict(self) -> dict[str, Any]:
         return {
+            "metadata": dict(self._metadata),
             "next_ids": {
                 "concept": self._next_concept_id,
                 "item": self._next_item_id,
@@ -524,6 +554,7 @@ class BookRegistry:
         self._next_concept_id = data["next_ids"]["concept"]
         self._next_item_id = data["next_ids"]["item"]
         self._next_group_id = data["next_ids"]["group"]
+        self._metadata = dict(data.get("metadata", {}))
 
         self._concepts.clear()
         self._items.clear()

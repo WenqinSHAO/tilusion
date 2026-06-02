@@ -377,7 +377,7 @@ def stable_book_id(book_path: str | Path) -> str:
 
 
 def book_cache_dir(cache_root: str | Path, book_id: str) -> Path:
-    return Path(cache_root) / "books" / book_id
+    return Path(cache_root) / book_id
 
 
 def context_pack_dir(cache_root: str | Path, book_id: str, unit_id: str) -> Path:

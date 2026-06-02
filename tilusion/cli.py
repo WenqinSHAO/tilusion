@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_reading_parser.add_argument("book")
     run_reading_parser.add_argument("unit_id")
     _add_llm_backend_args(run_reading_parser)
-    run_reading_parser.add_argument("--cache-dir", default=".tilusion_cache/reading_passes")
+    run_reading_parser.add_argument("--cache-dir", default=".tilusion_cache")
     run_reading_parser.add_argument("--no-cache", action="store_true")
     run_reading_parser.add_argument(
         "--scope", choices=["unit", "book"], default="unit",
