@@ -816,6 +816,24 @@ def test_classify_merge_risk_distinct_terms_no_identity_signal() -> None:
     assert "distinct surfaces" in reason
 
 
+def test_overview_segment_count_prefers_current_key() -> None:
+    from tilusion.reading_pipeline import _overview_segment_count
+
+    data = {
+        "overview_segments": [{"segment_id": "seg-0001"}, {"segment_id": "seg-0002"}],
+        "segments": [{"segment_id": "legacy"}],
+    }
+
+    assert _overview_segment_count(data) == 2
+
+
+def test_overview_segment_count_accepts_legacy_key() -> None:
+    from tilusion.reading_pipeline import _overview_segment_count
+
+    assert _overview_segment_count({"segments": [{"segment_id": "legacy"}]}) == 1
+    assert _overview_segment_count({}) == 0
+
+
 # ── Uncertainty normalization tests ──────────────────────────────────────────
 
 

@@ -91,6 +91,32 @@ def test_fix_empty_string_list_item() -> None:
     assert data["concepts"][0]["aliases"] == ["Alice", "  ", "Bob"]
 
 
+def test_fix_wrong_item_type_in_string_list_field() -> None:
+    fixer = DeterministicAutoFixer()
+    data = {"concepts": [{"facets": [{"label": "temperament"}], "uncertainty": [False]}]}
+    issues = [
+        {
+            "severity": "error",
+            "code": "wrong_item_type",
+            "path": "concepts[0].facets[0]",
+            "message": "List item must be a string.",
+        },
+        {
+            "severity": "error",
+            "code": "wrong_item_type",
+            "path": "concepts[0].uncertainty[0]",
+            "message": "List item must be a string.",
+        },
+    ]
+
+    fixed, remaining = fixer.fix(data, issues)
+
+    assert fixed == ["wrong_item_type", "wrong_item_type"]
+    assert remaining == []
+    assert data["concepts"][0]["facets"] == ['{"label": "temperament"}']
+    assert data["concepts"][0]["uncertainty"] == ["False"]
+
+
 def test_fix_duplicate_object_id() -> None:
     fixer = DeterministicAutoFixer()
     data = {

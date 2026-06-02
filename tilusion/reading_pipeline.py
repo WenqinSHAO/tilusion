@@ -91,6 +91,16 @@ def _log_progress(step: int, total: int, description: str, status: str, elapsed_
     print(f"  [{step}/{total}] {description}: {status} ({elapsed_ms}ms)", file=sys.stderr)
 
 
+def _overview_segment_count(overview_data: Any) -> int:
+    """Return the raw overview segment count from current or legacy payload keys."""
+    if not isinstance(overview_data, dict):
+        return 0
+    segments = overview_data.get("overview_segments")
+    if not isinstance(segments, list):
+        segments = overview_data.get("segments")
+    return len(segments) if isinstance(segments, list) else 0
+
+
 def _aggregate_per_segment_counts(
     segment_records: list[ReadingPassRecord],
 ) -> dict[str, Any]:
@@ -2232,7 +2242,7 @@ def run_reading_pipeline(
         "validation": {},
         "counts": {
             "overview": {
-                "segment_count": len(overview_record.data.get("segments", [])) if isinstance(overview_record.data, dict) else 0,
+                "segment_count": _overview_segment_count(overview_record.data),
                 "resolved_segment_count": len(segments),
                 "repair_hint_count": len(overview_repairs),
                 "unit_char_count": len(text),

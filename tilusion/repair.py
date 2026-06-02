@@ -53,6 +53,41 @@ def _fix_empty_string_list_item(data: dict[str, Any], path: str, issue: dict[str
     return False
 
 
+def _fix_wrong_string_list_item(data: dict[str, Any], path: str, issue: dict[str, Any]) -> bool:
+    """Coerce structured values in string-list fields to compact strings."""
+    parent_path, index = _parse_index_path(path)
+    if parent_path is None or index is None:
+        return False
+    field = parent_path.rsplit(".", 1)[-1]
+    if field not in {
+        "aliases",
+        "observed_surfaces",
+        "source_block_refs",
+        "facets",
+        "uncertainty",
+        "concept_refs",
+        "item_refs",
+        "merged_from",
+    }:
+        return False
+    parent = _resolve_path(data, parent_path)
+    if not isinstance(parent, list) or not (0 <= index < len(parent)):
+        return False
+    value = parent[index]
+    if isinstance(value, str):
+        return False
+    if isinstance(value, dict):
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    else:
+        text = str(value)
+    text = text.strip()
+    if not text:
+        del parent[index]
+    else:
+        parent[index] = text
+    return True
+
+
 def _fix_duplicate_object_id(data: dict[str, Any], path: str, issue: dict[str, Any]) -> bool:
     """Append a dedup suffix to a duplicate id field."""
     parent_path, key = _parse_dot_path(path)
@@ -203,6 +238,7 @@ AUTO_FIXERS: dict[str, Callable[[dict[str, Any], str, dict[str, Any]], bool]] = 
     "schema_version_mismatch": _fix_schema_version_mismatch,
     "stale_core_field": _fix_stale_core_field,
     "wrong_field_type": _fix_wrong_field_type,
+    "wrong_item_type": _fix_wrong_string_list_item,
     "missing_source_block_refs": _fix_missing_source_block_refs,
 }
 
