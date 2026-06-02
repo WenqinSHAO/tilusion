@@ -9,6 +9,8 @@ from tilusion.source_index import (
     build_book_source_index,
     load_book_source_index,
     save_book_source_index,
+    source_index_block_to_source_block,
+    blocks_for_unit_range,
     source_index_cache_path,
 )
 
@@ -109,3 +111,23 @@ def test_source_index_cli_can_print_json(tmp_path: Path, capsys) -> None:
     payload = json.loads(captured.out)
     assert payload["schema_version"] == BOOK_SOURCE_INDEX_SCHEMA_VERSION
     assert payload["blocks"]["block-000001"]["source_index_scope"] == "book"
+
+
+def test_blocks_for_unit_range_returns_full_overlapping_blocks(tmp_path: Path) -> None:
+    book = _write_book(tmp_path)
+    index = build_book_source_index(book)
+    first = blocks_for_unit(index, "unit-0001")[0]
+
+    selected = blocks_for_unit_range(
+        index,
+        "unit-0001",
+        int(first["unit_start"]) + 1,
+        int(first["unit_end"]) - 1,
+    )
+
+    assert selected == [first]
+    source_block = source_index_block_to_source_block(selected[0])
+    assert source_block.block_id == "block-000001"
+    assert source_block.start == first["unit_start"]
+    assert source_block.end == first["unit_end"]
+    assert source_block.provenance["source_index_id"] == index["source_index_id"]

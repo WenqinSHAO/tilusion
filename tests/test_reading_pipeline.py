@@ -144,6 +144,55 @@ def test_run_per_segment_extraction_pass_with_mock(tmp_path: Path) -> None:
     assert Path(record.artifact_paths["validation_report"]).exists()
 
 
+def test_run_per_segment_extraction_pass_uses_preselected_source_index_blocks(tmp_path: Path) -> None:
+    from tilusion.reading_schema import SourceBlock
+
+    backend = MockReadingBackend()
+    unit_text = "Alpha begins. Beta continues."
+    loc = _fake_location()
+    segment = ResolvedOverviewSegment(
+        segment_id="seg-0001",
+        title="Test segment",
+        summary="A test segment.",
+        start=6,
+        end=18,
+        text=unit_text[6:18],
+        source={"kind": "unit-char-span", "start": 6, "end": 18},
+        start_location=loc,
+        end_location=loc,
+    )
+    blocks = [
+        SourceBlock(
+            block_id="block-000001",
+            unit_id="unit-0001",
+            segment_id="",
+            block_index=1,
+            block_type="paragraph",
+            start=0,
+            end=len(unit_text),
+            text=unit_text,
+            text_hash="hash",
+            provenance={"source_index_id": "source-index-test"},
+        )
+    ]
+
+    record = run_per_segment_extraction_pass(
+        unit_id="unit-0001",
+        segment=segment,
+        backend=backend,
+        cache_dir=tmp_path / "cache",
+        use_cache=False,
+        unit_text=unit_text,
+        source_blocks=blocks,
+        source_index_id="source-index-test",
+    )
+
+    assert record.data["source_blocks"][0]["block_id"] == "block-000001"
+    assert record.data["concepts"][0]["source_block_refs"] == ["block-000001"]
+    assert record.data["context_metadata"]["source_index_id"] == "source-index-test"
+    assert record.validation_report.passed
+
+
 def test_run_per_segment_extraction_pass_cache_hit(tmp_path: Path) -> None:
     backend = MockReadingBackend()
     segment = _make_segment(text="Cached segment text.")

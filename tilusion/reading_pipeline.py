@@ -32,7 +32,7 @@ from .reading_payloads import (
     build_unit_logical_grouping_payload_v0_2,
     merge_segment_extraction_results,
 )
-from .reading_schema import normalize_concept_type
+from .reading_schema import SourceBlock, normalize_concept_type
 from .reading_prompts import (
     build_concept_resolution_composition,
     build_group_resolution_composition,
@@ -41,7 +41,15 @@ from .reading_prompts import (
     build_unit_logical_grouping_v0_2_composition,
 )
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
-from .source_blocks import split_source_blocks
+from .source_blocks import MAX_BLOCK_CHARS, SourceBlockMetrics, split_source_blocks
+from .source_index import (
+    blocks_for_unit_range,
+    build_book_source_index,
+    load_book_source_index,
+    save_book_source_index,
+    source_index_block_to_source_block,
+    source_index_cache_path,
+)
 from .reading_validation import (
     ReadingValidationReport,
     validate_extraction_unit_package,
@@ -99,6 +107,22 @@ def _overview_segment_count(overview_data: Any) -> int:
     if not isinstance(segments, list):
         segments = overview_data.get("segments")
     return len(segments) if isinstance(segments, list) else 0
+
+
+def _metrics_for_preselected_blocks(segment_id: str, blocks: list[SourceBlock], segment_text: str) -> SourceBlockMetrics:
+    covered = sum(block.end - block.start for block in blocks)
+    total = len(segment_text)
+    oversized = [block.block_id for block in blocks if len(block.text.strip()) > MAX_BLOCK_CHARS]
+    return SourceBlockMetrics(
+        segment_id=segment_id,
+        block_count=len(blocks),
+        covered_chars=covered,
+        total_chars=total,
+        coverage_pct=round((covered / total * 100) if total else 100.0, 2),
+        avg_block_size=round(covered / len(blocks), 2) if blocks else 0.0,
+        oversized_count=len(oversized),
+        oversized_block_ids=oversized,
+    )
 
 
 def _aggregate_per_segment_counts(
@@ -497,6 +521,8 @@ def run_per_segment_extraction_pass(
     use_cache: bool = True,
     context: dict[str, Any] | None = None,
     unit_text: str | None = None,
+    source_blocks: list[SourceBlock] | None = None,
+    source_index_id: str | None = None,
 ) -> ReadingPassRecord:
     """Run the reading per-segment extraction pass on one segment.
 
@@ -505,17 +531,31 @@ def run_per_segment_extraction_pass(
     and validates the returned concepts and atomic_items against the
     authoritative source blocks.
     """
-    # Deterministic source block splitting
-    segment_text = segment.text
-    block_unit_text = unit_text if unit_text is not None else segment_text
-    block_unit_offset = segment.start if unit_text is not None else 0
-    blocks, block_metrics = split_source_blocks(
-        segment_text,
-        segment_id=segment.segment_id,
-        unit_id=unit_id,
-        unit_text=block_unit_text,
-        unit_offset=block_unit_offset,
-    )
+    # Deterministic source block selection/splitting. When source-index blocks
+    # are provided, expand the LLM segment to full block boundaries so stable
+    # book-scoped block IDs are not clipped into transient sub-block IDs.
+    if source_blocks is not None:
+        blocks = source_blocks
+        block_unit_text = unit_text if unit_text is not None else segment.text
+        if blocks and unit_text is not None:
+            block_unit_offset = min(block.start for block in blocks)
+            expanded_end = max(block.end for block in blocks)
+            segment_text = unit_text[block_unit_offset:expanded_end]
+        else:
+            block_unit_offset = segment.start if unit_text is not None else 0
+            segment_text = segment.text
+        block_metrics = _metrics_for_preselected_blocks(segment.segment_id, blocks, segment_text)
+    else:
+        segment_text = segment.text
+        block_unit_text = unit_text if unit_text is not None else segment_text
+        block_unit_offset = segment.start if unit_text is not None else 0
+        blocks, block_metrics = split_source_blocks(
+            segment_text,
+            segment_id=segment.segment_id,
+            unit_id=unit_id,
+            unit_text=block_unit_text,
+            unit_offset=block_unit_offset,
+        )
 
     prompt = build_per_segment_extraction_composition()
     payload = build_per_segment_extraction_payload(
@@ -524,6 +564,7 @@ def run_per_segment_extraction_pass(
             "segment_id": segment.segment_id,
             "title": segment.title,
             "summary": segment.summary,
+            "source_index_id": source_index_id or "",
         },
         text=segment_text,
         source_blocks=blocks,
@@ -559,7 +600,7 @@ def run_per_segment_extraction_pass(
                 "logical_groups": [],
                 "unresolved_items": [],
                 "validation": {},
-                "context_metadata": {},
+                "context_metadata": {"source_index_id": source_index_id} if source_index_id else {},
             }
 
         from .repair import run_agentic_pass
@@ -587,7 +628,7 @@ def run_per_segment_extraction_pass(
             "logical_groups": [],
             "unresolved_items": [],
             "validation": {},
-            "context_metadata": {},
+            "context_metadata": {"source_index_id": source_index_id} if source_index_id else {},
         }
         validation_report = validate_extraction_unit_package(validation_subject)
         _raise_on_validation_errors("per-segment-extraction", validation_report)
@@ -617,6 +658,7 @@ def run_per_segment_extraction_pass(
     enriched_data = {
         **data,
         "source_blocks": [b.to_dict() for b in blocks],
+        "context_metadata": {"source_index_id": source_index_id} if source_index_id else {},
         "metrics": {"counts": {"per_segment": per_segment_counts}},
     }
 
@@ -2114,6 +2156,12 @@ def run_reading_pipeline(
     book_path = Path(book_path).resolve()
     book_hash = sha256_text(str(book_path))[:12]
     cache_root = Path(cache_dir) / book_hash
+    _cache_path = Path(cache_dir)
+    book_cache_root = (
+        _cache_path.parent
+        if _cache_path.name == "reading_passes"
+        else _cache_path
+    )
     index = build_book_index(book_path)
     unit = index.unit_map()[unit_id]
     text = extract_unit_text(book_path, unit)
@@ -2125,17 +2173,28 @@ def run_reading_pipeline(
         "unit_kind": unit.kind,
     }
 
+    # Build/load the deterministic book source index before LLM extraction.
+    source_index_path = source_index_cache_path(book_path, book_cache_root)
+    if source_index_path.exists():
+        book_source_index = load_book_source_index(source_index_path)
+        source_index_status = "loaded"
+    else:
+        book_source_index = build_book_source_index(book_path)
+        source_index_path = save_book_source_index(book_source_index, book_path, cache_root=book_cache_root)
+        source_index_status = "built"
+    source_index_id = str(book_source_index.get("source_index_id", ""))
+    print(
+        f"  [source-index] {source_index_status}: {source_index_id} "
+        f"({book_source_index.get('metrics', {}).get('block_count', 0)} blocks)",
+        file=sys.stderr,
+    )
+
     # ── Scope "book" pre-extraction: load registry, build digest ──
     registry: BookRegistry | None = None
     registry_cache_root: Path | None = None
     registry_digest_dir: Path | None = None
     if scope == "book":
-        _cache_path = Path(cache_dir)
-        registry_cache_root = (
-            _cache_path.parent
-            if _cache_path.name == "reading_passes"
-            else _cache_path
-        )
+        registry_cache_root = book_cache_root
         registry = BookRegistry.load_or_init(book_path, cache_root=registry_cache_root)
         registry_digest_dir = registry.cache_dir
         digest = _load_cached_digest(registry_digest_dir)
@@ -2208,6 +2267,17 @@ def run_reading_pipeline(
             future_to_seg: dict[Any, Any] = {}
             for seg in segments:
                 seg_context = segment_hint_payload(seg)
+                indexed_blocks = [
+                    source_index_block_to_source_block(block)
+                    for block in blocks_for_unit_range(book_source_index, unit_id, seg.start, seg.end)
+                ]
+                if indexed_blocks:
+                    block_ids = [block.block_id for block in indexed_blocks]
+                    print(
+                        f"    hint {seg.segment_id}: {len(indexed_blocks)} source-index blocks "
+                        f"{block_ids[0]}..{block_ids[-1]}",
+                        file=sys.stderr,
+                    )
                 future = executor.submit(
                     run_per_segment_extraction_pass,
                     unit_id=unit_id,
@@ -2217,6 +2287,8 @@ def run_reading_pipeline(
                     use_cache=use_cache,
                     context=seg_context,
                     unit_text=text,
+                    source_blocks=indexed_blocks or None,
+                    source_index_id=source_index_id if indexed_blocks else None,
                 )
                 future_to_seg[future] = seg
 
@@ -2444,7 +2516,11 @@ def run_reading_pipeline(
         "logical_groups": grouping_record.data["logical_groups"],
         "unresolved_items": grouping_record.data.get("unresolved_items", []),
         "validation": grouping_record.validation_report.to_dict(),
-        "context_metadata": {"context_injection": context is not None},
+        "context_metadata": {
+            "context_injection": context is not None,
+            "source_index_id": source_index_id,
+            "source_index_path": str(source_index_path),
+        },
         "metrics": metrics,
     }
     final_validation_report = validate_extraction_unit_package(final_data)

@@ -265,3 +265,12 @@ Add `--verbose-context` later if full previews are needed.
 2. Add `python -m tilusion.cli source-index BOOK --cache-dir .tilusion_cache`.
 3. Add tests for determinism, book-scoped IDs, unit lookup, and persistence.
 4. Do not change extraction outputs yet.
+
+## Implementation Progress
+
+- Phase 1 complete in `87a0534`: `BookSourceIndex`, persistence, and `source-index` CLI.
+- Phase 2 complete in `3abe9ac`: book registry viewer from `registry.json` + `source_index.json`.
+- Phase 3 first slice: pipeline now builds/loads the book source index and
+  passes overlapping book-scoped blocks into per-segment extraction. Segments
+  expand to full source-block boundaries so stable `block-*` IDs are not
+  clipped into transient sub-block IDs.

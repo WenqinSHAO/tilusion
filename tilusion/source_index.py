@@ -8,6 +8,7 @@ from typing import Any
 from .backend import sha256_json
 from .book_context import book_cache_dir, stable_book_id
 from .book_reader import BookIndex, StructureUnit, build_book_index, extract_unit_text
+from .reading_schema import SourceBlock
 from .source_blocks import SOURCE_BLOCK_SPLITTER_VERSION, split_source_blocks
 
 BOOK_SOURCE_INDEX_SCHEMA_VERSION = "book-source-index-v0.1"
@@ -158,6 +159,49 @@ def blocks_for_unit(index_data: dict[str, Any], unit_id: str) -> list[dict[str, 
     unit = index_data.get("units", {}).get(unit_id, {})
     refs = unit.get("block_refs", []) if isinstance(unit, dict) else []
     return [block for ref in refs if (block := block_by_id(index_data, ref)) is not None]
+
+
+def blocks_for_unit_range(
+    index_data: dict[str, Any],
+    unit_id: str,
+    start: int,
+    end: int,
+) -> list[dict[str, Any]]:
+    """Return book-source-index blocks in *unit_id* overlapping ``[start, end)``.
+
+    ``start`` and ``end`` are unit-local offsets. The returned blocks are full
+    source-index blocks, not clipped fragments, so callers can expand an LLM
+    segment to stable block boundaries.
+    """
+    result: list[dict[str, Any]] = []
+    for block in blocks_for_unit(index_data, unit_id):
+        block_start = int(block.get("unit_start", block.get("start", 0)))
+        block_end = int(block.get("unit_end", block.get("end", 0)))
+        if block_end > start and block_start < end:
+            result.append(block)
+    return sorted(result, key=lambda b: (int(b.get("unit_start", b.get("start", 0))), b.get("block_id", "")))
+
+
+def source_index_block_to_source_block(block: dict[str, Any]) -> SourceBlock:
+    """Convert one source-index block to the current package SourceBlock shape."""
+    unit_start = int(block.get("unit_start", block.get("start", 0)))
+    unit_end = int(block.get("unit_end", block.get("end", unit_start)))
+    provenance = dict(block.get("provenance", {}))
+    for key in ("source_index_id", "source_index_scope", "book_start", "book_end", "legacy_block_id"):
+        if key in block:
+            provenance[key] = block[key]
+    return SourceBlock(
+        block_id=block.get("block_id", ""),
+        unit_id=block.get("unit_id", ""),
+        segment_id=block.get("segment_id", ""),
+        block_index=int(block.get("block_index", 0)),
+        block_type=block.get("block_type", "paragraph"),
+        start=unit_start,
+        end=unit_end,
+        text=block.get("text", ""),
+        text_hash=block.get("text_hash", ""),
+        provenance=provenance,
+    )
 
 
 def _content_units(index: BookIndex) -> list[StructureUnit]:
