@@ -858,7 +858,28 @@ class TestGroupResolutionPass:
         record = run_cross_unit_group_resolution_pass(
             unit_id="unit-0002",
             concepts=[_make_concept("c-0001", "孔子", "person", source_block_refs=["b1"])],
-            groups=[{"group_id": "g-0001", "group_type": "timeline", "summary": "Timeline."}],
+            groups=[{
+                "group_id": "g-0001",
+                "group_type": "timeline",
+                "summary": "Timeline.",
+                "concept_refs": ["c-0001"],
+                "item_refs": ["item-0001"],
+                "graph": {
+                    "nodes": [{"node_id": "n1", "item_ref": "item-0001", "label": "孔子"}],
+                    "edges": [],
+                },
+            }],
+            atomic_items=[{
+                "item_id": "item-0001",
+                "item_type": "event",
+                "summary": "孔子出现。",
+                "source_block_refs": ["b1"],
+                "concept_refs": ["c-0001"],
+                "temporal_attributes": [],
+                "attributes": {},
+                "uncertainty": [],
+                "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"},
+            }],
             registry_groups=[{
                 "group_id": "book-g-1",
                 "group_type": "timeline",
@@ -874,6 +895,9 @@ class TestGroupResolutionPass:
         assert len(record.data["group_resolution_proposals"]) == 1
         assert record.data["group_resolution_proposals"][0]["registry_group_ref"] == "book-g-1"
         assert record.data["logical_groups"][0]["registry_group_ref"] == "book-g-1"
+        assert record.data["logical_groups"][0]["graph"]["nodes"][0]["item_ref"] == "item-0001"
+        assert record.data["atomic_items"][0]["item_id"] == "item-0001"
+        assert record.validation_report.passed
         assert record.data["agentic_status"] == "complete"
 
 

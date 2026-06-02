@@ -9,7 +9,7 @@ from .backend import LLMBackend, sha256_json
 from .book_registry import BookRegistry
 from .pass_utils import PromptComposition, PromptPart, build_pass_cache_key, load_static_prompt_part
 
-BOOK_DIGEST_PROMPT_VERSION = "book-digest-v0.1"
+BOOK_DIGEST_PROMPT_VERSION = "book-digest-v0.2"
 BOOK_DIGEST_PROMPT_RESOURCE = "prompt_book_digest_v0.1.md"
 
 MAX_ENTITIES_IN_DIGEST = 50

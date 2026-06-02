@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import re
+import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -37,6 +39,7 @@ def _get_embedding_model() -> Any | None:
     if _embedding_model_load_attempted:
         return _embedding_model
     _embedding_model_load_attempted = True
+    start = time.monotonic()
     try:
         from sentence_transformers import SentenceTransformer
 
@@ -44,8 +47,16 @@ def _get_embedding_model() -> Any | None:
             "Qwen/Qwen3-Embedding-0.6B",
             trust_remote_code=True,
         )
-    except Exception:
+        print(
+            f"  [registry-index] embedding model loaded in {int((time.monotonic() - start) * 1000)}ms",
+            file=sys.stderr,
+        )
+    except Exception as exc:
         _embedding_model = None
+        print(
+            f"  [registry-index] embedding model unavailable after {int((time.monotonic() - start) * 1000)}ms: {exc}",
+            file=sys.stderr,
+        )
     return _embedding_model
 
 
@@ -149,6 +160,13 @@ def _build_group_text(cg: CompactGroup) -> str:
     return " ".join(parts)
 
 
+def _trace_preview(text: str, *, limit: int = 96) -> str:
+    compact = " ".join(str(text).split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)] + "..."
+
+
 def _build_unit_group_text(ug: dict[str, Any]) -> str:
     """Build searchable text for a unit group."""
     parts: list[str] = []
@@ -193,70 +211,97 @@ def _dual_signal_select(
     *,
     top_k: int = 20,
 ) -> set[str]:
-    """BM25 + embedding similarity + RRF candidate selection.
-
-    Searches the full registry index for each unit concept using both
-    lexical (BM25) and semantic (Qwen3-Embedding-0.6B) signals, then fuses
-    the rankings with Reciprocal Rank Fusion.
-
-    Degrades gracefully to BM25-only if the embedding model can't be loaded.
-
-    Returns set of registry ``concept_id`` strings.
-    """
+    """BM25 + embedding similarity + RRF candidate selection."""
     if not unit_concepts or not registry_index:
         return set()
 
+    total_start = time.monotonic()
     reg_texts = [_build_concept_text(c) for c in registry_index]
     reg_ids = [c["concept_id"] for c in registry_index]
+    unit_texts = [_build_unit_concept_text(uc) for uc in unit_concepts]
+    print(
+        f"  [registry-index] concept selection: {len(unit_concepts)} queries, {len(registry_index)} registry concepts",
+        file=sys.stderr,
+    )
+
     bm25 = BM25(reg_texts)
     model = _get_embedding_model()
 
-    # Pre-compute registry embeddings once (if model available)
     reg_embeddings = None
+    unit_embeddings = None
+    reg_norms = None
+    unit_norms = None
     if model is not None:
         try:
             import numpy as np
 
+            t0 = time.monotonic()
             reg_embeddings = model.encode(reg_texts, convert_to_numpy=True)
             reg_norms = np.linalg.norm(reg_embeddings, axis=1)
-        except Exception:
+            reg_ms = int((time.monotonic() - t0) * 1000)
+            t0 = time.monotonic()
+            unit_embeddings = model.encode(unit_texts, convert_to_numpy=True)
+            unit_norms = np.linalg.norm(unit_embeddings, axis=1)
+            unit_ms = int((time.monotonic() - t0) * 1000)
+            print(
+                f"  [registry-index] concept embeddings: registry {reg_ms}ms, unit batch {unit_ms}ms",
+                file=sys.stderr,
+            )
+        except Exception as exc:
             reg_embeddings = None
+            unit_embeddings = None
+            print(
+                f"  [registry-index] concept embeddings unavailable: {exc}; using BM25 only",
+                file=sys.stderr,
+            )
 
     candidate_ids: set[str] = set()
-
-    for uc in unit_concepts:
-        uc_text = _build_unit_concept_text(uc)
-
-        # BM25 ranking
+    traced = 0
+    for idx, (uc, uc_text) in enumerate(zip(unit_concepts, unit_texts)):
         bm25_results = bm25.search(uc_text, top_k=top_k)
-        bm25_ranking = [reg_ids[idx] for idx, _ in bm25_results]
+        bm25_ranking = [reg_ids[i] for i, _ in bm25_results]
 
-        # Embedding ranking
         embedding_ranking: list[str] = []
-        if reg_embeddings is not None:
+        if reg_embeddings is not None and unit_embeddings is not None:
             try:
-                uc_emb = model.encode(uc_text, convert_to_numpy=True)
-                uc_norm = float(np.linalg.norm(uc_emb))
-                # Cosine similarity against all registry embeddings
+                import numpy as np
+
+                uc_emb = unit_embeddings[idx]
+                uc_norm = float(unit_norms[idx]) if unit_norms is not None else float(np.linalg.norm(uc_emb))
                 sims = np.dot(reg_embeddings, uc_emb) / (reg_norms * uc_norm + 1e-8)
                 top_indices = np.argsort(sims)[::-1][:top_k]
-                embedding_ranking = [
-                    reg_ids[int(i)]
-                    for i in top_indices
-                    if float(sims[int(i)]) > 0.3
-                ]
-            except Exception:
-                pass
+                embedding_ranking = [reg_ids[int(i)] for i in top_indices if float(sims[int(i)]) > 0.3]
+            except Exception as exc:
+                print(
+                    f"  [registry-index] concept query {uc.get('concept_id', idx)} embedding failed: {exc}",
+                    file=sys.stderr,
+                )
 
-        # RRF fusion
         rankings: list[list[str]] = [bm25_ranking]
         if embedding_ranking:
             rankings.append(embedding_ranking)
 
         fused = _reciprocal_rank_fusion(rankings)
-        for concept_id, _ in fused[:top_k]:
-            candidate_ids.add(concept_id)
+        selected = [concept_id for concept_id, _ in fused[:top_k]]
+        candidate_ids.update(selected)
+        if traced < 20:
+            query = _trace_preview(uc_text, limit=72)
+            print(
+                f"    [registry-index] query {uc.get('concept_id', idx)} {query!r}: "
+                f"bm25={bm25_ranking[:3]} embed={embedding_ranking[:3]} selected={selected[:5]}",
+                file=sys.stderr,
+            )
+            traced += 1
 
+    if len(unit_concepts) > traced:
+        print(
+            f"    [registry-index] ... {len(unit_concepts) - traced} more concept queries omitted",
+            file=sys.stderr,
+        )
+    print(
+        f"  [registry-index] concept selection picked {len(candidate_ids)} candidates in {int((time.monotonic() - total_start) * 1000)}ms",
+        file=sys.stderr,
+    )
     return candidate_ids
 
 
@@ -266,62 +311,89 @@ def _dual_signal_select_groups(
     *,
     top_k: int = 20,
 ) -> set[str]:
-    """BM25 + embedding similarity + RRF for group candidate selection.
-
-    Same dual-signal pattern as ``_dual_signal_select`` for concepts, but
-    operating on ``CompactGroup`` entries.
-    """
+    """BM25 + embedding similarity + RRF for group candidate selection."""
     if not unit_groups or not compact_groups:
         return set()
 
+    total_start = time.monotonic()
     reg_texts = [_build_group_text(cg) for cg in compact_groups]
     reg_ids = [cg.group_id for cg in compact_groups]
+    unit_texts = [_build_unit_group_text(ug) for ug in unit_groups]
+    print(
+        f"  [registry-index] group selection: {len(unit_groups)} queries, {len(compact_groups)} registry groups",
+        file=sys.stderr,
+    )
+
     bm25 = BM25(reg_texts)
     model = _get_embedding_model()
 
     reg_embeddings = None
+    unit_embeddings = None
+    reg_norms = None
+    unit_norms = None
     if model is not None:
         try:
             import numpy as np
 
+            t0 = time.monotonic()
             reg_embeddings = model.encode(reg_texts, convert_to_numpy=True)
             reg_norms = np.linalg.norm(reg_embeddings, axis=1)
-        except Exception:
+            reg_ms = int((time.monotonic() - t0) * 1000)
+            t0 = time.monotonic()
+            unit_embeddings = model.encode(unit_texts, convert_to_numpy=True)
+            unit_norms = np.linalg.norm(unit_embeddings, axis=1)
+            unit_ms = int((time.monotonic() - t0) * 1000)
+            print(
+                f"  [registry-index] group embeddings: registry {reg_ms}ms, unit batch {unit_ms}ms",
+                file=sys.stderr,
+            )
+        except Exception as exc:
             reg_embeddings = None
+            unit_embeddings = None
+            print(
+                f"  [registry-index] group embeddings unavailable: {exc}; using BM25 only",
+                file=sys.stderr,
+            )
 
     candidate_ids: set[str] = set()
-
-    for ug in unit_groups:
-        ug_text = _build_unit_group_text(ug)
-
+    for idx, (ug, ug_text) in enumerate(zip(unit_groups, unit_texts)):
         bm25_results = bm25.search(ug_text, top_k=top_k)
-        bm25_ranking = [reg_ids[idx] for idx, _ in bm25_results]
+        bm25_ranking = [reg_ids[i] for i, _ in bm25_results]
 
         embedding_ranking: list[str] = []
-        if reg_embeddings is not None:
+        if reg_embeddings is not None and unit_embeddings is not None:
             try:
-                ug_emb = model.encode(ug_text, convert_to_numpy=True)
-                ug_norm = float(np.linalg.norm(ug_emb))
-                sims = (
-                    np.dot(reg_embeddings, ug_emb) / (reg_norms * ug_norm + 1e-8)
-                )
+                import numpy as np
+
+                ug_emb = unit_embeddings[idx]
+                ug_norm = float(unit_norms[idx]) if unit_norms is not None else float(np.linalg.norm(ug_emb))
+                sims = np.dot(reg_embeddings, ug_emb) / (reg_norms * ug_norm + 1e-8)
                 top_indices = np.argsort(sims)[::-1][:top_k]
-                embedding_ranking = [
-                    reg_ids[int(i)]
-                    for i in top_indices
-                    if float(sims[int(i)]) > 0.3
-                ]
-            except Exception:
-                pass
+                embedding_ranking = [reg_ids[int(i)] for i in top_indices if float(sims[int(i)]) > 0.3]
+            except Exception as exc:
+                print(
+                    f"  [registry-index] group query {ug.get('group_id', idx)} embedding failed: {exc}",
+                    file=sys.stderr,
+                )
 
         rankings: list[list[str]] = [bm25_ranking]
         if embedding_ranking:
             rankings.append(embedding_ranking)
 
         fused = _reciprocal_rank_fusion(rankings)
-        for group_id, _ in fused[:top_k]:
-            candidate_ids.add(group_id)
+        selected = [group_id for group_id, _ in fused[:top_k]]
+        candidate_ids.update(selected)
+        query = _trace_preview(ug_text, limit=72)
+        print(
+            f"    [registry-index] group query {ug.get('group_id', idx)} {query!r}: "
+            f"bm25={bm25_ranking[:3]} embed={embedding_ranking[:3]} selected={selected[:5]}",
+            file=sys.stderr,
+        )
 
+    print(
+        f"  [registry-index] group selection picked {len(candidate_ids)} candidates in {int((time.monotonic() - total_start) * 1000)}ms",
+        file=sys.stderr,
+    )
     return candidate_ids
 
 

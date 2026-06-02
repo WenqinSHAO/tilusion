@@ -112,6 +112,13 @@ def _log_progress(step: int, total: int, description: str, status: str, elapsed_
     print(f"  [{step}/{total}] {description}: {status} ({elapsed_ms}ms)", file=sys.stderr)
 
 
+def _log_preview(value: Any, *, limit: int = 96) -> str:
+    text = " ".join(str(value).split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
 def _overview_segment_count(overview_data: Any) -> int:
     """Return the raw overview segment count from current or legacy payload keys."""
     if not isinstance(overview_data, dict):
@@ -1454,7 +1461,7 @@ def run_unit_logical_grouping_pass(
             "logical_groups": updated_groups,
             "unresolved_items": all_unresolved,
             "validation": validation_report.to_dict(),
-            "context_metadata": {"context_injection": context is not None},
+            "context_metadata": {"context_injection": bool(context)},
             "metrics": {"counts": {"grouping": grouping_counts}},
         },
         validation_report=validation_report,
@@ -1855,6 +1862,7 @@ def run_cross_unit_group_resolution_pass(
     groups: list[dict[str, Any]],
     registry_groups: list[dict[str, Any]],
     backend: LLMBackend,
+    atomic_items: list[dict[str, Any]] | None = None,
     cache_dir: Path,
     use_cache: bool = True,
     source_blocks: list[dict[str, Any]] | None = None,
@@ -1885,6 +1893,7 @@ def run_cross_unit_group_resolution_pass(
         context=context,
     )
     blocks = source_blocks or []
+    items = atomic_items or []
 
     cache_key = build_pass_cache_key(
         pass_name="cross-unit-group-resolution",
@@ -1913,7 +1922,7 @@ def run_cross_unit_group_resolution_pass(
                 "source": {},
                 "source_blocks": blocks,
                 "concepts": concepts,
-                "atomic_items": [],
+                "atomic_items": items,
                 "logical_groups": ug,
                 "unresolved_items": [],
                 "validation": {},
@@ -1985,6 +1994,7 @@ def run_cross_unit_group_resolution_pass(
             "schema_version": READING_UNIT_SCHEMA_VERSION,
             "unit_id": unit_id,
             "concepts": concepts,
+            "atomic_items": items,
             "logical_groups": updated_groups,
             "group_resolution_proposals": raw_proposals,
             "cross_group_edges": cross_group_edges,
@@ -2349,8 +2359,10 @@ def run_reading_pipeline(
                 hint_str = ""
                 if seg.title:
                     hint_str += f" \"{seg.title}\""
-                if seg_ctx.get("extraction_hints"):
-                    hint_str += f" {len(seg_ctx['extraction_hints'])} hints"
+                hints = seg_ctx.get("extraction_hints") or []
+                if hints:
+                    first_hint = hints[0]
+                    hint_str += f" {len(hints)} hints: {_log_preview(first_hint, limit=88)}"
                 print(
                     f"    [{i + 1}/{len(segments)}] {seg.segment_id}"
                     f"{hint_str}  "
@@ -2512,6 +2524,7 @@ def run_reading_pipeline(
                 unit_id=unit_id,
                 concepts=resolved_concepts,
                 groups=grouping_record.data["logical_groups"],
+                atomic_items=grouping_record.data["atomic_items"],
                 registry_groups=candidate_groups,
                 backend=llm,
                 cache_dir=(cross_unit_cache_root or unit_cache_root) / "group_resolution",
@@ -2565,7 +2578,7 @@ def run_reading_pipeline(
         "unresolved_items": grouping_record.data.get("unresolved_items", []),
         "validation": grouping_record.validation_report.to_dict(),
         "context_metadata": {
-            "context_injection": context is not None,
+            "context_injection": bool(context),
             "source_index_id": source_index_id,
             "source_index_path": str(source_index_path),
             "run_hash": unit_run_hash,
@@ -2594,19 +2607,10 @@ def run_reading_pipeline(
         applied = apply_registry_delta(registry, delta_result)
 
         # ── Post-extraction digest update ──
+        # Keep digest generation on the dedicated digest prompt. Reusing the
+        # grouping conversation drifted language/style and polluted the cache.
         digest_for_next = ""
-        if grouping_record.conversation is not None:
-            previous_digest = context.get("digest", "") if context else ""
-            digest_update_msg = json.dumps(
-                {"task": "update_book_digest", "previous_digest": previous_digest},
-                ensure_ascii=False,
-            )
-            updated_conv = llm.continue_conversation(
-                grouping_record.conversation, digest_update_msg,
-            )
-            digest_response = json.loads(_last_assistant_content(updated_conv))
-            digest_for_next = digest_response.get("digest", "")
-        if not digest_for_next and registry.has_concepts():
+        if registry.has_concepts():
             digest_for_next = build_book_digest(
                 llm,
                 registry,
