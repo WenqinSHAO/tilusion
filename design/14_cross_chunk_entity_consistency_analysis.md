@@ -1,6 +1,36 @@
 # Cross-Chunk Entity Consistency: Problem Analysis
 
-Status: **research / analysis only** — no implementation planned yet.
+Status: **analysis complete** — implementation plan extracted to
+[15_cross_unit_refactor_plan.md](15_cross_unit_refactor_plan.md).
+Four phases: (1) embedding cache, (2) soft typing, (3) richer hints,
+(4) concept-to-higher-order-reference detection.
+
+---% WQ--- 
+
+now we are the phase of synthesize a bit what to do, and organize them properly.
+
+Extraction structure:
+- soft-typing, no backward compatibility needed, still at dev phase
+- concept-to-higer-order-reference, to be done in a way beneficial to grouping
+- all to be co-designed with merging, linking, grouping in-unit and across units
+- lazy embedding calc and reuse, which data structure, should be have a vector DB? to be co-designed with merging against book registry
+
+Extraction behaviour:
+- at per-segment extraction, we could already distinguish a bit the recognition of exisiting concept presence and the extraction of new concepts. If per-segment hint is providing high frequency known concepts already extracted, then the merge could focus more on the "new" concepts
+- concept-to-higer-order-reference, needed for both in-unit and across units, we need metrics counting the presences of such cases; OK not resolved right away, but need detection in first place
+
+Cross-unit merge:
+- soft-typing and canonical concept richness, etc., better deterministic mechanism to minize the amount of concept to be LLM merged in an agentic way
+- LLM backed agentic merge should rather focus on cross-segment/unit concept-to-higer-order-reference (need metrics doing the counting); on cross-unit concept merge that needs semantic inference, where the support on surface, canonical name, alias, soft types are deemed not strong enough but still not impossible
+
+My take on order of implemetation, to be debated:
+- embedding cache or vector store is the infra part, regardless the extraction structure change, it is going to be useful
+- soft typing is something really fundementally changes the structure and merging logics
+- better book digest and hint goes hand in hand with per segement extraction flagging known and new concepts, will need extraction structure change, but could be seen as a label (known or new), not participating in soft type union on merging tests
+- concept-to-higer-order-reference is more of a bonus feature, it could be implemented in a way that we explore a specific kind of graph link between concept and items, which automatically derives a link between the concept containing item with other items
+
+---% WQ--- 
+
 
 ## 1. Cross-Type Concept Identity
 
@@ -100,6 +130,32 @@ This naturally handles all the edge cases our `TYPE_FAMILIES` misses:
 **Cost**: Additional LLM generation (3+ phrases per concept, though can be batched).
 ~150 tokens per concept at extraction time, or done lazily during cross-unit resolution.
 
+Since we extract per-segment (not per-chunk), each concept already has
+surrounding context — the marginal cost of generating facets at extraction
+time is low relative to the extraction call itself.
+
+### Toward deterministic soft-typing
+
+The larger design question: can we turn soft-typing into a deterministic
+merge test that requires **zero additional LLM calls** at merge time?
+The AutoSchemaKG-style approach is to have the *extractor* emit multiple
+type phrases per concept (e.g., "treaty, legal document, historical event").
+At merge time, set intersection replaces the hard TYPE_FAMILIES table.
+The merge test stays deterministic — just a broader identity signal.
+
+Concrete path:
+
+1. **Extraction time**: Add an optional `type_facets: list[str]` field to
+   concepts. The extractor generates 2-5 phrases at different abstraction
+   levels for each concept. Batching means ~0 extra API calls.
+2. **Merge time**: Two concepts are type-compatible if their facet sets
+   intersect (`bool(facets_a & facets_b)`). Replace `_relaxed_types()` and
+   `TYPE_FAMILIES` with this check in `_deterministic_filter` and
+   `_check_merge_boundary`.
+3. **Fallback**: When a concept lacks facets (legacy data or extractor that
+   doesn't emit them), fall back to the current `TYPE_FAMILIES` behavior.
+   This makes the feature incrementally adoptable without a schema migration.
+
 **Simpler variant (no extraction-time change)**: Have the cross-unit resolution LLM
 generate a `type_facets` field in `link` / `reclassify` proposals when merging across
 different types. This gives the merge validator a shared identity signal without changing
@@ -114,6 +170,27 @@ the extraction schema.
    types (not just exact match)?
 4. Should the LLM prompt explicitly instruct: "if you `link` two concepts with different
    types, also emit a `reclassify` to align them"?
+
+### Synthesis: three improvement axes
+
+1. **Better extraction guidance** (book digest, per-segment hints): the
+   extractor needs to distinguish (a) flagging already-known concepts from
+   the registry vs (b) detecting and extracting genuinely new concepts.
+   Current hints are too light for either purpose. Later units should
+   converge toward consistent types, with the ability to refine types
+   established by earlier units.
+
+2. **Concept-to-higher-order-structure references**: the extraction should
+   flag when a concept mention refers to an item, event, or group rather
+   than a standalone entity. Unresolvable references at extraction time
+   become inputs to a later agentic resolution pass with tool access.
+
+3. **Soft typing via type facets** (AutoSchemaKG-inspired): relaxing
+   hard single-type labels to multi-level facet sets generated at
+   extraction time makes the merge test deterministic and LLM-free. The
+   quest: how much can we merge deterministically with facet overlap as
+   the only signal? The fewer concepts need LLM tie-breaking, the faster
+   and cheaper the pipeline.
 
 ---
 
@@ -298,28 +375,112 @@ use hierarchical merging (segment → unit → book), and retrieve candidates vi
 
 ### Promising directions for future work
 
-% WQ: one big issue now is with the cross-unit merge efficiency.
-first, we do a deterministic pass on surface, canonical names, and alias to merge with the book registry as much as possible. for ones with summary difference we leave to LLM to update. So far good.
-Then, the remaining "new" concepts from this unit and without "exact" matches in the book registry, we use hybrid search to look for potential merging, and problem starts. First, hybrid does not make too much of sense, as these are the left-over of deterministic "extact" matches. so only semantic similarity matters here. let's look at the the cost: 1) embedding cost for all concepts in the registry. we should not calculate all on the fly, and the calculation should be cached/saved and reused. only missing ones to be calculated. we don't have the facility for that now. 2) embedding cost of all those left over "new" concepts suspectible to a possible merge; again we should reuse the embedding cost, if they are confirmed to be new and are to be added to the book registry, we don't do this; 3) the cost of the full mesh similarity comput, should be quick if we have a vector DB to help with this, we don't. And the issue is most of the computation above are wasteful. if new concepts, all wasted, apart from the embedding to be saved for later search use. if a new concept turns out to be an old exisiting concept, escaping the deterministic "exact" match test, we should really do better at extraction part, merging part is a last resort and costly, and is also for concept-to-item/group resolution as mentioned above. also current sementic search on registry, agent is composing terrible query: tool search_concepts {'query': '爱花成癖 habit'} -> 10 results ['concept-0133', 'concept-0009', 'concept-0197', 'concept-0134', 'concept-0223'] (142149ms). If with summary or more contextual info, it would be better.
+#### Regarding the gaps table (WQ clarifications)
 
-1. **Two-pass resolution**: forward pass (as now) + backward pass (re-resolve unit 1-10
-   entities against units 11-20 entities as registry). Catches long-range identity missed
-   by sequential processing.
+- **Global entity graph**: The agentic search over the registry already
+  handles long-range identity — the LLM can search for entities from any
+  prior unit. Sequential processing is not a limitation when the agent can
+  `search_concepts` across the full registry.
+- **Cross-document event coreference**: The real gap is lack of first-class
+  support for concepts referring to items/groups/higher-order structures.
+  Extraction should at least flag such mentions. With local visibility the
+  extractor may or may not resolve them; if not, agentic search should
+  back the linkage. This is critical for group forming and cross-unit
+  grouping.
+- **Entity memory / world model**: The per-segment hint was supposed to
+  serve as a book-level world model but currently gives too-light hints.
+  Two distinct needs: (a) flagging presence of already-known concepts
+  (for grouping and avoiding re-extraction), (b) detecting and extracting
+  genuinely new concepts. Both are needed and the current hints serve
+  neither well.
+- **Order-independence**: Cross-unit merge against the registry already
+  addresses this — it merges summaries, updates aliases, and can update
+  canonical names when needed.
+- **Coreference-aware chunking**: Segmentation was designed to alleviate
+  chunk-boundary issues. The extraction phase should additionally flag
+  unresolved higher-order references for later inference/resolution.
 
-2. **Entity memory for extraction**: give the extractor a compact entity memory of
-   already-extracted concepts within the same unit. Reduces within-unit duplicates.
+#### Cross-unit merge efficiency (the main bottleneck)
 
-3. **Storyline / event threading**: track events (not just entities) across chunks.
-   "Battle of XYZ" mentioned in chapters 3, 7, 12 is the same event with accumulating
-   detail.
+The current flow per unit: deterministic exact match → dual-signal
+(BM25 + embedding + RRF) on leftovers → agentic LLM with tool calls.
 
-4. **Soft canonicalization**: instead of the first-seen concept becoming canonical,
-   maintain a "richness score" and promote later, better-described concepts as canonical
-   when they provide more information (full name, dates, relationships).
+From the unit-0003 run (~240 concepts, ~260 registry concepts):
 
-5. **Graph-based global reconciliation**: after all units are processed, run a batch
-   clustering pass over the full concept graph to catch sequential-order artifacts.
-   Can use the same LLM infrastructure but with global context.
+| Step | Time | Note |
+|------|------|------|
+| Embedding model load | 10s | Once per run |
+| Registry embeddings | **140s** | Full registry re-embedded every unit |
+| Unit embeddings | **115s** | 235 leftover unit concepts embedded |
+| BM25 + cosine compute | 35ms | Actual retrieval (negligible) |
+| Agentic search_concepts | **~2,300s** | 44 tool calls at ~140-180s each |
+| **Total for step 2+3** | **~44 min** | For 240 concepts |
+
+The actual retrieval computation (BM25: 11ms, cosine: 24ms) is trivial.
+The cost is entirely in embedding computation and agentic LLM calls.
+235 of 240 concepts were flagged "new" — >97% of embedding compute
+produced no merge, i.e., was wasted.
+
+**Why BM25 is wasteful for leftovers**: After deterministic exact match
+eliminates surface/cname/alias collisions, the remaining concepts have
+no lexical overlap with any registry entry. BM25 — a lexical retriever
+— returns noise. Only embedding similarity matters at this stage.
+
+**Why agent search queries are poor**: The agent mixes Chinese surfaces
+with English glosses (`search_concepts {'query': '爱花成癖 habit'}`),
+diluting signal. A concept's full summary is far more discriminative
+than its 1-line surface. The agent should be instructed to use the
+most selective fields.
+
+**Three immediate efficiency fixes**:
+
+1. **Cache registry embeddings** — re-embedded every unit, 140s wasted
+   each time. Key by `(concept_id, content_hash)`. After first unit,
+   only new concepts need embedding (near-zero cost).
+2. **Reuse unit concept embeddings** — after a concept is confirmed new
+   and added to the registry, save its already-computed embedding.
+3. **Drop BM25 for deterministic-filter leftovers** — after exact match
+   eliminates lexical collisions, BM25 is pure noise. Use embedding-only
+   retrieval with a similarity threshold.
+
+**Where the fix should really go**: Semantic merge is a last resort.
+The fewer concepts escape deterministic matching, the less the
+embedding/agentic pipeline matters. The real improvement comes from:
+- Better extraction (richer per-segment hints, entity memory within
+  a unit, flagging known vs. new)
+- Broader deterministic matching (alias-aware, type-facets)
+- Agentic search used only for genuinely hard cases, not for every
+  concept that misses a surface match
+
+1. **Embedding cache** (near-term): persist registry and unit concept embeddings to
+   disk keyed by `(concept_id, content_hash)`. After the first unit, only net-new
+   concepts incur embedding cost. Biggest single efficiency win (~250s → ~0s).
+
+2. **Richer per-segment hints** (extraction-time): the current segment hints are too
+   light to guide the extractor. Two improvements: (a) explicitly list which registry
+   concepts have appeared in nearby segments so the extractor can flag them as
+   "already known" rather than re-extracting, (b) mark concepts that refer to
+   higher-order structures (items/groups/events) as unresolved pointers to be
+   resolved later via agentic search.
+
+3. **Concept-to-item/group reference resolution**: extraction should flag when a
+   concept mention refers to an item, event, or group rather than a standalone
+   entity. At extraction time, the LLM has local visibility and may or may not
+   resolve the reference. When unresolvable locally, the flagged reference becomes
+   an input to a later agentic resolution pass with tool access to the registry.
+
+4. **Type facets at extraction** (AutoSchemaKG-inspired): add an optional
+   `type_facets: list[str]` field to concepts, generated by the extractor at
+   extraction time (2-5 phrases at varying abstraction levels). At merge time, type
+   compatibility becomes facet set intersection — no hard `TYPE_FAMILIES` table,
+   no extra LLM calls. Legacy concepts without facets fall back to the current
+   `TYPE_FAMILIES` behavior.
+
+5. **Soft canonicalization**: maintain a "richness score" per concept and promote
+   later, better-described concepts as canonical when they provide more information
+   (full name, dates, relationships). The current merge path already supports this
+   via `changes` on link proposals — the gap is that the system doesn't
+   automatically detect when a later concept is richer.
 
 ---
 

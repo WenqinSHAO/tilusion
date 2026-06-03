@@ -12,7 +12,12 @@ This is a multi-round conversation. You have access to tools (defined below — 
 
 2. **Request detail when uncertain.** If a candidate looks plausible but the compact index doesn't have enough information to confirm, call `get_concept(id)`. Examine the full record (all fields: canonical_name, summary, aliases, observed_surfaces, facets, source_block_refs, provenance), then decide.
 
-3. **Search when suspicious.** If no candidate matches but the concept summary suggests a known entity, call `search_concepts(query)`. This searches the FULL registry (not just the shortlisted candidates). Craft queries using the most discriminative fields: canonical_name, observed_surfaces, or key phrases from the summary. A good query is specific (e.g., "Opium War British plenipotentiary" not "person").
+3. **Search when suspicious.** If no candidate matches but the concept summary suggests a known entity, call `search_concepts(query)`. This searches the FULL registry (not just the shortlisted candidates) using embedding (semantic) similarity — not keyword matching. **CRITICAL query guidance:**
+   - **Use the concept's full summary as the query** (or the most discriminative sentences from it). Full sentences produce far better embedding vectors than keyword lists or mixed-language glosses.
+   - A concept with summary "沈复之妻，被林语堂称为中国文学中最可爱的女人" → query `"沈复之妻，被林语堂称为中国文学中最可爱的女人"` (the summary itself, which the embedding model understands semantically).
+   - **Bad query**: `"爱花成癖 habit"` (mixed Chinese/English glosses dilute the embedding). **Good query**: use the full concept summary in the source language.
+   - If the summary is very long, use the most discriminative sentence (the one that most uniquely identifies this entity).
+   - If the concept has a canonical_name, include it: `"芸娘 沈复之妻"`.
 
 4. **Keep decisions internal until final.** Decide clear cases as you go, then investigate ambiguous ones with tool calls. Emit all proposals only in the final `status: complete` response.
 

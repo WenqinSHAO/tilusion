@@ -230,10 +230,16 @@ def _handle_search_concepts(
     if not query or not registry.has_concepts():
         return []
 
-    from .registry_index import BM25, _build_concept_text, _get_embedding_model
+    from .registry_index import (
+        BM25,
+        _build_concept_text,
+        _get_embedding_cache,
+        _get_embedding_model,
+        build_registry_index,
+    )
 
-    concepts = registry.list_concepts()
-    reg_index = _concepts_to_compact(concepts)
+    # Use build_registry_index (same as _dual_signal_select) so cache keys match
+    reg_index = build_registry_index(registry)
     reg_texts = [_build_concept_text(c) for c in reg_index]
     reg_ids = [c["concept_id"] for c in reg_index]
 
@@ -243,8 +249,20 @@ def _handle_search_concepts(
         try:
             import numpy as np
 
+            # Query embedding: always fresh (one text, fast)
             query_emb = model.encode(query, convert_to_numpy=True)
-            reg_embeddings = model.encode(reg_texts, convert_to_numpy=True)
+
+            # Registry embeddings: use cache
+            cache = _get_embedding_cache()
+            reg_hits, reg_misses = cache.batch_get(reg_texts)
+            if reg_misses:
+                miss_texts = [reg_texts[i] for i in reg_misses]
+                miss_embs = model.encode(miss_texts, convert_to_numpy=True)
+                for i, emb in zip(reg_misses, miss_embs):
+                    cache.put(cache.key_for(reg_texts[i]), emb)
+                    reg_hits[i] = emb
+            reg_embeddings = np.stack([reg_hits[i] for i in range(len(reg_texts))])
+
             reg_norms = np.linalg.norm(reg_embeddings, axis=1)
             query_norm = float(np.linalg.norm(query_emb))
             sims = (
@@ -288,6 +306,7 @@ def _handle_search_groups(
     from .registry_index import (  # noqa: F811
         BM25,
         _build_group_text,
+        _get_embedding_cache,
         _get_embedding_model,
         build_group_index,
     )
@@ -303,8 +322,20 @@ def _handle_search_groups(
         try:
             import numpy as np
 
+            # Query embedding: always fresh
             query_emb = model.encode(query, convert_to_numpy=True)
-            reg_embeddings = model.encode(reg_texts, convert_to_numpy=True)
+
+            # Registry group embeddings: use cache
+            cache = _get_embedding_cache()
+            reg_hits, reg_misses = cache.batch_get(reg_texts)
+            if reg_misses:
+                miss_texts = [reg_texts[i] for i in reg_misses]
+                miss_embs = model.encode(miss_texts, convert_to_numpy=True)
+                for i, emb in zip(reg_misses, miss_embs):
+                    cache.put(cache.key_for(reg_texts[i]), emb)
+                    reg_hits[i] = emb
+            reg_embeddings = np.stack([reg_hits[i] for i in range(len(reg_texts))])
+
             reg_norms = np.linalg.norm(reg_embeddings, axis=1)
             query_norm = float(np.linalg.norm(query_emb))
             sims = (

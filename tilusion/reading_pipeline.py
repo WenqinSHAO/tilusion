@@ -71,6 +71,7 @@ from .book_digest import build_book_digest, make_context_dict
 from .book_registry import BookRegistry
 from .registry_index import (
     build_registry_index,
+    init_embedding_cache,
     select_concept_candidates,
     select_group_candidates,
 )
@@ -2335,6 +2336,7 @@ def run_reading_pipeline(
     if scope == "book":
         registry = BookRegistry.load_or_init(book_path, cache_root=cache_base)
         registry.ensure_source_index_id(source_index_id)
+        init_embedding_cache(registry.embedding_cache_dir)
         registry_digest_dir = registry.cache_dir
         registry_head_commit = registry.head_commit_hash()
         digest = _load_cached_digest(registry_digest_dir)

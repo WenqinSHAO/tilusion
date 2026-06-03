@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .book_registry import BookRegistry
@@ -58,6 +60,93 @@ def _get_embedding_model() -> Any | None:
             file=sys.stderr,
         )
     return _embedding_model
+
+
+# ── Embedding cache (two-layer: memory + disk) ─────────────────────────────
+
+_mem_embeddings: dict[str, Any] = {}
+"""In-memory cache: survives across tool calls within a single pipeline run."""
+
+_embedding_cache: EmbeddingCache | None = None  # forward reference, defined below
+
+
+class EmbeddingCache:
+    """Two-layer embedding cache: memory (fast) + disk (persistent).
+
+    Keys are ``sha256(text)`` hex digests. The in-memory layer is checked
+    first; disk is checked on miss; ``model.encode()`` is needed only when
+    both layers miss.
+
+    Parameters:
+        cache_dir: Directory for ``.npy`` files. When ``None``, only the
+                   in-memory layer is used (disk persistence disabled).
+    """
+
+    def __init__(self, cache_dir: str | Path | None = None) -> None:
+        self._cache_dir = Path(cache_dir) if cache_dir else None
+
+    @staticmethod
+    def key_for(text: str) -> str:
+        """Return a stable cache key for *text* (sha256 hex digest)."""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def get(self, key: str) -> Any | None:
+        """Return cached embedding for *key*, or ``None`` on miss."""
+        arr = _mem_embeddings.get(key)
+        if arr is not None:
+            return arr
+        if self._cache_dir is not None:
+            path = self._cache_dir / f"{key}.npy"
+            if path.exists():
+                import numpy as np
+
+                arr = np.load(path)
+                _mem_embeddings[key] = arr  # promote to memory
+                return arr
+        return None
+
+    def put(self, key: str, embedding: Any) -> None:
+        """Store *embedding* in both memory and disk layers."""
+        _mem_embeddings[key] = embedding
+        if self._cache_dir is not None:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            import numpy as np
+
+            np.save(str(self._cache_dir / f"{key}.npy"), embedding)
+
+    def batch_get(
+        self, texts: list[str]
+    ) -> tuple[dict[int, Any], list[int]]:
+        """Return ``{index: embedding}`` for cache hits and list of miss indices.
+
+        The caller is responsible for encoding only the miss indices, then
+        calling :meth:`put` for each newly-computed embedding.
+        """
+        hits: dict[int, Any] = {}
+        misses: list[int] = []
+        for i, text in enumerate(texts):
+            key = self.key_for(text)
+            emb = self.get(key)
+            if emb is not None:
+                hits[i] = emb
+            else:
+                misses.append(i)
+        return hits, misses
+
+
+def _get_embedding_cache(cache_dir: str | Path | None = None) -> EmbeddingCache:
+    """Return the module-level ``EmbeddingCache`` singleton, creating it on first call."""
+    global _embedding_cache
+    if _embedding_cache is None:
+        _embedding_cache = EmbeddingCache(cache_dir)
+    return _embedding_cache
+
+
+def init_embedding_cache(cache_dir: str | Path | None) -> EmbeddingCache:
+    """Initialize (or re-initialize) the module-level embedding cache with *cache_dir*."""
+    global _embedding_cache
+    _embedding_cache = EmbeddingCache(cache_dir)
+    return _embedding_cache
 
 
 # ── BM25 ───────────────────────────────────────────────────────────────────
@@ -271,24 +360,58 @@ def _dual_signal_select(
     unit_embeddings = None
     reg_norms = None
     unit_norms = None
+    cache_hit_reg = 0
+    cache_hit_unit = 0
     if model is not None:
         try:
             import numpy as np
 
+            cache = _get_embedding_cache()
+
+            # ── Registry embeddings with cache ──────────────────────────
             t0 = time.monotonic()
-            reg_embeddings = model.encode(reg_texts, convert_to_numpy=True)
+            reg_hits, reg_misses = cache.batch_get(reg_texts)
+            cache_hit_reg = len(reg_hits)
+            if reg_misses:
+                miss_texts = [reg_texts[i] for i in reg_misses]
+                miss_embs = model.encode(miss_texts, convert_to_numpy=True)
+                for i, emb in zip(reg_misses, miss_embs):
+                    cache.put(cache.key_for(reg_texts[i]), emb)
+                    reg_hits[i] = emb
+            reg_embeddings = np.stack([reg_hits[i] for i in range(len(reg_texts))])
             reg_norms = np.linalg.norm(reg_embeddings, axis=1)
             reg_ms = int((time.monotonic() - t0) * 1000)
+
+            # ── Unit embeddings with cache ──────────────────────────────
             t0 = time.monotonic()
-            unit_embeddings = model.encode(unit_texts, convert_to_numpy=True)
+            unit_hits, unit_misses = cache.batch_get(unit_texts)
+            cache_hit_unit = len(unit_hits)
+            if unit_misses:
+                miss_texts = [unit_texts[i] for i in unit_misses]
+                miss_embs = model.encode(miss_texts, convert_to_numpy=True)
+                for i, emb in zip(unit_misses, miss_embs):
+                    cache.put(cache.key_for(unit_texts[i]), emb)
+                    unit_hits[i] = emb
+            unit_embeddings = np.stack([unit_hits[i] for i in range(len(unit_texts))])
             unit_norms = np.linalg.norm(unit_embeddings, axis=1)
             unit_ms = int((time.monotonic() - t0) * 1000)
+
             print(
-                f"  [registry-index] concept embeddings: registry {reg_ms}ms, unit batch {unit_ms}ms",
+                f"  [registry-index] concept embeddings: registry {reg_ms}ms "
+                f"(cache {cache_hit_reg}/{len(reg_texts)} hits), "
+                f"unit {unit_ms}ms (cache {cache_hit_unit}/{len(unit_texts)} hits)",
                 file=sys.stderr,
             )
             if trace is not None:
-                trace["embedding"] = {"available": True, "registry_ms": reg_ms, "unit_batch_ms": unit_ms}
+                trace["embedding"] = {
+                    "available": True,
+                    "registry_ms": reg_ms,
+                    "unit_batch_ms": unit_ms,
+                    "registry_cache_hits": cache_hit_reg,
+                    "registry_total": len(reg_texts),
+                    "unit_cache_hits": cache_hit_unit,
+                    "unit_total": len(unit_texts),
+                }
         except Exception as exc:
             reg_embeddings = None
             unit_embeddings = None
@@ -305,6 +428,14 @@ def _dual_signal_select(
     candidate_ids: set[str] = set()
     traced = 0
     for idx, (uc, uc_text) in enumerate(zip(unit_concepts, unit_texts)):
+        # Type-family filter mask for this concept (used by both BM25 and embedding)
+        allowed_indices: set[int] | None = None
+        if type_filter:
+            uc_type = normalize_concept_type(uc.get("concept_type", ""))
+            allowed = type_mask.get(uc_type)
+            if allowed is not None:
+                allowed_indices = set(allowed)
+
         # --- BM25 ---
         t_bm25 = time.monotonic()
         bm25_results = bm25.search(uc_text, top_k=top_k)
@@ -314,14 +445,6 @@ def _dual_signal_select(
             {"id": reg_ids[i], "score": round(float(score), 6)}
             for i, score in bm25_results[:top_k]
         ]
-
-        # Type-family filter mask for this concept
-        allowed_indices: set[int] | None = None
-        if type_filter:
-            uc_type = normalize_concept_type(uc.get("concept_type", ""))
-            allowed = type_mask.get(uc_type)
-            if allowed is not None:
-                allowed_indices = set(allowed)
 
         # Filter BM25 results
         if allowed_indices is not None:
@@ -459,24 +582,58 @@ def _dual_signal_select_groups(
     unit_embeddings = None
     reg_norms = None
     unit_norms = None
+    cache_hit_reg = 0
+    cache_hit_unit = 0
     if model is not None:
         try:
             import numpy as np
 
+            cache = _get_embedding_cache()
+
+            # ── Registry group embeddings with cache ─────────────────────
             t0 = time.monotonic()
-            reg_embeddings = model.encode(reg_texts, convert_to_numpy=True)
+            reg_hits, reg_misses = cache.batch_get(reg_texts)
+            cache_hit_reg = len(reg_hits)
+            if reg_misses:
+                miss_texts = [reg_texts[i] for i in reg_misses]
+                miss_embs = model.encode(miss_texts, convert_to_numpy=True)
+                for i, emb in zip(reg_misses, miss_embs):
+                    cache.put(cache.key_for(reg_texts[i]), emb)
+                    reg_hits[i] = emb
+            reg_embeddings = np.stack([reg_hits[i] for i in range(len(reg_texts))])
             reg_norms = np.linalg.norm(reg_embeddings, axis=1)
             reg_ms = int((time.monotonic() - t0) * 1000)
+
+            # ── Unit group embeddings with cache ─────────────────────────
             t0 = time.monotonic()
-            unit_embeddings = model.encode(unit_texts, convert_to_numpy=True)
+            unit_hits, unit_misses = cache.batch_get(unit_texts)
+            cache_hit_unit = len(unit_hits)
+            if unit_misses:
+                miss_texts = [unit_texts[i] for i in unit_misses]
+                miss_embs = model.encode(miss_texts, convert_to_numpy=True)
+                for i, emb in zip(unit_misses, miss_embs):
+                    cache.put(cache.key_for(unit_texts[i]), emb)
+                    unit_hits[i] = emb
+            unit_embeddings = np.stack([unit_hits[i] for i in range(len(unit_texts))])
             unit_norms = np.linalg.norm(unit_embeddings, axis=1)
             unit_ms = int((time.monotonic() - t0) * 1000)
+
             print(
-                f"  [registry-index] group embeddings: registry {reg_ms}ms, unit batch {unit_ms}ms",
+                f"  [registry-index] group embeddings: registry {reg_ms}ms "
+                f"(cache {cache_hit_reg}/{len(reg_texts)} hits), "
+                f"unit {unit_ms}ms (cache {cache_hit_unit}/{len(unit_texts)} hits)",
                 file=sys.stderr,
             )
             if trace is not None:
-                trace["embedding"] = {"available": True, "registry_ms": reg_ms, "unit_batch_ms": unit_ms}
+                trace["embedding"] = {
+                    "available": True,
+                    "registry_ms": reg_ms,
+                    "unit_batch_ms": unit_ms,
+                    "registry_cache_hits": cache_hit_reg,
+                    "registry_total": len(reg_texts),
+                    "unit_cache_hits": cache_hit_unit,
+                    "unit_total": len(unit_texts),
+                }
         except Exception as exc:
             reg_embeddings = None
             unit_embeddings = None
