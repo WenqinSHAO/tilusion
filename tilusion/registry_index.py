@@ -211,10 +211,11 @@ def _dual_signal_select(
     *,
     top_k: int = 20,
     type_filter: bool = False,
+    trace: dict[str, Any] | None = None,
 ) -> set[str]:
     """BM25 + embedding similarity + RRF candidate selection.
 
-    When *type_filter* is True (default), restricts each query to registry
+    When *type_filter* is True, restricts each query to registry
     concepts in the same type family, avoiding meaningless cross-type
     comparisons and reducing noise in the candidate set.
     """
@@ -231,6 +232,15 @@ def _dual_signal_select(
         f"{len(registry_index)} registry concepts ({filter_label}dual-signal)",
         file=sys.stderr,
     )
+    if trace is not None:
+        trace.update({
+            "kind": "concept_dual_signal",
+            "query_count": len(unit_concepts),
+            "registry_count": len(registry_index),
+            "top_k": top_k,
+            "type_filter": type_filter,
+            "queries": [],
+        })
 
     # Pre-compute type-family masks for each unique unit concept type
     type_mask: dict[str, list[int]] = {}
@@ -271,6 +281,8 @@ def _dual_signal_select(
                 f"  [registry-index] concept embeddings: registry {reg_ms}ms, unit batch {unit_ms}ms",
                 file=sys.stderr,
             )
+            if trace is not None:
+                trace["embedding"] = {"available": True, "registry_ms": reg_ms, "unit_batch_ms": unit_ms}
         except Exception as exc:
             reg_embeddings = None
             unit_embeddings = None
@@ -278,6 +290,8 @@ def _dual_signal_select(
                 f"  [registry-index] concept embeddings unavailable: {exc}; using BM25 only",
                 file=sys.stderr,
             )
+            if trace is not None:
+                trace["embedding"] = {"available": False, "error": str(exc)}
 
     # ── Per-concept query loop ────────────────────────────────────────────
     bm25_total_ms = 0
@@ -289,6 +303,11 @@ def _dual_signal_select(
         t_bm25 = time.monotonic()
         bm25_results = bm25.search(uc_text, top_k=top_k)
         bm25_total_ms += (time.monotonic() - t_bm25) * 1000
+
+        bm25_top = [
+            {"id": reg_ids[i], "score": round(float(score), 6)}
+            for i, score in bm25_results[:top_k]
+        ]
 
         # Type-family filter mask for this concept
         allowed_indices: set[int] | None = None
@@ -306,6 +325,7 @@ def _dual_signal_select(
 
         # --- Embedding similarity ---
         embedding_ranking: list[str] = []
+        embedding_top: list[dict[str, Any]] = []
         if reg_embeddings is not None and unit_embeddings is not None:
             try:
                 import numpy as np
@@ -326,12 +346,20 @@ def _dual_signal_select(
                         reg_ids[subset_indices[int(i)]]
                         for i in top_local if float(sims[int(i)]) > 0.3
                     ]
+                    embedding_top = [
+                        {"id": reg_ids[subset_indices[int(i)]], "score": round(float(sims[int(i)]), 6)}
+                        for i in top_local if float(sims[int(i)]) > 0.3
+                    ]
                 else:
                     # Full comparison
                     sims = np.dot(reg_embeddings, uc_emb) / (reg_norms * uc_norm + 1e-8)
                     top_indices = np.argsort(sims)[::-1][:top_k]
                     embedding_ranking = [
                         reg_ids[int(i)] for i in top_indices if float(sims[int(i)]) > 0.3
+                    ]
+                    embedding_top = [
+                        {"id": reg_ids[int(i)], "score": round(float(sims[int(i)]), 6)}
+                        for i in top_indices if float(sims[int(i)]) > 0.3
                     ]
                 cosine_total_ms += (time.monotonic() - t_cos) * 1000
             except Exception as exc:
@@ -347,8 +375,20 @@ def _dual_signal_select(
         fused = _reciprocal_rank_fusion(rankings)
         selected = [concept_id for concept_id, _ in fused[:top_k]]
         candidate_ids.update(selected)
+        query = _trace_preview(uc_text, limit=72)
+        if trace is not None:
+            trace.setdefault("queries", []).append({
+                "unit_concept_id": uc.get("concept_id", ""),
+                "surface": uc.get("surface", ""),
+                "concept_type": uc.get("concept_type", ""),
+                "query": query,
+                "allowed_registry_count": len(allowed_indices) if allowed_indices is not None else len(registry_index),
+                "bm25_top": bm25_top[:10],
+                "bm25_filtered_top": bm25_ranking[:10],
+                "embedding_top": embedding_top[:10],
+                "selected": selected[:top_k],
+            })
         if traced < 20:
-            query = _trace_preview(uc_text, limit=72)
             print(
                 f"    [registry-index] query {uc.get('concept_id', idx)} {query!r}: "
                 f"bm25={bm25_ranking[:3]} embed={embedding_ranking[:3]} selected={selected[:5]}",
@@ -364,9 +404,15 @@ def _dual_signal_select(
     timing_parts = [f"bm25={int(bm25_total_ms)}ms"]
     if reg_embeddings is not None:
         timing_parts.append(f"cosine={int(cosine_total_ms)}ms")
+    elapsed_ms = int((time.monotonic() - total_start) * 1000)
+    if trace is not None:
+        trace["selected_candidate_ids"] = sorted(candidate_ids)
+        trace["timings_ms"] = {"total": elapsed_ms, "bm25": int(bm25_total_ms)}
+        if reg_embeddings is not None:
+            trace["timings_ms"]["cosine"] = int(cosine_total_ms)
     print(
         f"  [registry-index] concept selection picked {len(candidate_ids)} candidates "
-        f"in {int((time.monotonic() - total_start) * 1000)}ms ({' '.join(timing_parts)})",
+        f"in {elapsed_ms}ms ({' '.join(timing_parts)})",
         file=sys.stderr,
     )
     return candidate_ids
@@ -377,6 +423,7 @@ def _dual_signal_select_groups(
     compact_groups: list[CompactGroup],
     *,
     top_k: int = 20,
+    trace: dict[str, Any] | None = None,
 ) -> set[str]:
     """BM25 + embedding similarity + RRF for group candidate selection."""
     if not unit_groups or not compact_groups:
@@ -390,6 +437,14 @@ def _dual_signal_select_groups(
         f"  [registry-index] group selection: {len(unit_groups)} queries, {len(compact_groups)} registry groups",
         file=sys.stderr,
     )
+    if trace is not None:
+        trace.update({
+            "kind": "group_dual_signal",
+            "query_count": len(unit_groups),
+            "registry_count": len(compact_groups),
+            "top_k": top_k,
+            "queries": [],
+        })
 
     bm25 = BM25(reg_texts)
     model = _get_embedding_model()
@@ -414,6 +469,8 @@ def _dual_signal_select_groups(
                 f"  [registry-index] group embeddings: registry {reg_ms}ms, unit batch {unit_ms}ms",
                 file=sys.stderr,
             )
+            if trace is not None:
+                trace["embedding"] = {"available": True, "registry_ms": reg_ms, "unit_batch_ms": unit_ms}
         except Exception as exc:
             reg_embeddings = None
             unit_embeddings = None
@@ -421,13 +478,20 @@ def _dual_signal_select_groups(
                 f"  [registry-index] group embeddings unavailable: {exc}; using BM25 only",
                 file=sys.stderr,
             )
+            if trace is not None:
+                trace["embedding"] = {"available": False, "error": str(exc)}
 
     candidate_ids: set[str] = set()
     for idx, (ug, ug_text) in enumerate(zip(unit_groups, unit_texts)):
         bm25_results = bm25.search(ug_text, top_k=top_k)
         bm25_ranking = [reg_ids[i] for i, _ in bm25_results]
+        bm25_top = [
+            {"id": reg_ids[i], "score": round(float(score), 6)}
+            for i, score in bm25_results[:top_k]
+        ]
 
         embedding_ranking: list[str] = []
+        embedding_top: list[dict[str, Any]] = []
         if reg_embeddings is not None and unit_embeddings is not None:
             try:
                 import numpy as np
@@ -437,6 +501,10 @@ def _dual_signal_select_groups(
                 sims = np.dot(reg_embeddings, ug_emb) / (reg_norms * ug_norm + 1e-8)
                 top_indices = np.argsort(sims)[::-1][:top_k]
                 embedding_ranking = [reg_ids[int(i)] for i in top_indices if float(sims[int(i)]) > 0.3]
+                embedding_top = [
+                    {"id": reg_ids[int(i)], "score": round(float(sims[int(i)]), 6)}
+                    for i in top_indices if float(sims[int(i)]) > 0.3
+                ]
             except Exception as exc:
                 print(
                     f"  [registry-index] group query {ug.get('group_id', idx)} embedding failed: {exc}",
@@ -451,14 +519,27 @@ def _dual_signal_select_groups(
         selected = [group_id for group_id, _ in fused[:top_k]]
         candidate_ids.update(selected)
         query = _trace_preview(ug_text, limit=72)
+        if trace is not None:
+            trace.setdefault("queries", []).append({
+                "unit_group_id": ug.get("group_id", ""),
+                "group_type": ug.get("group_type", ""),
+                "query": query,
+                "bm25_top": bm25_top[:10],
+                "embedding_top": embedding_top[:10],
+                "selected": selected[:top_k],
+            })
         print(
             f"    [registry-index] group query {ug.get('group_id', idx)} {query!r}: "
             f"bm25={bm25_ranking[:3]} embed={embedding_ranking[:3]} selected={selected[:5]}",
             file=sys.stderr,
         )
 
+    elapsed_ms = int((time.monotonic() - total_start) * 1000)
+    if trace is not None:
+        trace["selected_candidate_ids"] = sorted(candidate_ids)
+        trace["timings_ms"] = {"total": elapsed_ms}
     print(
-        f"  [registry-index] group selection picked {len(candidate_ids)} candidates in {int((time.monotonic() - total_start) * 1000)}ms",
+        f"  [registry-index] group selection picked {len(candidate_ids)} candidates in {elapsed_ms}ms",
         file=sys.stderr,
     )
     return candidate_ids
@@ -597,6 +678,7 @@ def build_group_index(registry: BookRegistry) -> list[CompactGroup]:
 def select_concept_candidates(
     unit_concepts: list[dict[str, Any]],
     registry_index: list[dict[str, Any]],
+    trace: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Select candidate registry concepts for LLM concept resolution.
 
@@ -613,16 +695,34 @@ def select_concept_candidates(
     The two candidate sets are unioned so neither pathway misses
     valid matches.
     """
+    if trace is not None:
+        trace.update({
+            "kind": "concept_candidate_selection",
+            "unit_concept_count": len(unit_concepts),
+            "registry_concept_count": len(registry_index),
+            "small_registry_passthrough": False,
+        })
     if not registry_index or not unit_concepts:
+        if trace is not None:
+            trace["selected_candidate_ids"] = [r.get("concept_id", "") for r in registry_index]
         return registry_index
 
     if len(registry_index) <= 50:
+        if trace is not None:
+            trace["small_registry_passthrough"] = True
+            trace["selected_candidate_ids"] = [r.get("concept_id", "") for r in registry_index]
         return registry_index
 
     # Deterministic pre-filter: surface collision + type family.
     # Also returns which unit concepts already found candidates so we can
     # skip expensive dual-signal retrieval for them.
     det_ids, matched_unit_ids = _deterministic_filter(unit_concepts, registry_index)
+    if trace is not None:
+        trace["deterministic"] = {
+            "candidate_ids": sorted(det_ids),
+            "matched_unit_concept_ids": sorted(matched_unit_ids),
+            "matched_unit_count": len(matched_unit_ids),
+        }
 
     # Only run dual-signal (BM25 + embedding) for concepts that the
     # deterministic filter found NOTHING for.
@@ -634,7 +734,10 @@ def select_concept_candidates(
             f"running dual-signal on {len(unmatched)} unmatched",
             file=sys.stderr,
         )
-        dual_ids = _dual_signal_select(unmatched, registry_index, type_filter=False)
+        dual_trace: dict[str, Any] = {}
+        dual_ids = _dual_signal_select(unmatched, registry_index, type_filter=True, trace=dual_trace)
+        if trace is not None:
+            trace["dual_signal"] = dual_trace
     else:
         print(
             f"  [registry-index] deterministic filter: all {len(matched_unit_ids)}/{len(unit_concepts)} concepts matched; "
@@ -643,6 +746,9 @@ def select_concept_candidates(
         )
 
     all_ids = det_ids | dual_ids
+    if trace is not None:
+        trace["selected_candidate_ids"] = sorted(all_ids)
+        trace["selected_candidate_count"] = len(all_ids)
 
     if not all_ids:
         return []
@@ -654,6 +760,7 @@ def select_group_candidates(
     unit_groups: list[dict[str, Any]],
     registry_groups: list[dict[str, Any]],
     resolved_concepts: list[dict[str, Any]],
+    trace: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Pre-filter registry groups by concept overlap + dual-signal retrieval.
 
@@ -661,10 +768,22 @@ def select_group_candidates(
     registry has >50 groups, also applies BM25 + embedding + RRF dual-signal
     retrieval for semantic matches without concept overlap.
     """
+    if trace is not None:
+        trace.update({
+            "kind": "group_candidate_selection",
+            "unit_group_count": len(unit_groups),
+            "registry_group_count": len(registry_groups),
+            "small_registry_passthrough": False,
+        })
     if not registry_groups or not unit_groups:
+        if trace is not None:
+            trace["selected_candidate_ids"] = [g.get("group_id", "") for g in registry_groups]
         return registry_groups
 
     if len(registry_groups) <= 50:
+        if trace is not None:
+            trace["small_registry_passthrough"] = True
+            trace["selected_candidate_ids"] = [g.get("group_id", "") for g in registry_groups]
         return registry_groups
 
     # Collect registry concept IDs that unit groups reference (via resolution)
@@ -696,16 +815,29 @@ def select_group_candidates(
         )
         for rg in registry_groups
     ]
-    dual_ids = _dual_signal_select_groups(unit_groups, compact_groups)
+    dual_trace: dict[str, Any] = {}
+    dual_ids = _dual_signal_select_groups(unit_groups, compact_groups, trace=dual_trace)
+    if trace is not None:
+        trace["concept_overlap_candidate_ids"] = sorted(overlap_ids)
+        trace["dual_signal"] = dual_trace
 
     all_ids = overlap_ids | dual_ids
+
+    if trace is not None:
+        trace["selected_candidate_ids"] = sorted(all_ids)
+        trace["selected_candidate_count"] = len(all_ids)
 
     if not all_ids:
         # Fallback: return groups matching by type
         unit_group_types = {g.get("group_type", "") for g in unit_groups}
-        return [
+        fallback = [
             rg for rg in registry_groups
             if rg.get("group_type", "") in unit_group_types
         ]
+        if trace is not None:
+            trace["fallback"] = "group_type"
+            trace["selected_candidate_ids"] = [g.get("group_id", "") for g in fallback]
+            trace["selected_candidate_count"] = len(fallback)
+        return fallback
 
     return [rg for rg in registry_groups if rg["group_id"] in all_ids]

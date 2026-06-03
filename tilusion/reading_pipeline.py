@@ -206,6 +206,7 @@ class ReadingPassRecord:
     validation_report: ReadingValidationReport
     artifact_paths: dict[str, str]
     conversation: Any | None = None
+    pre_fallback_conversation: Any | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -266,6 +267,8 @@ class AgenticResolutionResult:
     exhausted: bool = False
     fallback_used: bool = False
     failure_reason: str = ""
+    agentic_trace: dict[str, Any] | None = None
+    pre_fallback_conversation: Any | None = None
 
 
 # ── Mock response functions ──────────────────────────────────────────────────
@@ -1487,6 +1490,53 @@ def run_unit_logical_grouping_pass(
 # ── Agentic resolution pass (multi-round with tool calling) ────────────────
 
 
+def _summarize_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {"tool": result.get("tool", "")}
+    if result.get("error"):
+        summary["error"] = result.get("error")
+        return summary
+    payload = result.get("result")
+    if isinstance(payload, list):
+        summary["result_count"] = len(payload)
+        ids: list[str] = []
+        scores: list[Any] = []
+        methods: list[str] = []
+        for item in payload[:10]:
+            if isinstance(item, dict):
+                ids.append(str(item.get("concept_id") or item.get("group_id") or item.get("block_id") or ""))
+                if "_match_score" in item:
+                    scores.append(item.get("_match_score"))
+                if item.get("_match_method"):
+                    methods.append(str(item.get("_match_method")))
+        summary["result_ids"] = [item_id for item_id in ids if item_id]
+        if scores:
+            summary["top_scores"] = scores[:5]
+        if methods:
+            summary["methods"] = sorted(set(methods))
+    elif isinstance(payload, dict):
+        summary["result_id"] = str(payload.get("concept_id") or payload.get("group_id") or payload.get("block_id") or "")
+        summary["result_keys"] = sorted(str(k) for k in payload.keys())[:12]
+    elif isinstance(payload, str):
+        summary["result_chars"] = len(payload)
+    elif payload is None:
+        summary["result"] = None
+    else:
+        summary["result_type"] = type(payload).__name__
+    return summary
+
+
+def _summarize_agentic_response(data: dict[str, Any], proposal_key: str) -> dict[str, Any]:
+    proposals = data.get(proposal_key, [])
+    tool_calls = data.get("tool_calls", [])
+    return {
+        "status": data.get("status", ""),
+        "tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+        "proposal_count": len(proposals) if isinstance(proposals, list) else 0,
+        "warning_count": len(data.get("warnings", [])) if isinstance(data.get("warnings", []), list) else 0,
+        "keys": sorted(str(k) for k in data.keys()),
+    }
+
+
 def _resolution_proposal_key(payload: dict[str, Any]) -> str:
     task = payload.get("task", "")
     if task == "cross_unit_group_resolution":
@@ -1517,6 +1567,8 @@ def _run_resolution_fallback(
     validation_subject_builder: Any,
     pass_name: str,
     failure_reason: str,
+    agentic_trace: dict[str, Any] | None = None,
+    pre_fallback_conversation: Any | None = None,
 ) -> AgenticResolutionResult:
     from .repair import run_agentic_pass
 
@@ -1538,6 +1590,8 @@ def _run_resolution_fallback(
         turns_used=1,
         fallback_used=True,
         failure_reason=failure_reason,
+        agentic_trace=agentic_trace,
+        pre_fallback_conversation=pre_fallback_conversation,
     )
 
 
@@ -1556,6 +1610,14 @@ def run_agentic_resolution_pass(
     from .registry_tools import execute_tool_call
 
     proposal_key = _resolution_proposal_key(payload)
+    trace: dict[str, Any] = {
+        "pass_name": pass_name,
+        "proposal_key": proposal_key,
+        "max_turns": max_turns,
+        "turns": [],
+        "fallback_used": False,
+        "failure_reason": "",
+    }
 
     conversation = backend.start_conversation(
         system_prompt=prompt.content,
@@ -1564,14 +1626,43 @@ def run_agentic_resolution_pass(
     )
     assistant_response = _last_assistant_content(conversation)
     data = parse_json_response(assistant_response)
+    trace["turns"].append({
+        "turn_index": 1,
+        "assistant": _summarize_agentic_response(data, proposal_key),
+    })
 
     tool_calls = data.get("tool_calls", [])
     turn_count = 1
     while tool_calls and turn_count < max_turns:
         tool_results: list[dict[str, Any]] = []
+        tool_trace: list[dict[str, Any]] = []
+        print(
+            f"  {pass_name}: agentic turn {turn_count} requested {len(tool_calls)} tool call(s)",
+            file=sys.stderr,
+        )
         for tc in tool_calls:
+            action = tc.get("action", "") if isinstance(tc, dict) else ""
+            args = tc.get("args", {}) if isinstance(tc, dict) else {}
+            t_tool = time.monotonic()
             result = execute_tool_call(tc, tool_context)
+            elapsed_ms = _elapsed_ms(t_tool)
             tool_results.append(result)
+            summary = _summarize_tool_result(result)
+            summary.update({"action": action, "args": args, "elapsed_ms": elapsed_ms})
+            tool_trace.append(summary)
+            if summary.get("error"):
+                detail = f"error={summary['error']}"
+            elif "result_count" in summary:
+                detail = f"{summary['result_count']} results {summary.get('result_ids', [])[:5]}"
+            elif summary.get("result_id"):
+                detail = f"result={summary['result_id']}"
+            else:
+                detail = f"result_keys={summary.get('result_keys', [])}"
+            print(
+                f"    tool {action} {args} -> {detail} ({elapsed_ms}ms)",
+                file=sys.stderr,
+            )
+        trace["turns"][-1]["tool_calls"] = tool_trace
 
         tool_msg = json.dumps(
             {
@@ -1586,6 +1677,10 @@ def run_agentic_resolution_pass(
 
         try:
             data = parse_json_response(assistant_response)
+            trace["turns"].append({
+                "turn_index": turn_count + 1,
+                "assistant": _summarize_agentic_response(data, proposal_key),
+            })
         except Exception as exc:
             reason = f"turn {turn_count + 1} response unparseable: {exc}"
             print(f"  {pass_name}: {reason}", file=sys.stderr)
@@ -1597,6 +1692,8 @@ def run_agentic_resolution_pass(
                     validation_subject_builder=validation_subject_builder,
                     pass_name=pass_name,
                     failure_reason=reason,
+                    agentic_trace={**trace, "fallback_used": True, "failure_reason": reason},
+                    pre_fallback_conversation=conversation,
                 )
             applied_subject = validation_subject_builder({})
             report = validate_extraction_unit_package(applied_subject)
@@ -1607,6 +1704,7 @@ def run_agentic_resolution_pass(
                 validation_report=report,
                 turns_used=turn_count + 1,
                 failure_reason=reason,
+                agentic_trace={**trace, "failure_reason": reason},
             )
 
         tool_calls = data.get("tool_calls", [])
@@ -1629,8 +1727,14 @@ def run_agentic_resolution_pass(
                 validation_subject_builder=validation_subject_builder,
                 pass_name=pass_name,
                 failure_reason=reason,
+                agentic_trace={**trace, "fallback_used": True, "failure_reason": reason},
+                pre_fallback_conversation=conversation,
             )
             result.exhausted = exhausted
+            if result.agentic_trace is not None:
+                result.agentic_trace["fallback_used"] = True
+                result.agentic_trace["failure_reason"] = reason
+                result.agentic_trace["exhausted"] = exhausted
             return result
         applied_subject = validation_subject_builder(data)
         report = validate_extraction_unit_package(applied_subject)
@@ -1642,6 +1746,7 @@ def run_agentic_resolution_pass(
             turns_used=turn_count,
             exhausted=exhausted,
             failure_reason=reason,
+            agentic_trace={**trace, "failure_reason": reason},
         )
 
     applied_subject = validation_subject_builder(data)
@@ -1653,6 +1758,7 @@ def run_agentic_resolution_pass(
             conversation=conversation,
             validation_report=report,
             turns_used=turn_count,
+            agentic_trace={**trace, "turns_used": turn_count},
         )
 
     reason = "agentic final response failed validation"
@@ -1665,6 +1771,8 @@ def run_agentic_resolution_pass(
             validation_subject_builder=validation_subject_builder,
             pass_name=pass_name,
             failure_reason=reason,
+            agentic_trace={**trace, "fallback_used": True, "failure_reason": reason},
+            pre_fallback_conversation=conversation,
         )
     return AgenticResolutionResult(
         raw_data=data,
@@ -1673,6 +1781,7 @@ def run_agentic_resolution_pass(
         validation_report=report,
         turns_used=turn_count,
         failure_reason=reason,
+        agentic_trace={**trace, "failure_reason": reason},
     )
 
 
@@ -1691,6 +1800,7 @@ def run_cross_unit_concept_resolution_pass(
     source_blocks: list[dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
     registry: Any | None = None,  # BookRegistry for agentic tool execution
+    selection_trace: dict[str, Any] | None = None,
 ) -> ReadingPassRecord:
     """Run cross-unit concept identity resolution (Conversation D).
 
@@ -1778,6 +1888,8 @@ def run_cross_unit_concept_resolution_pass(
             agentic_status = "fallback" if result.fallback_used else "complete"
             agentic_turns_used = result.turns_used
             agentic_failure_reason = result.failure_reason
+            agentic_trace = result.agentic_trace or {}
+            pre_fallback_conversation = result.pre_fallback_conversation
         else:
             data, conversation, validation_report = run_agentic_pass(
                 backend=backend,
@@ -1831,10 +1943,13 @@ def run_cross_unit_concept_resolution_pass(
             "agentic_status": locals().get("agentic_status", "cache_hit" if cache_hit else "not_used"),
             "agentic_turns_used": locals().get("agentic_turns_used", 0),
             "agentic_failure_reason": locals().get("agentic_failure_reason", ""),
+            "agentic_trace": locals().get("agentic_trace", data.get("agentic_trace", {})),
+            "selection_trace": selection_trace or data.get("selection_trace", {}),
         },
         validation_report=validation_report if not cache_hit else ReadingValidationReport(True, 0, 0, 0, []),
         artifact_paths=paths,
         conversation=locals().get("conversation"),
+        pre_fallback_conversation=locals().get("pre_fallback_conversation"),
     )
 
     if use_cache:
@@ -1868,6 +1983,7 @@ def run_cross_unit_group_resolution_pass(
     source_blocks: list[dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
     registry: Any | None = None,  # BookRegistry for agentic tool execution
+    selection_trace: dict[str, Any] | None = None,
 ) -> ReadingPassRecord:
     """Run cross-unit group resolution (Conversation E).
 
@@ -1957,6 +2073,8 @@ def run_cross_unit_group_resolution_pass(
             agentic_status = "fallback" if result.fallback_used else "complete"
             agentic_turns_used = result.turns_used
             agentic_failure_reason = result.failure_reason
+            agentic_trace = result.agentic_trace or {}
+            pre_fallback_conversation = result.pre_fallback_conversation
         else:
             data, conversation, validation_report = run_agentic_pass(
                 backend=backend,
@@ -2002,10 +2120,13 @@ def run_cross_unit_group_resolution_pass(
             "agentic_status": locals().get("agentic_status", "cache_hit" if cache_hit else "not_used"),
             "agentic_turns_used": locals().get("agentic_turns_used", 0),
             "agentic_failure_reason": locals().get("agentic_failure_reason", ""),
+            "agentic_trace": locals().get("agentic_trace", data.get("agentic_trace", {})),
+            "selection_trace": selection_trace or data.get("selection_trace", {}),
         },
         validation_report=validation_report if not cache_hit else ReadingValidationReport(True, 0, 0, 0, []),
         artifact_paths=paths,
         conversation=locals().get("conversation"),
+        pre_fallback_conversation=locals().get("pre_fallback_conversation"),
     )
 
     if use_cache:
@@ -2426,8 +2547,9 @@ def run_reading_pipeline(
         t0 = time.monotonic()
         try:
             reg_index = build_registry_index(registry)
+            concept_selection_trace: dict[str, Any] = {}
             candidate_index = select_concept_candidates(
-                stabilized["concepts"], reg_index,
+                stabilized["concepts"], reg_index, trace=concept_selection_trace,
             )
             concept_resolution_record = run_cross_unit_concept_resolution_pass(
                 unit_id=unit_id,
@@ -2440,6 +2562,7 @@ def run_reading_pipeline(
                 source_blocks=stabilized.get("source_blocks", []),
                 context=None,
                 registry=registry,
+                selection_trace=concept_selection_trace,
             )
             pass_summaries["cross_unit_concept_resolution"] = {
                 "cache_key": concept_resolution_record.cache_key,
@@ -2515,10 +2638,12 @@ def run_reading_pipeline(
         t0 = time.monotonic()
         try:
             registry_groups_list = list(registry._groups.values())
+            group_selection_trace: dict[str, Any] = {}
             candidate_groups = select_group_candidates(
                 grouping_record.data["logical_groups"],
                 registry_groups_list,
                 resolved_concepts,
+                trace=group_selection_trace,
             )
             group_resolution_record = run_cross_unit_group_resolution_pass(
                 unit_id=unit_id,
@@ -2532,6 +2657,7 @@ def run_reading_pipeline(
                 source_blocks=stabilized.get("source_blocks", []),
                 context=None,
                 registry=registry,
+                selection_trace=group_selection_trace,
             )
             pass_summaries["cross_unit_group_resolution"] = {
                 "cache_key": group_resolution_record.cache_key,
@@ -2763,10 +2889,26 @@ def _write_reading_pass_artifacts(
         json.dumps(validation_report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
     )
     Path(paths["validated_result"]).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if paths.get("selection_trace") and data.get("selection_trace"):
+        Path(paths["selection_trace"]).write_text(
+            json.dumps(data.get("selection_trace", {}), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    if paths.get("agentic_trace") and data.get("agentic_trace"):
+        Path(paths["agentic_trace"]).write_text(
+            json.dumps(data.get("agentic_trace", {}), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     Path(paths["manifest"]).write_text(record.to_json(), encoding="utf-8")
     if record.conversation is not None and hasattr(record.conversation, "to_dict"):
         Path(paths["conversation"]).write_text(
             json.dumps(record.conversation.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    if (
+        paths.get("pre_fallback_conversation")
+        and record.pre_fallback_conversation is not None
+        and hasattr(record.pre_fallback_conversation, "to_dict")
+    ):
+        Path(paths["pre_fallback_conversation"]).write_text(
+            json.dumps(record.pre_fallback_conversation.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
 

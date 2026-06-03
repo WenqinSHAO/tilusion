@@ -491,6 +491,12 @@ class TestAgenticResolutionPass:
         assert result.validation_report.passed
         assert result.raw_data["resolution_proposals"] == []
         assert result.turns_used == 2
+        assert result.agentic_trace is not None
+        assert result.agentic_trace["turns"][0]["assistant"]["tool_call_count"] == 1
+        tool_trace = result.agentic_trace["turns"][0]["tool_calls"][0]
+        assert tool_trace["action"] == "get_concept"
+        assert "Concept 'bc-1' not found" in tool_trace["error"]
+        assert "elapsed_ms" in tool_trace
 
     def test_max_turns_exhausted_fallback(self, registry, tmp_path):
         """When max_turns reached, falls back to single-pass."""
@@ -544,6 +550,9 @@ class TestAgenticResolutionPass:
         assert result.exhausted
         assert "max turns exhausted" in result.failure_reason
         assert "tool_calls" in result.raw_data
+        assert result.agentic_trace is not None
+        assert result.agentic_trace["fallback_used"] is False
+        assert "max turns exhausted" in result.agentic_trace["failure_reason"]
 
 
 # ── BookRegistry helpers ─────────────────────────────────────────────────────

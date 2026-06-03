@@ -251,9 +251,13 @@ def _handle_search_concepts(
                 np.dot(reg_embeddings, query_emb) / (reg_norms * query_norm + 1e-8)
             )
             top_indices = np.argsort(sims)[::-1][:top_k]
-            results = [
-                reg_index[int(i)] for i in top_indices if float(sims[int(i)]) > 0.3
-            ]
+            results = []
+            for i in top_indices:
+                if float(sims[int(i)]) > 0.3:
+                    item = dict(reg_index[int(i)])
+                    item["_match_score"] = round(float(sims[int(i)]), 6)
+                    item["_match_method"] = "embedding"
+                    results.append(item)
             return results
         except Exception:
             pass
@@ -261,7 +265,13 @@ def _handle_search_concepts(
     # Fallback to BM25
     bm25 = BM25(reg_texts)
     bm25_results = bm25.search(query, top_k=top_k)
-    return [reg_index[idx] for idx, _ in bm25_results]
+    results = []
+    for idx, score in bm25_results:
+        item = dict(reg_index[idx])
+        item["_match_score"] = round(float(score), 6)
+        item["_match_method"] = "bm25"
+        results.append(item)
+    return results
 
 
 def _handle_search_groups(
@@ -306,7 +316,10 @@ def _handle_search_groups(
                     match_id = reg_ids[int(i)]
                     reg_group = registry.get_group(match_id)
                     if reg_group:
-                        results.append(reg_group)
+                        item = dict(reg_group)
+                        item["_match_score"] = round(float(sims[int(i)]), 6)
+                        item["_match_method"] = "embedding"
+                        results.append(item)
             if results:
                 return results
         except Exception:
@@ -314,11 +327,14 @@ def _handle_search_groups(
 
     bm25 = BM25(reg_texts)
     bm25_results = bm25.search(query, top_k=top_k)
-    for idx, _ in bm25_results:
+    for idx, score in bm25_results:
         match_id = reg_ids[idx]
         reg_group = registry.get_group(match_id)
         if reg_group:
-            results.append(reg_group)
+            item = dict(reg_group)
+            item["_match_score"] = round(float(score), 6)
+            item["_match_method"] = "bm25"
+            results.append(item)
     return results
 
 

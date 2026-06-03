@@ -389,8 +389,12 @@ class TestSelectConceptCandidatesWithDualSignal:
         ))
         unit = [_make_concept("c-0001", "the old man", "other",
                               summary="Elderly narrator reflecting on his past life and travels")]
-        candidates = select_concept_candidates(unit, reg)
+        trace = {}
+        candidates = select_concept_candidates(unit, reg, trace=trace)
         assert any(c["concept_id"] == "b-shenfu" for c in candidates)
+        assert trace["kind"] == "concept_candidate_selection"
+        assert trace["dual_signal"]["type_filter"] is True
+        assert trace["selected_candidate_count"] == len(trace["selected_candidate_ids"])
 
     def test_deterministic_and_dual_signal_union(self) -> None:
         """Deterministic finds surface match, dual-signal finds semantic match.
@@ -451,8 +455,11 @@ class TestSelectGroupCandidates:
             {"concept_id": "c-0001", "registry_ref": "book-concept-0001"},
         ]
         unit_groups = [{"group_id": "ug-1", "group_type": "timeline", "concept_refs": ["c-0001"]}]
-        candidates = select_group_candidates(unit_groups, reg_groups, resolved_concepts)
+        trace = {}
+        candidates = select_group_candidates(unit_groups, reg_groups, resolved_concepts, trace=trace)
         assert any(c["group_id"] == "rg-match" for c in candidates)
+        assert trace["kind"] == "group_candidate_selection"
+        assert "rg-match" in trace["selected_candidate_ids"]
 
 
 # ── TestApplyConceptResolution ────────────────────────────────────────────────
