@@ -2,8 +2,9 @@
 
 Status: **analysis complete** — implementation plan extracted to
 [15_cross_unit_refactor_plan.md](15_cross_unit_refactor_plan.md).
-Four phases: (1) embedding cache, (2) soft typing, (3) richer hints,
-(4) concept-to-higher-order-reference detection.
+Five phases: (1) text-hash embedding cache, (1.5) per-concept candidate
+maps, (2) identity-gated soft typing, (3) richer hints, and (4)
+concept-to-higher-order-reference detection.
 
 ---% WQ--- 
 
@@ -30,6 +31,26 @@ My take on order of implemetation, to be debated:
 - concept-to-higer-order-reference is more of a bonus feature, it could be implemented in a way that we explore a specific kind of graph link between concept and items, which automatically derives a link between the concept containing item with other items
 
 ---% WQ--- 
+
+### Review synthesis after unit-0003 traces
+
+- The embedding-cache implementation should stay content-addressed by
+  searchable text hash. This is simpler than `(concept_id, content_hash)` and
+  automatically reuses unit concept vectors once the same text becomes a
+  registry concept.
+- BM25 should stay as a cheap secondary lexical signal. The observed waste was
+  embedding recomputation and an unstructured flat candidate union, not BM25
+  itself.
+- Add a Phase 1.5 candidate-map refactor. The LLM needs
+  `unit_concept_id -> local candidate ids + scores + methods`, while the flat
+  `registry_index` should only be the record table for those ids.
+- Soft typing must be identity-gated. Shared facets can relax a hard type
+  mismatch only when there is already a name/surface/alias/canonical identity
+  signal. Facet overlap alone should never make a merge safe.
+- Source block ids are stable book-level evidence, but prior registry concepts
+  reference prior blocks. Segment hints therefore need normalized matching
+  against canonical names, aliases, and observed surfaces in the current
+  segment text, not just `source_block_refs` reverse lookup.
 
 
 ## 1. Cross-Type Concept Identity
@@ -115,11 +136,15 @@ TYPE_FAMILIES = {
 
 We could have each concept carry a **facet set** — a lightweight set of type-describing
 phrases generated at extraction time (or by the cross-unit LLM during resolution).
-Type compatibility becomes:
+Type compatibility becomes a set-overlap check, but only for candidate
+selection and type relaxation:
 
 ```python
 def types_compatible(unit_concept, registry_concept) -> bool:
-    return bool(unit_concept.facets & registry_concept.facets)  # set intersection
+    return bool(unit_concept.facets & registry_concept.facets)  # type evidence
+
+def can_cross_type_merge(unit_concept, registry_concept) -> bool:
+    return identity_signal(unit_concept, registry_concept) and types_compatible(unit_concept, registry_concept)
 ```
 
 This naturally handles all the edge cases our `TYPE_FAMILIES` misses:
@@ -141,7 +166,8 @@ merge test that requires **zero additional LLM calls** at merge time?
 The AutoSchemaKG-style approach is to have the *extractor* emit multiple
 type phrases per concept (e.g., "treaty, legal document, historical event").
 At merge time, set intersection replaces the hard TYPE_FAMILIES table.
-The merge test stays deterministic — just a broader identity signal.
+The merge test stays deterministic, but facets are not identity by themselves;
+they only make a type mismatch acceptable once an identity signal exists.
 
 Concrete path:
 
@@ -149,9 +175,10 @@ Concrete path:
    concepts. The extractor generates 2-5 phrases at different abstraction
    levels for each concept. Batching means ~0 extra API calls.
 2. **Merge time**: Two concepts are type-compatible if their facet sets
-   intersect (`bool(facets_a & facets_b)`). Replace `_relaxed_types()` and
-   `TYPE_FAMILIES` with this check in `_deterministic_filter` and
-   `_check_merge_boundary`.
+   intersect (`bool(facets_a & facets_b)`). Use this in candidate selection
+   and merge-boundary type checks, but require a separate identity signal
+   such as shared canonical name, alias, observed surface, or normalized
+   surface before accepting a cross-type merge.
 3. **Fallback**: When a concept lacks facets (legacy data or extractor that
    doesn't emit them), fall back to the current `TYPE_FAMILIES` behavior.
    This makes the feature incrementally adoptable without a schema migration.
@@ -421,10 +448,12 @@ The cost is entirely in embedding computation and agentic LLM calls.
 235 of 240 concepts were flagged "new" — >97% of embedding compute
 produced no merge, i.e., was wasted.
 
-**Why BM25 is wasteful for leftovers**: After deterministic exact match
-eliminates surface/cname/alias collisions, the remaining concepts have
-no lexical overlap with any registry entry. BM25 — a lexical retriever
-— returns noise. Only embedding similarity matters at this stage.
+**Why the flat retrieval union is wasteful**: After deterministic exact match
+eliminates easy surface/cname/alias collisions, many remaining concepts still
+need semantic help. BM25 is cheap and can catch partial lexical overlap, but
+the selected candidates must remain attached to the unit concept that produced
+them. A flat union of 229 candidates for 235 unmatched concepts is almost the
+whole registry and leaves the LLM to reconstruct the retrieval structure.
 
 **Why agent search queries are poor**: The agent mixes Chinese surfaces
 with English glosses (`search_concepts {'query': '爱花成癖 habit'}`),
@@ -434,14 +463,16 @@ most selective fields.
 
 **Three immediate efficiency fixes**:
 
-1. **Cache registry embeddings** — re-embedded every unit, 140s wasted
-   each time. Key by `(concept_id, content_hash)`. After first unit,
-   only new concepts need embedding (near-zero cost).
-2. **Reuse unit concept embeddings** — after a concept is confirmed new
-   and added to the registry, save its already-computed embedding.
-3. **Drop BM25 for deterministic-filter leftovers** — after exact match
-   eliminates lexical collisions, BM25 is pure noise. Use embedding-only
-   retrieval with a similarity threshold.
+1. **Cache embeddings by searchable text hash** — registry and unit texts
+   should not be re-encoded every unit or every tool call. Text-hash keys also
+   reuse a unit concept's embedding when the same text becomes a registry
+   concept.
+2. **Expose per-concept candidate maps** — keep `unit_concept_id -> candidate
+   ids + scores + methods` in traces and LLM payloads. The flat `registry_index`
+   should be a compact record table, not the agent's main navigation structure.
+3. **Keep BM25 but bound it** — BM25 is nearly free and still useful as a
+   lexical signal. The fix is not deleting BM25; it is capping per-concept
+   rows and preserving candidate provenance.
 
 **Where the fix should really go**: Semantic merge is a last resort.
 The fewer concepts escape deterministic matching, the less the
@@ -453,8 +484,12 @@ embedding/agentic pipeline matters. The real improvement comes from:
   concept that misses a surface match
 
 1. **Embedding cache** (near-term): persist registry and unit concept embeddings to
-   disk keyed by `(concept_id, content_hash)`. After the first unit, only net-new
-   concepts incur embedding cost. Biggest single efficiency win (~250s → ~0s).
+   disk keyed by searchable text hash. After the first unit, unchanged texts incur
+   no embedding cost. Biggest single efficiency win (~250s -> ~0s).
+
+1.5. **Per-concept candidate maps**: preserve retrieval provenance in the LLM
+   payload so each unit concept is judged against its local shortlist before the
+   agent falls back to registry search.
 
 2. **Richer per-segment hints** (extraction-time): the current segment hints are too
    light to guide the extractor. Two improvements: (a) explicitly list which registry
@@ -471,10 +506,10 @@ embedding/agentic pipeline matters. The real improvement comes from:
 
 4. **Type facets at extraction** (AutoSchemaKG-inspired): add an optional
    `type_facets: list[str]` field to concepts, generated by the extractor at
-   extraction time (2-5 phrases at varying abstraction levels). At merge time, type
-   compatibility becomes facet set intersection — no hard `TYPE_FAMILIES` table,
-   no extra LLM calls. Legacy concepts without facets fall back to the current
-   `TYPE_FAMILIES` behavior.
+   extraction time (2-5 phrases at varying abstraction levels). At merge time,
+   type compatibility becomes facet set intersection, but cross-type merge still
+   requires a separate identity signal across cname, alias, or surface. Legacy
+   concepts without facets fall back to the current `TYPE_FAMILIES` behavior.
 
 5. **Soft canonicalization**: maintain a "richness score" per concept and promote
    later, better-described concepts as canonical when they provide more information

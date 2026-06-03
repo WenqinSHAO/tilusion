@@ -1,17 +1,21 @@
 # Cross-Unit Entity Consistency: Refactoring & Implementation Plan
 
-Status: **plan** — derived from analysis in `14_cross_chunk_entity_consistency_analysis.md`.
+Status: **plan + partial implementation** — derived from analysis in
+`14_cross_chunk_entity_consistency_analysis.md`. Phase 1's embedding cache
+has been implemented with text-hash cache keys; Phase 1.5 is the next
+retrieval-shape refactor.
 
 ## Overview
 
-Four implementation phases, in dependency order. Each phase builds on the
+Five implementation phases, in dependency order. Each phase builds on the
 previous and produces independently mergeable, testable increments.
 
 | # | Phase | Est. scope | Depends on |
 |---|-------|------------|------------|
 | 1 | Embedding cache | ~250 lines | None |
-| 2 | Soft typing (type facets) | ~400 lines | None (independent of Phase 1) |
-| 3 | Richer book digest & per-segment hints | ~350 lines | Phase 1, Phase 2 |
+| 1.5 | Per-concept candidate maps | ~180 lines | Phase 1 |
+| 2 | Soft typing (identity-gated type facets) | ~400 lines | None (independent of Phase 1) |
+| 3 | Richer book digest & per-segment hints | ~350 lines | Phase 1.5, Phase 2 |
 | 4 | Concept-to-higher-order-reference | ~250 lines | Phase 3 |
 
 ### What we reuse and improve
@@ -29,6 +33,33 @@ previous and produces independently mergeable, testable increments.
 - **Semantic search**: `_dual_signal_select()` in `registry_index.py` —
   we add embedding caching so repeated calls reuse pre-computed vectors,
   eliminating the dominant cost of re-encoding.
+
+### Review decisions after unit-0003 traces
+
+- **Embedding cache shape**: use a content-addressed text hash, not
+  `(concept_id, content_hash)`. The same searchable text should reuse the
+  same embedding across registry concepts, unit concepts, and search-tool
+  queries. `init_embedding_cache(registry.embedding_cache_dir)` wires this
+  once per book-scope pipeline run.
+- **No explicit unit-vector handoff through `registry_delta`**: when a new
+  unit concept is later indexed as a registry concept, it reuses the same
+  text-hash cache entry. We do not need to plumb embedding arrays through
+  registry delta application.
+- **Keep BM25**: BM25 is cheap and still catches partial lexical overlap.
+  The trace problem was not BM25 cost; it was embedding recomputation and
+  passing a nearly flat candidate union to the LLM.
+- **Candidate maps before more prompt work**: selection must produce a
+  per-unit-concept candidate map. A flat union of 229 registry concepts for
+  235 unmatched unit concepts is effectively the full registry and gives
+  the agent too little structure.
+- **Soft typing is not identity**: facet overlap may relax a hard-type
+  mismatch only after an identity signal exists across canonical name,
+  alias, observed surface, normalized surface, or equivalent name evidence.
+  Facet overlap alone must not authorize a merge.
+- **Source-block lookups are evidence, not enough memory**: prior registry
+  concepts cite prior source blocks, while a new unit cites new source
+  blocks. Segment hints therefore need lexical/name matching against the
+  segment text in addition to any `source_block_refs` reverse index.
 
 ---
 
@@ -95,58 +126,56 @@ registry + unit texts, embeddings stay in module-level dicts. Subsequent
 memory directly — no re-encoding. This is the critical path: turn 6's
 9 calls all share the same embeddings.
 
-Layer 2 — **disk** (persistent): Keyed by `(concept_id, sha256(text))`.
-Survives across pipeline runs. When a new unit starts, the registry's
-existing concepts all hit disk (no re-encoding), and only net-new concepts
-added by the previous unit need fresh embeddings.
+Layer 2 — **disk** (persistent): Keyed by `sha256(searchable_text)`.
+Survives across pipeline runs. The key is intentionally independent of
+`concept_id`: the same searchable text produced as a unit concept, registry
+concept, or search query should reuse one embedding.
 
 **How**:
 - New class `EmbeddingCache` in `registry_index.py`:
   ```python
   class EmbeddingCache:
       def __init__(self, cache_dir: Path): ...
-      def get(self, key: str) -> np.ndarray | None: ...
-      def put(self, key: str, embedding: np.ndarray) -> None: ...
-      def key_for(self, concept_id: str, text: str) -> str: ...
+      def batch_get(self, texts: list[str]) -> tuple[dict[int, np.ndarray], list[int]]: ...
+      def put_many(self, texts: list[str], embeddings: np.ndarray) -> None: ...
   ```
 - Cache directory: `<registry_cache_dir>/embeddings/` — alongside
   `registry.json` in the git-backed cache.
-- Add module-level in-memory cache in `registry_index.py`:
-  ```python
-  _reg_embeddings_cache: dict[str, np.ndarray] = {}
-  _unit_embeddings_cache: dict[str, np.ndarray] = {}
-  ```
+- Add module-level in-memory cache keyed by text hash, plus
+  `init_embedding_cache(registry.embedding_cache_dir)` at the start of a
+  book-scope pipeline run.
 - Modify `_dual_signal_select()`:
-  - Before `model.encode(reg_texts)`: check each text's hash against
-    `_reg_embeddings_cache` (memory) → `EmbeddingCache` (disk). Only
-    encode cache misses, merge cached + new into the return array.
-  - Same pattern for unit texts in `_unit_embeddings_cache`.
-  - Print cache hit rate to stderr: `registry: 258/260 cached (99%), unit: 230/235 cached (98%)`.
-- Modify `_dual_signal_select_groups()`: same two-layer caching for group texts.
-- `BookRegistry` gains `embedding_cache_dir` property (derived from
-  `self._cache_dir`).
+  - Before `model.encode(texts)`: check each text's hash against memory and
+    disk. Only encode cache misses, merge cached + new into the return array.
+  - Use the same helper for registry concepts, unit concepts, groups, and
+    tool-search queries.
+  - Print cache hit rate and encode timings to stderr and selection traces.
+- Modify `_dual_signal_select_groups()`: same cache helper for group texts.
+- `BookRegistry` gains `embedding_cache_dir` property derived from its cache dir.
 
 **Expected impact**: Each `search_concepts` call drops from ~160s to ~35ms
 after the first call in a unit. For 44 calls: ~7,000s → ~1.5s.
 
 **Files**: `tilusion/registry_index.py` (+130), `tilusion/book_registry.py` (+5)
 
-### 1b. Reuse unit concept embeddings (`registry_delta.py` / `registry_index.py`)
+### 1b. Reuse unit concept embeddings via text-hash cache
 
-**What**: After a concept is confirmed new and added to the registry, save
-its already-computed unit embedding to the cache so it's available for
-later units without re-encoding.
+**What**: After a concept is confirmed new and added to the registry, it
+naturally reuses the embedding cache entry created while the same unit concept
+text was selected. No embedding arrays need to move through registry delta.
 
 **How**:
-- `_dual_signal_select()` returns a `dict[str, np.ndarray]` mapping
-  unit concept text hash → embedding alongside the candidate set.
-- `apply_registry_delta()` accepts optional `unit_embeddings: dict[str, np.ndarray]`
-  and writes embeddings for newly-added concepts to the `EmbeddingCache`.
-- `run_reading_pipeline()` wires the embedding dict through:
-  `_dual_signal_select` → `compute_registry_delta` → `apply_registry_delta`.
+- The cache key is `sha256(searchable_text)`, so `_dual_signal_select()` and
+  later `build_registry_index()` generate the same key if the searchable text
+  is unchanged.
+- `registry_delta.py` does not receive embeddings. It only applies identity
+  decisions and saves registry data.
+- If a merge changes the searchable text, that is a legitimate new embedding
+  key. The old key remains harmless and may still be reused by future similar
+  text.
 
-**Files**: `tilusion/registry_index.py` (+30), `tilusion/registry_delta.py` (+15),
-`tilusion/reading_pipeline.py` (+20)
+**Files**: `tilusion/registry_index.py`, `tilusion/book_registry.py`,
+`tilusion/reading_pipeline.py`
 
 ### 1c. Drop BM25 for deterministic-filter leftovers — REVERTED
 
@@ -175,12 +204,91 @@ concept summary as the search query when surface/cname matching fails.
 
 - `test_embedding_cache_hit_and_miss`
 - `test_embedding_cache_persistence`
-- `test_unit_embedding_reuse_in_delta`
+- `test_text_hash_embedding_reuse_after_registry_add`
 
 ### Verification
 
 ```
 ~/.virtualenvs/shredder/bin/python -m pytest tests/test_registry_index.py tests/test_registry_delta.py -q
+```
+
+---
+
+
+## Phase 1.5: Per-Concept Candidate Maps
+
+### Motivation
+
+The unit-0003 trace showed `select_concept_candidates()` picking 229 registry
+candidates for 235 unmatched unit concepts. That is almost the whole registry.
+The retrieval trace had useful per-query evidence, but the LLM payload only
+received a flat `registry_index` union. The agent therefore had to rediscover
+which registry concepts belonged to which unit concept and made many expensive
+`search_concepts` calls.
+
+### 1.5a. Candidate map trace and payload
+
+**What**: Preserve the per-unit-concept retrieval shape instead of flattening
+all candidates into one undifferentiated list.
+
+**How**:
+- Extend deterministic filtering to return `unit_concept_id -> candidate_ids`
+  plus the existing flat candidate set.
+- Reuse `_dual_signal_select()` trace rows to build one map row per unmatched
+  unit concept:
+  ```json
+  {
+    "unit_concept_id": "concept-0010",
+    "deterministic_candidate_ids": [],
+    "semantic_candidates": [
+      {"concept_id": "concept-0157", "score": 0.82, "method": "embedding"},
+      {"concept_id": "concept-0108", "score": 0.77, "method": "bm25+embedding"}
+    ],
+    "candidate_ids": ["concept-0157", "concept-0108"]
+  }
+  ```
+- Add `candidate_map` to `selection_trace.json` and to the concept-resolution
+  LLM payload. Keep `registry_index` as the compact record table keyed by
+  candidate id.
+
+### 1.5b. Agentic prompt contract
+
+**What**: The agent should judge each unit concept against its local candidates
+first, instead of scanning the flat registry union or immediately searching.
+
+**How**:
+- Update `prompt_concept_resolution_v0.2.md`:
+  - For each unit concept, use `candidate_map[unit_concept_id]` as the first
+    shortlist.
+  - Call `get_concept` only for plausible or ambiguous local candidates.
+  - Use `search_concepts` only when the local map is empty or all local
+    candidates fail despite the concept looking likely known from digest or
+    segment hints.
+  - Prefer source-language query text and full summaries over mixed-language
+    glosses.
+
+### 1.5c. Bound candidate expansion
+
+**What**: Prevent the map from becoming another full-registry dump.
+
+**How**:
+- Keep BM25 as a secondary lexical signal, but cap per-concept rows, e.g.
+  top 5 embedding + top 3 BM25/RRF after type filtering.
+- Include scores and methods so low-confidence rows are explainable in traces.
+- If the union remains close to the full registry, log this as a warning and
+  rely on the per-concept map rather than pretending the flat shortlist is
+  selective.
+
+### Tests for Phase 1.5
+
+- `test_select_concept_candidates_records_candidate_map`
+- `test_concept_resolution_payload_includes_candidate_map`
+- `test_agentic_prompt_mentions_candidate_map_first`
+
+### Verification
+
+```
+~/.virtualenvs/shredder/bin/python -m pytest tests/test_registry_index.py tests/test_cross_unit_resolution.py tests/test_reading_payloads_prompts.py -q
 ```
 
 ---
@@ -191,8 +299,10 @@ concept summary as the search query when surface/cname matching fails.
 
 `TYPE_FAMILIES` is a hand-maintained dict with known gaps (`term` ↔ `method`,
 `source` ↔ `term`, `time_anchor` ↔ `other`). AutoSchemaKG shows that set-based
-type compatibility (facet set intersection) handles all these edge cases
-without manual ontology maintenance.
+type compatibility (facet set intersection) handles these edge cases without
+manual ontology maintenance. Facets are a type-relaxation signal, not an
+identity signal: they can permit a cross-type merge only after name/surface/alias
+evidence suggests the two concepts are the same referent.
 
 The `Concept` dataclass already has a `facets: list[str]` field (line 217 of
 `reading_schema.py`). It's currently unused — always empty. Phase 2 activates it.
@@ -217,9 +327,10 @@ phrases at varying abstraction levels for each concept.
 
 ### 2b. Deterministic type compatibility via facet intersection (`registry_index.py`)
 
-**What**: Replace `TYPE_FAMILIES` + `_relaxed_types()` with facet set
-intersection as the type-compatibility test. Hard families become a fallback
-for concepts without facets.
+**What**: Replace `TYPE_FAMILIES` + `_relaxed_types()` as the primary
+type-compatibility test with facet set intersection. Hard families remain a
+fallback for concepts without facets. This determines whether a candidate is
+worth considering; it does not prove identity.
 
 **How**:
 - New function in `registry_index.py`:
@@ -235,7 +346,9 @@ for concepts without facets.
   ```
 - Modify `_deterministic_filter()`:
   - Add `facets` to the registry index entries in `build_registry_index()`.
-  - After the type-family gate, add a facet-intersection gate.
+  - Use facet intersection as a type-compatibility gate for candidate
+    selection, then require surface/cname/alias evidence for deterministic
+    matching.
 - Modify `_dual_signal_select()` type-filter path:
   - Use `_types_compatible()` instead of `_relaxed_types()` for the
     type mask, when facets are available.
@@ -246,22 +359,26 @@ for concepts without facets.
 
 ### 2c. Facet-aware merge boundary (`book_registry.py`)
 
-**What**: `_check_merge_boundary()` currently only considers hard types.
-Add facet intersection as an additional signal — if two concepts share
-at least one facet, the merge is safe even across different hard types.
+**What**: `_check_merge_boundary()` currently only considers hard types and
+name/surface overlap. Add facet intersection as a type-relaxation signal, but
+only after an identity signal exists. Shared facets alone are too broad: two
+separate places may both have `place` / `scenic site` facets and still be
+distinct.
 
 **How**:
-- In `_check_merge_boundary()`, add before the rejection path:
+- In `_check_merge_boundary()`, compute two separate predicates:
   ```python
-  # Facet intersection → type compatibility established
-  all_facets = [set(m.facets) for m in members if m.facets]
-  if len(all_facets) >= 2:
-      common = all_facets[0].intersection(*all_facets[1:])
-      if common:
-          return None  # safe to merge
+  identity_signal = shared_canonical_name or shared_alias or shared_surface
+  type_compatible = same_hard_type or shared_type_family or shared_facet
+  if identity_signal and type_compatible:
+      return None  # safe to merge
   ```
-- `DeterministicConceptMerger.merge()` already unions facets (line 71 of
-  `book_registry.py`), so merged concepts accumulate facets from all members.
+- For same hard type, existing same-surface/canonical-name rules still apply.
+- For different hard types, facet overlap may relax the type mismatch only when
+  identity evidence is already present across canonical names, aliases,
+  observed surfaces, or normalized surface forms.
+- `DeterministicConceptMerger.merge()` already unions facets, so merged
+  concepts accumulate facets from all members.
 
 **Files**: `tilusion/book_registry.py` (+15)
 
@@ -289,9 +406,10 @@ at least one facet, the merge is safe even across different hard types.
 
 ### Tests for Phase 2
 
-- `test_facet_intersection_allows_cross_type_merge`
+- `test_identity_plus_facet_allows_cross_type_merge`
 - `test_facetless_concepts_fallback_to_type_families`
 - `test_deterministic_filter_with_facets`
+- `test_facet_overlap_without_identity_does_not_merge`
 - `test_merge_boundary_with_facets`
 
 ### Verification
@@ -322,9 +440,12 @@ state but is only updated between units, not per-segment, and is limited to
 
 ### 3a. Per-segment known-concept lookup (`registry_index.py`)
 
-**What**: Given a segment's source blocks, look up which registry concepts
-already reference those blocks (via `source_block_refs`). These are
-"known to appear in this segment" and should be passed as hints.
+**What**: Given a segment's source blocks and text, identify registry concepts
+that plausibly appear in the segment. `source_block_refs` are useful evidence
+for reruns and already-indexed blocks, but they are not enough for new units:
+prior registry concepts cite prior blocks, while the current segment cites new
+blocks. The primary cross-unit signal must include normalized matching against
+registry canonical names, aliases, and observed surfaces in the segment text.
 
 **How**:
 - New function in `registry_index.py`:
@@ -332,14 +453,20 @@ already reference those blocks (via `source_block_refs`). These are
   def known_concepts_for_segment(
       registry: BookRegistry,
       segment_block_ids: list[str],
+      segment_text: str,
       *,
       max_concepts: int = 30,
   ) -> list[dict[str, Any]]:
-      """Return registry concepts that cite any of the given source blocks."""
+      """Return registry concepts plausibly present in a segment."""
   ```
-- Builds a reverse index `block_id → {concept_id, ...}` from registry
-  concepts' `source_block_refs`. Returns compact entries (concept_id,
-  surface, canonical_name, concept_type, summary truncated to 80 chars).
+- Combine two evidence sources:
+  - reverse index `block_id -> {concept_id, ...}` from registry
+    `source_block_refs` for stable reruns and exact source continuity;
+  - normalized lexical matching of `canonical_name`, aliases, and observed
+    surfaces against `segment_text` for true cross-unit memory.
+- Rank by evidence strength, recent unit, and frequency, then return compact
+  entries (concept_id, surface, canonical_name, concept_type, summary truncated
+  to 80 chars, evidence method).
 - Called in `run_reading_pipeline()` per segment, result added to
   `context["known_concepts"]`.
 
@@ -534,12 +661,17 @@ are stable and metrics from 4c justify it. The design sketch:
 ## Implementation Order (Summary)
 
 ```
-Phase 1 (embedding cache + BM25 drop + query guidance)
+Phase 1 (embedding cache + query guidance; BM25 retained)
   ├─ Unblocks: faster iteration on all subsequent phases
   ├─ Risk: low — pure optimization, no schema change
   └─ Deliverable: ~250s → ~0s embedding overhead per unit after unit 1
 
-Phase 2 (soft typing via type facets)
+Phase 1.5 (per-concept candidate maps)
+  ├─ Unblocks: agent uses local candidate sets instead of a flat near-full registry
+  ├─ Risk: low/medium — payload and prompt shape change, no schema change
+  └─ Deliverable: clearer traces and fewer registry search tool calls
+
+Phase 2 (identity-gated soft typing via type facets)
   ├─ Unblocks: broader deterministic matching reduces LLM load
   ├─ Risk: medium — extraction prompt change, but backward-compatible
   └─ Deliverable: fewer concepts need agentic merge
@@ -557,18 +689,18 @@ Phase 4 (concept-to-higher-order-reference detection)
 
 ## Files Affected
 
-| File | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
-|------|---------|---------|---------|---------|
-| `tilusion/registry_index.py` | +175, ~10 | +30, ~20 | +50 | — |
-| `tilusion/book_registry.py` | +5 | +15 | — | — |
-| `tilusion/registry_delta.py` | +15 | — | +15 | — |
-| `tilusion/reading_pipeline.py` | +20 | — | +70 | +30 |
-| `tilusion/reading_schema.py` | — | — | — | +3 |
-| `tilusion/book_digest.py` | — | — | +50 | — |
-| `tilusion/overview.py` | — | — | +30 | — |
-| `tilusion/prompts/prompt_per_segment_extraction_v0.2.md` | — | +15 | +15 | +20 |
-| `tilusion/prompts/prompt_concept_resolution_v0.2.md` | +10 | — | — | — |
-| Tests (new) | ~120 | ~100 | ~100 | ~80 |
+| File | Phase 1 | Phase 1.5 | Phase 2 | Phase 3 | Phase 4 |
+|------|---------|-----------|---------|---------|---------|
+| `tilusion/registry_index.py` | +175, ~10 | +180 | +30, ~20 | +50 | — |
+| `tilusion/book_registry.py` | +5 | — | +15 | — | — |
+| `tilusion/registry_delta.py` | — | — | — | +15 | — |
+| `tilusion/reading_pipeline.py` | +20 | +30 | — | +70 | +30 |
+| `tilusion/reading_schema.py` | — | — | — | — | +3 |
+| `tilusion/book_digest.py` | — | — | — | +50 | — |
+| `tilusion/overview.py` | — | — | — | +30 | — |
+| `tilusion/prompts/prompt_per_segment_extraction_v0.2.md` | — | — | +15 | +15 | +20 |
+| `tilusion/prompts/prompt_concept_resolution_v0.2.md` | +10 | +15 | — | — | — |
+| Tests (new) | ~120 | ~70 | ~100 | ~100 | ~80 |
 
 ## Verification (End-to-End)
 
