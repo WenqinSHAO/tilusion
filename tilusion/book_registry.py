@@ -269,9 +269,12 @@ class BookRegistry:
             raise MergeRejectedError(rejection)
 
         merged = DeterministicConceptMerger.merge(members)
-        new_id = self._alloc_concept_id()
+        # Keep the first ID as the stable target (typically a book concept
+        # that other operations may reference). Source IDs are absorbed.
+        target_id = ids[0]
+        source_ids = ids[1:]
         merged = Concept(
-            concept_id=new_id,
+            concept_id=target_id,
             surface=merged.surface,
             concept_type=merged.concept_type,
             source_block_refs=merged.source_block_refs,
@@ -284,13 +287,15 @@ class BookRegistry:
             provenance=merged.provenance,
         )
 
-        for cid in ids:
-            old = self._concepts.pop(cid)
-            self._remove_from_indices(old)
-        self._concepts[new_id] = merged
+        # Remove all members from indices, then re-add the merged target
+        for m in members:
+            self._remove_from_indices(m)
+        for cid in source_ids:
+            self._concepts.pop(cid)
+        self._concepts[target_id] = merged
         self._add_to_indices(merged)
 
-        return new_id
+        return target_id
 
     # ── Item CRUD ─────────────────────────────────────────────────────────
 

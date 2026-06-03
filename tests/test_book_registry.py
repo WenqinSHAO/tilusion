@@ -374,9 +374,9 @@ class TestBookRegistryMerge:
         cid1 = self._add("Confucius", "Confucius")
         cid2 = self._force_add("Kongzi", "Confucius")
         merged_id = self.reg.merge_concepts([cid1, cid2])
-        assert merged_id != cid1
-        assert merged_id != cid2
-        assert self.reg.get_concept(cid1) is None
+        # First ID is the stable target (book concept) — preserved
+        assert merged_id == cid1
+        # Source ID is absorbed and removed
         assert self.reg.get_concept(cid2) is None
         merged = self.reg.get_concept(merged_id)
         assert merged is not None
@@ -418,13 +418,10 @@ class TestBookRegistryMerge:
         cid2 = self._force_add("Kongzi", "Confucius")
         merged_id = self.reg.merge_concepts([cid1, cid2])
 
-        # Old IDs gone from indices
+        # Target ID (first arg) stays in indices; source IDs are removed
         key = ("Confucius", normalize_concept_type("person"))
-        assert cid1 not in self.reg._surface_type_index.get(key, [])
-        assert cid2 not in self.reg._canonical_name_index.get("Confucius", set())
-
-        # New ID in indices
         assert merged_id in self.reg._surface_type_index.get(key, [])
+        assert cid2 not in self.reg._canonical_name_index.get("Confucius", set())
         assert merged_id in self.reg._canonical_name_index.get("Confucius", set())
 
 
@@ -599,11 +596,12 @@ class TestEdgeCases:
             ), force=True)
 
             merged_id = reg.merge_concepts([cid1, cid2])
+            # First ID is the stable target — preserved and re-indexed
+            assert merged_id == cid1
             assert merged_id in reg._surface_lookup.get("Confucius", set())
             assert merged_id in reg._surface_lookup.get("Kong Qiu", set())
-            # Old IDs removed from surface lookup
-            for s in ["Confucius", "Kong Qiu"]:
-                assert cid1 not in reg._surface_lookup.get(s, set())
+            # Source ID removed from surface lookup
+            assert cid2 not in reg._surface_lookup.get("Confucius", set())
         finally:
             _cleanup(reg)
 
