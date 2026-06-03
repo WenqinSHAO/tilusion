@@ -183,6 +183,26 @@ class TestSelectConceptCandidates:
         candidates = select_concept_candidates(unit, reg)
         assert any(c["concept_id"] == "b-match" for c in candidates)
 
+    def test_candidate_map_records_deterministic_matches(self) -> None:
+        reg = [_make_registry_concept(f"b-{i}", f"entity-{i}", "person") for i in range(100)]
+        reg.append(_make_registry_concept("b-match", "Confucius", "person",
+                                          observed_surfaces=["孔子", "Confucius"]))
+        unit = [_make_concept("c-0001", "孔子", "person")]
+        trace: dict = {}
+
+        candidates = select_concept_candidates(unit, reg, trace=trace)
+
+        assert any(c["concept_id"] == "b-match" for c in candidates)
+        assert trace["candidate_map"] == [{
+            "unit_concept_id": "c-0001",
+            "surface": "孔子",
+            "concept_type": "person",
+            "deterministic_candidate_ids": ["b-match"],
+            "semantic_candidates": [],
+            "candidate_ids": ["b-match"],
+        }]
+        assert trace["deterministic"]["matches_by_unit"] == {"c-0001": ["b-match"]}
+
     def test_cross_type_family_relaxation(self) -> None:
         """person ↔ group, organization relaxation."""
         reg = [_make_registry_concept(f"b-{i}", f"entity-{i}", "organization") for i in range(100)]

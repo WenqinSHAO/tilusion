@@ -1802,6 +1802,7 @@ def run_cross_unit_concept_resolution_pass(
     context: dict[str, Any] | None = None,
     registry: Any | None = None,  # BookRegistry for agentic tool execution
     selection_trace: dict[str, Any] | None = None,
+    candidate_map: list[dict[str, Any]] | None = None,
 ) -> ReadingPassRecord:
     """Run cross-unit concept identity resolution (Conversation D).
 
@@ -1822,6 +1823,7 @@ def run_cross_unit_concept_resolution_pass(
         unit_id=unit_id,
         concepts=concepts,
         registry_index=registry_index,
+        candidate_map=candidate_map,
         unresolved_items=unresolved_items,
         context=context,
     )
@@ -2565,6 +2567,7 @@ def run_reading_pipeline(
                 context=None,
                 registry=registry,
                 selection_trace=concept_selection_trace,
+                candidate_map=concept_selection_trace.get("candidate_map", []),
             )
             pass_summaries["cross_unit_concept_resolution"] = {
                 "cache_key": concept_resolution_record.cache_key,

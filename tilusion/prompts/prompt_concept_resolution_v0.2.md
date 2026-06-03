@@ -8,11 +8,11 @@ This is a multi-round conversation. You have access to tools (defined below — 
 
 **Workflow:**
 
-1. **Screen first.** For each unit concept, check the shortlisted candidates in the `registry_index`. If a clear match exists (same entity, different surface), propose `link`. If clearly novel, propose `new_concept`.
+1. **Screen first by candidate map.** For each unit concept, first find its row in `candidate_map` and inspect that row's `candidate_ids`, `deterministic_candidate_ids`, and `semantic_candidates`. Use `registry_index` only as the compact record table for those candidate IDs. If a clear match exists (same entity, different surface), propose `link`. If clearly novel, propose `new_concept`.
 
-2. **Request detail when uncertain.** If a candidate looks plausible but the compact index doesn't have enough information to confirm, call `get_concept(id)`. Examine the full record (all fields: canonical_name, summary, aliases, observed_surfaces, facets, source_block_refs, provenance), then decide.
+2. **Request detail when uncertain.** If a candidate-map entry looks plausible but the compact index doesn't have enough information to confirm, call `get_concept(id)`. Examine the full record (all fields: canonical_name, summary, aliases, observed_surfaces, facets, source_block_refs, provenance), then decide. Prioritize deterministic candidates first, then high-score semantic candidates.
 
-3. **Search when suspicious.** If no candidate matches but the concept summary suggests a known entity, call `search_concepts(query)`. This searches the FULL registry (not just the shortlisted candidates) using embedding (semantic) similarity — not keyword matching. **CRITICAL query guidance:**
+3. **Search when suspicious.** Use `search_concepts(query)` only when the local `candidate_map` row is empty, or when all local candidates fail but the concept summary/digest strongly suggests this is a known registry entity. This searches the FULL registry (not just the shortlisted candidates) using embedding (semantic) similarity — not keyword matching. **CRITICAL query guidance:**
    - **Use the concept's full summary as the query** (or the most discriminative sentences from it). Full sentences produce far better embedding vectors than keyword lists or mixed-language glosses.
    - A concept with summary "沈复之妻，被林语堂称为中国文学中最可爱的女人" → query `"沈复之妻，被林语堂称为中国文学中最可爱的女人"` (the summary itself, which the embedding model understands semantically).
    - **Bad query**: `"爱花成癖 habit"` (mixed Chinese/English glosses dilute the embedding). **Good query**: use the full concept summary in the source language.
@@ -68,7 +68,8 @@ The caller provides JSON with:
 - `schema_version`: `reading-unit-v0.3`.
 - `unit_id`: parent reader unit identifier.
 - `concepts`: merged unit-level concepts. Each has a `concept_id` (clean `concept-NNNN`), `surface`, `concept_type`, `summary` (source-grounded compression), `canonical_name`, `observed_surfaces`, `aliases`, `source_block_refs`, and all standard concept fields.
-- `registry_index`: compact index of concepts from prior units. Each entry has `concept_id` (registry-scoped), `canonical_name`, `concept_type`, `summary` (truncated ~120 chars), `observed_surfaces` (first 10). Empty for the first unit. Use the `concept_id` from this index as the argument to `get_concept`.
+- `registry_index`: compact record table of concepts from prior units. Each entry has `concept_id` (registry-scoped), `canonical_name`, `concept_type`, `summary` (truncated ~120 chars), `observed_surfaces` (first 10). Empty for the first unit. Use the `concept_id` from this index as the argument to `get_concept`.
+- `candidate_map`: per-unit-concept shortlist. Each row has `unit_concept_id`, `deterministic_candidate_ids`, `semantic_candidates` with scores/methods, and the combined `candidate_ids`. This is the primary screening structure; do not treat the flat `registry_index` as one shared shortlist for every concept.
 - `unresolved_items`: surfaces that appear with different types across segments. Resolve or escalate.
 - `context`: reserved for future cross-unit narrative digest. Currently empty.
 
@@ -131,5 +132,6 @@ Rules:
 - Resolve the input `unresolved_items` where concept summaries and surface evidence make the answer clear. Escalate only genuinely ambiguous cases.
 - Do not emit no-op proposals. If nothing needs changing, return an empty `resolution_proposals` list.
 - If the registry_index is empty (first unit), only within-unit operations (`merge`, `split`, `refine`, `reclassify`) are meaningful. Mark all concepts with `new_concept` or skip — either is acceptable since the caller treats first-unit concepts as new by default.
+- If `candidate_map` is present, make one decision per unit concept using that concept's local row first. `search_concepts` is a fallback, not the default path.
 
 Preserve uncertainty instead of inventing facts. If you cannot decide, escalate to `unresolved_items`.

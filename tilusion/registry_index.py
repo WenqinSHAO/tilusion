@@ -734,15 +734,22 @@ def _relaxed_types(concept_type: str) -> set[str]:
 def _deterministic_filter(
     unit_concepts: list[dict[str, Any]],
     registry_index: list[dict[str, Any]],
-) -> tuple[set[str], set[str]]:
+) -> tuple[set[str], set[str], dict[str, list[str]]]:
     """Deterministic pre-filter by surface collision + type family + canonical_name.
 
-    Returns ``(candidate_registry_ids, matched_unit_concept_ids)`` where the
-    second set tracks which unit concepts found at least one deterministic
-    candidate so the caller can skip expensive semantic search for them.
+    Returns ``(candidate_registry_ids, matched_unit_concept_ids, matches_by_unit)``.
+    ``matches_by_unit`` preserves the per-unit-concept candidate shape for
+    LLM payloads and traces; the flat set is only a compact registry table.
     """
     candidate_ids: set[str] = set()
     matched_unit_ids: set[str] = set()
+    matches_by_unit: dict[str, list[str]] = {}
+
+    def _record_match(uc_id: str, local_ids: set[str], rid: str) -> None:
+        candidate_ids.add(rid)
+        local_ids.add(rid)
+        if uc_id:
+            matched_unit_ids.add(uc_id)
 
     for uc in unit_concepts:
         uc_type = uc.get("concept_type", "")
@@ -751,12 +758,10 @@ def _deterministic_filter(
         uc_cname = (uc.get("canonical_name") or "").lower()
         uc_aliases = {a.lower() for a in uc.get("aliases", [])}
         uc_id = uc.get("concept_id", "")
-        got_match = False
+        local_ids: set[str] = set()
 
         for reg in registry_index:
             rid = reg["concept_id"]
-            if rid in candidate_ids:
-                continue
             # Type family match
             if reg["concept_type"] not in relaxed:
                 continue
@@ -770,61 +775,47 @@ def _deterministic_filter(
 
             # Surface collision
             if uc_surface and uc_surface in reg_surfaces:
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
             # Canonical_name match
             elif uc_cname and uc_cname == reg_cname:
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
             # Unit surface matches registry canonical_name
             elif uc_surface and reg_cname and uc_surface == reg_cname:
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
             # Unit canonical_name matches registry alias
             elif uc_cname and uc_cname in reg_aliases:
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
             # Registry canonical_name matches unit alias
             elif reg_cname and reg_cname in uc_aliases:
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
             # Any unit alias matches any registry alias
             elif uc_aliases and reg_aliases and (uc_aliases & reg_aliases):
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
             # Any unit alias matches a registry surface
             elif uc_aliases and uc_aliases & reg_surfaces:
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
             # Unit surface matches any registry alias
             elif uc_surface and uc_surface in reg_aliases:
-                candidate_ids.add(rid)
-                got_match = True
+                _record_match(uc_id, local_ids, rid)
 
         # Also match by canonical_name across any type
         if uc_cname:
             for reg in registry_index:
                 rid = reg["concept_id"]
-                if rid in candidate_ids:
-                    continue
                 if (reg.get("canonical_name") or "").lower() == uc_cname:
-                    candidate_ids.add(rid)
-                    got_match = True
+                    _record_match(uc_id, local_ids, rid)
         # Also match by canonical_name in registry aliases across any type
         if uc_cname:
             for reg in registry_index:
                 rid = reg["concept_id"]
-                if rid in candidate_ids:
-                    continue
                 reg_aliases = {a.lower() for a in reg.get("aliases", [])}
                 if uc_cname in reg_aliases:
-                    candidate_ids.add(rid)
-                    got_match = True
+                    _record_match(uc_id, local_ids, rid)
 
-        if got_match and uc_id:
-            matched_unit_ids.add(uc_id)
+        if uc_id and local_ids:
+            matches_by_unit[uc_id] = sorted(local_ids)
 
-    return candidate_ids, matched_unit_ids
+    return candidate_ids, matched_unit_ids, matches_by_unit
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -879,6 +870,77 @@ def build_group_index(registry: BookRegistry) -> list[CompactGroup]:
     return index
 
 
+def _semantic_candidates_by_unit(dual_trace: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Build per-unit semantic candidate rows from `_dual_signal_select` trace."""
+    by_unit: dict[str, list[dict[str, Any]]] = {}
+    for query in dual_trace.get("queries", []):
+        unit_id = query.get("unit_concept_id", "")
+        if not unit_id:
+            continue
+        score_by_id: dict[str, float] = {}
+        methods_by_id: dict[str, set[str]] = defaultdict(set)
+        for row in query.get("bm25_top", []):
+            cid = row.get("id", "")
+            if not cid:
+                continue
+            score_by_id[cid] = max(score_by_id.get(cid, 0.0), float(row.get("score", 0.0)))
+            methods_by_id[cid].add("bm25")
+        for row in query.get("embedding_top", []):
+            cid = row.get("id", "")
+            if not cid:
+                continue
+            score_by_id[cid] = max(score_by_id.get(cid, 0.0), float(row.get("score", 0.0)))
+            methods_by_id[cid].add("embedding")
+        rows: list[dict[str, Any]] = []
+        for cid in query.get("selected", []):
+            methods = sorted(methods_by_id.get(cid, set()))
+            rows.append({
+                "concept_id": cid,
+                "score": round(score_by_id.get(cid, 0.0), 6),
+                "method": "+".join(methods) if methods else "rrf",
+            })
+        by_unit[unit_id] = rows
+    return by_unit
+
+
+def _build_candidate_map(
+    unit_concepts: list[dict[str, Any]],
+    *,
+    deterministic_by_unit: dict[str, list[str]] | None = None,
+    semantic_by_unit: dict[str, list[dict[str, Any]]] | None = None,
+    passthrough_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return LLM-facing candidate rows keyed by unit concept."""
+    deterministic_by_unit = deterministic_by_unit or {}
+    semantic_by_unit = semantic_by_unit or {}
+    candidate_map: list[dict[str, Any]] = []
+    for uc in unit_concepts:
+        unit_id = uc.get("concept_id", "")
+        deterministic_ids = list(deterministic_by_unit.get(unit_id, []))
+        semantic_rows = list(semantic_by_unit.get(unit_id, []))
+        ids: list[str] = []
+        for cid in deterministic_ids:
+            if cid not in ids:
+                ids.append(cid)
+        for row in semantic_rows:
+            cid = row.get("concept_id", "")
+            if cid and cid not in ids:
+                ids.append(cid)
+        if passthrough_ids is not None:
+            for cid in passthrough_ids:
+                if cid and cid not in ids:
+                    ids.append(cid)
+        candidate_map.append({
+            "unit_concept_id": unit_id,
+            "surface": uc.get("surface", ""),
+            "concept_type": uc.get("concept_type", ""),
+            "deterministic_candidate_ids": deterministic_ids,
+            "semantic_candidates": semantic_rows,
+            "candidate_ids": ids,
+        })
+    return candidate_map
+
+
 def select_concept_candidates(
     unit_concepts: list[dict[str, Any]],
     registry_index: list[dict[str, Any]],
@@ -909,37 +971,44 @@ def select_concept_candidates(
     if not registry_index or not unit_concepts:
         if trace is not None:
             trace["selected_candidate_ids"] = [r.get("concept_id", "") for r in registry_index]
+            trace["candidate_map"] = _build_candidate_map(unit_concepts)
         return registry_index
 
     if len(registry_index) <= 50:
+        passthrough_ids = [r.get("concept_id", "") for r in registry_index]
         if trace is not None:
             trace["small_registry_passthrough"] = True
-            trace["selected_candidate_ids"] = [r.get("concept_id", "") for r in registry_index]
+            trace["selected_candidate_ids"] = passthrough_ids
+            trace["selected_candidate_count"] = len(passthrough_ids)
+            trace["candidate_map"] = _build_candidate_map(unit_concepts, passthrough_ids=passthrough_ids)
         return registry_index
 
     # Deterministic pre-filter: surface collision + type family.
     # Also returns which unit concepts already found candidates so we can
     # skip expensive dual-signal retrieval for them.
-    det_ids, matched_unit_ids = _deterministic_filter(unit_concepts, registry_index)
+    det_ids, matched_unit_ids, det_by_unit = _deterministic_filter(unit_concepts, registry_index)
     if trace is not None:
         trace["deterministic"] = {
             "candidate_ids": sorted(det_ids),
             "matched_unit_concept_ids": sorted(matched_unit_ids),
             "matched_unit_count": len(matched_unit_ids),
+            "matches_by_unit": det_by_unit,
         }
 
     # Only run dual-signal (BM25 + embedding) for concepts that the
     # deterministic filter found NOTHING for.
     unmatched = [uc for uc in unit_concepts if uc.get("concept_id") not in matched_unit_ids]
     dual_ids: set[str] = set()
+    dual_trace: dict[str, Any] = {}
+    semantic_by_unit: dict[str, list[dict[str, Any]]] = {}
     if unmatched:
         print(
             f"  [registry-index] deterministic filter: {len(matched_unit_ids)}/{len(unit_concepts)} concepts matched; "
             f"running dual-signal on {len(unmatched)} unmatched",
             file=sys.stderr,
         )
-        dual_trace: dict[str, Any] = {}
         dual_ids = _dual_signal_select(unmatched, registry_index, type_filter=True, trace=dual_trace)
+        semantic_by_unit = _semantic_candidates_by_unit(dual_trace)
         if trace is not None:
             trace["dual_signal"] = dual_trace
     else:
@@ -953,6 +1022,16 @@ def select_concept_candidates(
     if trace is not None:
         trace["selected_candidate_ids"] = sorted(all_ids)
         trace["selected_candidate_count"] = len(all_ids)
+        trace["candidate_map"] = _build_candidate_map(
+            unit_concepts,
+            deterministic_by_unit=det_by_unit,
+            semantic_by_unit=semantic_by_unit,
+        )
+        if registry_index and len(all_ids) >= int(len(registry_index) * 0.8):
+            trace["candidate_selection_warning"] = (
+                f"selected {len(all_ids)}/{len(registry_index)} registry concepts; "
+                "use candidate_map rather than treating registry_index as selective"
+            )
 
     if not all_ids:
         return []

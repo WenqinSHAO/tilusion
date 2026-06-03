@@ -5,12 +5,14 @@ import pytest
 from tilusion.pass_utils import generated_prompt_part
 from tilusion.reading_payloads import (
     _source_block_meta,
+    build_concept_resolution_payload,
     build_per_segment_extraction_payload,
     merge_segment_extraction_results,
     render_text_with_block_markers,
 )
 from tilusion.reading_schema import RECOMMENDED_CONCEPT_TYPES, SourceBlock, normalize_concept_type
 from tilusion.reading_prompts import (
+    build_concept_resolution_v0_2_composition,
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
 )
@@ -591,3 +593,31 @@ def test_segment_merge_mixed_grounding_becomes_synthesis() -> None:
     assert len(result["concepts"]) == 1
     assert result["concepts"][0]["provenance"]["grounding"] == "synthesis"
     assert set(result["concepts"][0]["source_block_refs"]) == {"b2"}
+
+
+def test_concept_resolution_payload_includes_candidate_map() -> None:
+    candidate_map = [{
+        "unit_concept_id": "concept-0001",
+        "deterministic_candidate_ids": ["book-concept-1"],
+        "semantic_candidates": [],
+        "candidate_ids": ["book-concept-1"],
+    }]
+
+    payload = build_concept_resolution_payload(
+        unit_id="unit-0002",
+        concepts=[{"concept_id": "concept-0001"}],
+        registry_index=[{"concept_id": "book-concept-1"}],
+        candidate_map=candidate_map,
+        unresolved_items=[],
+    )
+
+    assert payload["candidate_map"] == candidate_map
+
+
+def test_agentic_concept_prompt_uses_candidate_map_first() -> None:
+    composition = build_concept_resolution_v0_2_composition()
+    content = composition.content
+
+    assert "candidate_map" in content
+    assert "primary screening structure" in content
+    assert "search_concepts` is a fallback" in content

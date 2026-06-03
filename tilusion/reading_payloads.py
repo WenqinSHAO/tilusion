@@ -122,6 +122,7 @@ def build_concept_resolution_payload(
     unit_id: str,
     concepts: list[dict[str, Any]],
     registry_index: list[dict[str, Any]],
+    candidate_map: list[dict[str, Any]] | None = None,
     unresolved_items: list[dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -135,6 +136,7 @@ def build_concept_resolution_payload(
         "unit_id": unit_id,
         "concepts": concepts,
         "registry_index": registry_index,
+        "candidate_map": candidate_map or [],
         "unresolved_items": unresolved_items or [],
         "context": context or {},
     }
