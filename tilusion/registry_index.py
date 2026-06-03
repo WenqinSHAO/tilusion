@@ -132,6 +132,9 @@ def _build_concept_text(reg_concept: dict[str, Any]) -> str:
     for s in reg_concept.get("observed_surfaces", [])[:5]:
         if s and s not in parts:
             parts.append(s)
+    for a in reg_concept.get("aliases", [])[:5]:
+        if a and a not in parts:
+            parts.append(a)
     return " ".join(parts)
 
 
@@ -147,6 +150,9 @@ def _build_unit_concept_text(uc: dict[str, Any]) -> str:
     summary = uc.get("summary", "")
     if summary:
         parts.append(summary)
+    for a in uc.get("aliases", [])[:5]:
+        if a and a not in parts:
+            parts.append(a)
     return " ".join(parts)
 
 
@@ -586,6 +592,7 @@ def _deterministic_filter(
         relaxed = _relaxed_types(uc_type)
         uc_surface = (uc.get("surface") or "").lower()
         uc_cname = (uc.get("canonical_name") or "").lower()
+        uc_aliases = {a.lower() for a in uc.get("aliases", [])}
         uc_id = uc.get("concept_id", "")
         got_match = False
 
@@ -596,16 +603,44 @@ def _deterministic_filter(
             # Type family match
             if reg["concept_type"] not in relaxed:
                 continue
-            # Surface or canonical_name collision
+
+            reg_surface = (reg.get("surface") or "").lower()
             reg_surfaces = {s.lower() for s in reg.get("observed_surfaces", [])}
+            reg_surfaces.add(reg_surface)
+            reg_surfaces.discard("")
             reg_cname = (reg.get("canonical_name") or "").lower()
+            reg_aliases = {a.lower() for a in reg.get("aliases", [])}
+
+            # Surface collision
             if uc_surface and uc_surface in reg_surfaces:
                 candidate_ids.add(rid)
                 got_match = True
+            # Canonical_name match
             elif uc_cname and uc_cname == reg_cname:
                 candidate_ids.add(rid)
                 got_match = True
+            # Unit surface matches registry canonical_name
             elif uc_surface and reg_cname and uc_surface == reg_cname:
+                candidate_ids.add(rid)
+                got_match = True
+            # Unit canonical_name matches registry alias
+            elif uc_cname and uc_cname in reg_aliases:
+                candidate_ids.add(rid)
+                got_match = True
+            # Registry canonical_name matches unit alias
+            elif reg_cname and reg_cname in uc_aliases:
+                candidate_ids.add(rid)
+                got_match = True
+            # Any unit alias matches any registry alias
+            elif uc_aliases and reg_aliases and (uc_aliases & reg_aliases):
+                candidate_ids.add(rid)
+                got_match = True
+            # Any unit alias matches a registry surface
+            elif uc_aliases and uc_aliases & reg_surfaces:
+                candidate_ids.add(rid)
+                got_match = True
+            # Unit surface matches any registry alias
+            elif uc_surface and uc_surface in reg_aliases:
                 candidate_ids.add(rid)
                 got_match = True
 
@@ -616,6 +651,16 @@ def _deterministic_filter(
                 if rid in candidate_ids:
                     continue
                 if (reg.get("canonical_name") or "").lower() == uc_cname:
+                    candidate_ids.add(rid)
+                    got_match = True
+        # Also match by canonical_name in registry aliases across any type
+        if uc_cname:
+            for reg in registry_index:
+                rid = reg["concept_id"]
+                if rid in candidate_ids:
+                    continue
+                reg_aliases = {a.lower() for a in reg.get("aliases", [])}
+                if uc_cname in reg_aliases:
                     candidate_ids.add(rid)
                     got_match = True
 
@@ -643,10 +688,12 @@ def build_registry_index(registry: BookRegistry) -> list[dict[str, Any]]:
             summary = summary[:117] + "..."
         index.append({
             "concept_id": concept.concept_id,
+            "surface": concept.surface or "",
             "canonical_name": concept.canonical_name or "",
             "concept_type": concept.concept_type or "other",
             "summary": summary,
             "observed_surfaces": concept.observed_surfaces[:10],
+            "aliases": concept.aliases[:10],
         })
     return index
 

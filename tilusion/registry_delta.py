@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .book_registry import BookRegistry
+from .book_registry import BookRegistry, MergeRejectedError
 from .reading_schema import (
     AtomicItem,
     Concept,
@@ -230,7 +230,31 @@ def apply_registry_delta(
             # Add unit concept with force=True (bypasses collision check)
             new_id, _ = registry.add_concept(unit_concept, force=True)
             # Merge into existing book concept
-            merged_id = registry.merge_concepts([book_concept_id, new_id])
+            try:
+                merged_id = registry.merge_concepts([book_concept_id, new_id])
+            except MergeRejectedError:
+                # Deterministic boundary check rejected the merge — keep the
+                # force-added concept as a distinct entry.  The rejection is
+                # already logged by _check_merge_boundary.
+                import sys
+                print(
+                    f"  [registry-delta] merge_rejected: keeping unit concept "
+                    f"{unit_concept_dict.get('concept_id', '?')} as distinct "
+                    f"(book {book_concept_id} → new {new_id})",
+                    file=sys.stderr,
+                )
+                delta.id_remap[unit_concept_dict["concept_id"]] = new_id
+                delta.ambiguity_items.append({
+                    "kind": "merge_rejected",
+                    "unit_id": op.get("unit_id", "?"),
+                    "unit_concept_id": unit_concept_dict.get("concept_id", ""),
+                    "unit_surface": unit_concept_dict.get("surface", ""),
+                    "book_concept_id": book_concept_id,
+                    "new_concept_id": new_id,
+                })
+                delta.stats["merge_rejected"] = delta.stats.get("merge_rejected", 0) + 1
+                applied_ids.append(new_id)
+                continue
             delta.id_remap[unit_concept_dict["concept_id"]] = merged_id
             applied_ids.append(merged_id)
 

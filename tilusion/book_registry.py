@@ -580,31 +580,50 @@ def _check_merge_boundary(members: list[Concept]) -> str | None:
     Adapted from reading_pipeline._classify_merge_risk.
     """
     surfaces: set[str] = {m.surface for m in members}
-    # Only count canonical_names shared by at least two members as identity signals
+    all_cnames: set[str] = {
+        m.canonical_name for m in members if m.canonical_name
+    }
+    types: set[str] = {normalize_concept_type(m.concept_type) for m in members}
+
+    # Same type with a canonical_name on any side → identity established.
+    # One member carrying a cname suffices: the LLM or auto-population may
+    # have set it on only one side when the other came from a registry
+    # entry added before cross-unit identity was resolved.
+    if len(types) == 1 and len(all_cnames) >= 1:
+        return None
+
+    # Shared canonical_name across multiple members → identity established,
+    # even across different types (e.g. person ↔ social_role).
     _cname_counts = Counter(
         m.canonical_name for m in members if m.canonical_name
     )
-    cnames: set[str] = {
+    shared_cnames: set[str] = {
         cn for cn, n in _cname_counts.items() if n >= 2
     }
-    # But for the "shared cname" check (rule 1), use the stricter condition
-    # already handled by the all() check above
-    types: set[str] = {normalize_concept_type(m.concept_type) for m in members}
-
-    # Shared non-empty canonical_name → same identity
-    if len(cnames) == 1 and all(m.canonical_name for m in members):
+    if len(shared_cnames) == 1 and all(m.canonical_name for m in members):
         return None
 
     # Same surface across all → probable duplicate extraction
     if len(surfaces) == 1:
         return None
 
-    # Same type with surface or cname overlap → safe
+    # Same type with surface or aliases overlap → safe
     if len(types) == 1:
-        if cnames or _surfaces_overlap(members):
+        if _surfaces_overlap(members):
             return None
 
-    # Distinct entity types that should not be merged
+    # ── Rejection path: log detailed member info to stderr ──────────────
+    reason = _make_rejection_reason(surfaces, types, shared_cnames)
+    _log_rejected_merge(members, reason)
+    return reason
+
+
+def _make_rejection_reason(
+    surfaces: set[str],
+    types: set[str],
+    shared_cnames: set[str],
+) -> str:
+    """Build a rejection reason string for the merge boundary check."""
     if "time_anchor" in types:
         return (
             "merge_rejected: merging distinct time_anchor concepts "
@@ -621,19 +640,42 @@ def _check_merge_boundary(members: list[Concept]) -> str | None:
             "with different surfaces"
         )
 
-    # Different types, no shared canonical name → ambiguous
-    if len(types) > 1 and not cnames:
+    if len(types) > 1 and not shared_cnames:
         return (
             "merge_rejected: concepts have different types and no "
             "shared canonical name"
         )
 
-    # Different surfaces, different cnames → no identity signal
-    if len(surfaces) > 1 and not cnames:
-        return (
-            "merge_rejected: distinct surfaces and no shared "
-            "identity signal"
+    return (
+        "merge_rejected: distinct surfaces and no shared "
+        "identity signal"
+    )
+
+
+def _log_rejected_merge(members: list[Concept], reason: str) -> None:
+    """Log detailed member info for a rejected merge to stderr."""
+    import sys
+
+    print(f"  [merge-reject] {reason}", file=sys.stderr)
+    for i, m in enumerate(members):
+        alias_preview = ", ".join(m.aliases[:5])
+        if len(m.aliases) > 5:
+            alias_preview += f", ... (+{len(m.aliases) - 5})"
+        summary_preview = (m.summary or "")[:120]
+        obs_preview = ", ".join(m.observed_surfaces[:5])
+        if len(m.observed_surfaces) > 5:
+            obs_preview += f", ... (+{len(m.observed_surfaces) - 5})"
+        print(
+            f"    member[{i}]: id={m.concept_id} type={m.concept_type} "
+            f"surface=\"{m.surface}\" cname=\"{m.canonical_name}\"",
+            file=sys.stderr,
         )
+        if m.aliases:
+            print(f"      aliases=[{alias_preview}]", file=sys.stderr)
+        if summary_preview:
+            print(f"      summary=\"{summary_preview}\"", file=sys.stderr)
+        if m.observed_surfaces:
+            print(f"      observed_surfaces=[{obs_preview}]", file=sys.stderr)
 
     return None
 
