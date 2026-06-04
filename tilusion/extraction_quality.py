@@ -168,7 +168,7 @@ def validate_extraction_quality(
         "evidence_spans": list,
         "entity_mentions": list,
         "location_mentions": list,
-        "event_mentions": list,
+        "atom_mentions": list,
         "time_expressions": list,
         "thread_candidates": list,
         "warnings": list,
@@ -293,7 +293,7 @@ def validate_extraction_quality(
 
     validate_id_set(data, "entity_mentions", "mention_id", issues)
     validate_id_set(data, "location_mentions", "mention_id", issues)
-    validate_id_set(data, "event_mentions", "event_id", issues)
+    validate_id_set(data, "atom_mentions", "atom_id", issues)
     validate_id_set(data, "time_expressions", "time_expression_id", issues)
     validate_id_set(data, "thread_candidates", "thread_id", issues)
 
@@ -304,7 +304,7 @@ def validate_extraction_quality(
     for collection in [
         "entity_mentions",
         "location_mentions",
-        "event_mentions",
+        "atom_mentions",
         "time_expressions",
         "thread_candidates",
     ]:
@@ -317,36 +317,37 @@ def validate_extraction_quality(
         data, "location_mentions", evidence_by_id, evidence_locations_by_id, unit_text, issues
     )
 
-    for index, event in enumerate(data.get("event_mentions", []) or []):
-        if not isinstance(event, dict):
+    for index, atom in enumerate(data.get("atom_mentions", []) or []):
+        if not isinstance(atom, dict):
             continue
-        event_id = str(event.get("event_id") or "")
+        atom_id = str(atom.get("atom_id") or "")
         validate_link_refs(
-            event,
+            atom,
             "participant_mention_ids",
             entity_ids,
-            f"event_mentions[{index}]",
-            event_id,
+            f"atom_mentions[{index}]",
+            atom_id,
             issues,
             target_name="entity mention",
         )
         validate_link_refs(
-            event,
+            atom,
             "location_mention_ids",
             location_ids,
-            f"event_mentions[{index}]",
-            event_id,
+            f"atom_mentions[{index}]",
+            atom_id,
             issues,
             target_name="location mention",
         )
         validate_link_refs(
-            event,
+            atom,
             "time_expression_ids",
             time_ids,
-            f"event_mentions[{index}]",
-            event_id,
+            f"atom_mentions[{index}]",
+            atom_id,
             issues,
             target_name="time expression",
+            allow_null=True,
         )
 
     error_count = sum(1 for issue in issues if issue.severity == "error")
@@ -804,9 +805,12 @@ def validate_link_refs(
     issues: list[ExtractionQualityIssue],
     *,
     target_name: str,
+    allow_null: bool = False,
 ) -> None:
     refs = obj.get(field_name, [])
     if refs is None:
+        if allow_null:
+            return
         refs = []
     if not isinstance(refs, list):
         issues.append(
@@ -837,6 +841,7 @@ def validate_link_refs(
 def object_identifier(obj: dict[str, Any]) -> str | None:
     for field_name in [
         "mention_id",
+        "atom_id",
         "event_id",
         "time_expression_id",
         "thread_id",
@@ -894,7 +899,7 @@ def source_window_needles(quote: str) -> list[str]:
     stripped = quote.strip()
     if not stripped:
         return []
-    candidates = [
+    candidates: list[str] = [
         stripped[:12],
         stripped[:8],
         stripped[:4],
@@ -904,6 +909,13 @@ def source_window_needles(quote: str) -> list[str]:
             candidates.append(part[:12])
             candidates.append(part[:8])
             candidates.append(part[:4])
+            # Also try dropping fabricated prefixes: suffixes of the clause.
+            for drop in (2, 4, 6):
+                suffix = part[drop:]
+                if len(suffix) >= 4:
+                    candidates.append(suffix[:12])
+                    candidates.append(suffix[:8])
+                    candidates.append(suffix[:4])
     unique: list[str] = []
     for candidate in candidates:
         if len(candidate) >= 2 and candidate not in unique:

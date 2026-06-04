@@ -1,30 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import hashlib
-from importlib import resources
 import json
 import os
-from pathlib import Path
 import re
+import sys
 import time
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
 
-from .book_reader import StructureUnit, build_book_index, extract_unit_text
-from .extraction_quality import (
-    ExtractionQualityIssue,
-    ExtractionQualityReport,
-    validate_extraction_quality,
-)
+if TYPE_CHECKING:
+    from .conversation import ConversationContext
 
+# ── Constants ──
 
-PROMPT_VERSION = "segment-extraction-v0.5"
-SCHEMA_VERSION = "segment-extraction-v0.3"
 DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_MAX_TOKENS = 32768
-DEEPSEEK_CONTEXT_TOKENS = 1_000_000
+DEFAULT_MAX_TOKENS = 384_000
+DEEPSEEK_CONTEXT_TOKENS = 850_000
 DEEPSEEK_MAX_OUTPUT_TOKENS = 384_000
-PROMPT_RESOURCE = "segment_extraction_v0.5.md"
+DEEPSEEK_DEFAULT_TIMEOUT = 300
+DEEPSEEK_DEFAULT_MAX_RETRIES = 3
+
+
+# ── Errors ──
 
 
 class ExtractionError(RuntimeError):
@@ -35,56 +32,7 @@ class ExtractionBudgetError(ExtractionError):
     """Raised when an extraction request is likely to exceed model token limits."""
 
 
-@dataclass(slots=True)
-class ExtractionContext:
-    confirmed_entities: list[dict[str, Any]] = field(default_factory=list)
-    confirmed_locations: list[dict[str, Any]] = field(default_factory=list)
-    active_threads: list[dict[str, Any]] = field(default_factory=list)
-    recent_events: list[dict[str, Any]] = field(default_factory=list)
-    temporal_constraints: list[dict[str, Any]] = field(default_factory=list)
-    frontier: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class PromptEnvelope:
-    task: str
-    prompt_version: str
-    schema_version: str
-    unit: dict[str, Any]
-    context: dict[str, Any]
-    text: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    def to_model_payload(self) -> dict[str, Any]:
-        return {
-            "unit": self.unit,
-            "prior_context": self.context,
-            "text": self.text,
-        }
-
-
-@dataclass(slots=True)
-class LocalBundleResult:
-    task: str
-    prompt_version: str
-    schema_version: str
-    unit_id: str
-    source_text_hash: str
-    context_hash: str
-    model: str
-    raw_response: str
-    data: dict[str, Any]
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+# ── Backend protocol ──
 
 
 class LLMBackend(Protocol):
@@ -94,6 +42,25 @@ class LLMBackend(Protocol):
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
         ...
+
+    def start_conversation(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        *,
+        pass_name: str = "",
+    ) -> ConversationContext:
+        ...
+
+    def continue_conversation(
+        self,
+        conversation: ConversationContext,
+        user_message: str,
+    ) -> ConversationContext:
+        ...
+
+
+# ── Mock backend ──
 
 
 class MockExtractionBackend:
@@ -143,13 +110,15 @@ class MockExtractionBackend:
                 if evidence
                 else [],
                 "location_mentions": [],
-                "event_mentions": [
+                "atom_mentions": [
                     {
-                        "event_id": "event-0001",
-                        "summary": "Placeholder event extracted by mock backend.",
+                        "atom_id": "atom-0001",
+                        "atom_kind": "narrative_event",
+                        "summary": "Placeholder atom extracted by mock backend.",
                         "participant_mention_ids": [],
                         "location_mention_ids": [],
                         "time_expression_ids": [],
+                        "thread_ids": [],
                         "evidence_span_ids": ["evidence-0001"] if evidence else [],
                     }
                 ]
@@ -163,8 +132,7 @@ class MockExtractionBackend:
         )
 
 
-DEEPSEEK_DEFAULT_TIMEOUT = 300
-DEEPSEEK_DEFAULT_MAX_RETRIES = 3
+# ── DeepSeek backend ──
 
 
 class DeepSeekBackend:
@@ -209,12 +177,68 @@ class DeepSeekBackend:
         return f"deepseek:{self.model}:{thinking_mode}:effort={self.reasoning_effort}:max={self.max_tokens}"
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ]
+        kwargs = self._build_request_kwargs(messages)
+        return self._call_with_retry(kwargs)
+
+    def start_conversation(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        *,
+        pass_name: str = "",
+    ) -> ConversationContext:
+        from .conversation import ConversationContext, TurnMetadata
+
+        ctx = ConversationContext.create(
+            model_identity=self.model_identity,
+            pass_name=pass_name,
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+        )
+        kwargs = self._build_request_kwargs(ctx.messages)
+        started_at = time.monotonic()
+        assistant_response = self._call_with_retry(kwargs)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        ctx.record_turn(
+            assistant_response=assistant_response,
+            metadata=TurnMetadata(
+                turn_index=1,
+                turn_type="initial",
+                elapsed_ms=elapsed_ms,
+            ),
+        )
+        return ctx
+
+    def continue_conversation(
+        self,
+        conversation: ConversationContext,
+        user_message: str,
+    ) -> ConversationContext:
+        from .conversation import TurnMetadata
+
+        conversation.append_user_message(user_message)
+        kwargs = self._build_request_kwargs(conversation.messages)
+        started_at = time.monotonic()
+        assistant_response = self._call_with_retry(kwargs)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        conversation.record_turn(
+            assistant_response=assistant_response,
+            metadata=TurnMetadata(
+                turn_index=conversation.turn_count + 1,
+                turn_type="repair",
+                elapsed_ms=elapsed_ms,
+            ),
+        )
+        return conversation
+
+    def _build_request_kwargs(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-            ],
+            "messages": messages,
             "response_format": {"type": "json_object"},
             "max_tokens": self.max_tokens,
             "stream": False,
@@ -222,7 +246,9 @@ class DeepSeekBackend:
         }
         if self.thinking:
             kwargs["reasoning_effort"] = self.reasoning_effort
+        return kwargs
 
+    def _call_with_retry(self, kwargs: dict[str, Any]) -> str:
         last_exception: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -240,107 +266,36 @@ class DeepSeekBackend:
             content = choice.message.content
             if not content:
                 raise RuntimeError("DeepSeek returned empty content for JSON extraction")
+            if finish_reason == "length" and attempt < self.max_retries:
+                print(
+                    f"  length-retry after {2 ** attempt}s (attempt {attempt + 1}/{self.max_retries + 1})",
+                    file=sys.stderr,
+                )
+                time.sleep(2 ** attempt)
+                continue
             if finish_reason == "length":
                 raise ExtractionError(
                     "DeepSeek stopped because generation hit max_tokens or context length; "
                     "retry with a higher --max-tokens value or a smaller input segment."
                 )
+            try:
+                parse_json_response(content)
+            except ExtractionError as parse_error:
+                if attempt < self.max_retries:
+                    delay = 2 ** attempt
+                    print(
+                        f"  parse-retry after {delay}s (attempt {attempt + 1}/{self.max_retries + 1}): {parse_error}",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
             return content
 
         raise last_exception  # type: ignore[misc]
 
 
-def run_local_bundle_extraction(
-    book_path: str | Path,
-    unit_id: str,
-    *,
-    context: ExtractionContext | None = None,
-    backend: LLMBackend | None = None,
-    cache_dir: str | Path = ".tilusion_cache/extraction",
-    use_cache: bool = True,
-) -> LocalBundleResult:
-    index = build_book_index(book_path)
-    unit = index.unit_map().get(unit_id)
-    if unit is None:
-        raise ValueError(f"unknown unit_id: {unit_id}")
-    text = extract_unit_text(book_path, unit)
-    extraction_context = context or ExtractionContext(frontier=unit_id)
-    llm = backend or MockExtractionBackend()
-    envelope = build_local_bundle_prompt(unit, text, extraction_context)
-    check_extraction_budget(
-        LOCAL_BUNDLE_SYSTEM_PROMPT,
-        envelope.to_model_payload(),
-        max_output_tokens=getattr(llm, "max_tokens", DEFAULT_MAX_TOKENS),
-    )
-    cache_key = build_cache_key(envelope, llm.model_identity)
-    cache_path = Path(cache_dir) / f"{cache_key}.json"
-    if use_cache and cache_path.exists():
-        return result_from_json(cache_path.read_text(encoding="utf-8"))
-
-    raw_response = llm.complete_json(LOCAL_BUNDLE_SYSTEM_PROMPT, envelope.to_model_payload())
-    data = parse_json_response(raw_response)
-    validate_local_bundle(data)
-    result = LocalBundleResult(
-        task=envelope.task,
-        prompt_version=PROMPT_VERSION,
-        schema_version=SCHEMA_VERSION,
-        unit_id=unit.id,
-        source_text_hash=sha256_text(text),
-        context_hash=sha256_json(extraction_context.to_dict()),
-        model=llm.model_identity,
-        raw_response=raw_response,
-        data=data,
-    )
-    if use_cache:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(result.to_json(), encoding="utf-8")
-    return result
-
-
-def build_local_bundle_prompt(
-    unit: StructureUnit, text: str, context: ExtractionContext
-) -> PromptEnvelope:
-    return PromptEnvelope(
-        task="local_bundle_extraction",
-        prompt_version=PROMPT_VERSION,
-        schema_version=SCHEMA_VERSION,
-        unit={
-            "id": unit.id,
-            "label": unit.label,
-            "kind": unit.kind,
-            "title_path": unit.title_path,
-            "content_kind": unit.content_kind,
-            "source_kind": unit.source_kind,
-            "source_range": unit.source_range,
-        },
-        context=context.to_dict(),
-        text=text,
-    )
-
-
-LOCAL_BUNDLE_SYSTEM_PROMPT = resources.files("tilusion.prompts").joinpath(PROMPT_RESOURCE).read_text(encoding="utf-8")
-
-
-PLACEHOLDER_PASSES = [
-    "event_grouping",
-    "temporal_claim_extraction",
-    "thread_candidate_refinement",
-    "alias_candidate_generation",
-    "parent_unit_verification",
-]
-
-
-def build_cache_key(envelope: PromptEnvelope, model_identity: str) -> str:
-    payload = {
-        "task": envelope.task,
-        "prompt_version": envelope.prompt_version,
-        "schema_version": envelope.schema_version,
-        "unit_id": envelope.unit["id"],
-        "source_text_hash": sha256_text(envelope.text),
-        "context_hash": sha256_json(envelope.context),
-        "model_identity": model_identity,
-    }
-    return sha256_json(payload)
+# ── JSON parsing ──
 
 
 def parse_json_response(raw_response: str) -> dict[str, Any]:
@@ -365,6 +320,41 @@ def parse_json_response(raw_response: str) -> dict[str, Any]:
                 f"JSON error: {second_error.msg} at char {second_error.pos}. "
                 f"Response tail: {tail}"
             ) from second_error
+
+
+# ── Hashing ──
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def sha256_json(data: Any) -> str:
+    payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return sha256_text(payload)
+
+
+# ── Token estimation ──
+
+
+def estimate_deepseek_tokens(text: str) -> int:
+    cjk_chars = sum(1 for char in text if is_cjk(char))
+    other_chars = len(text) - cjk_chars
+    return max(1, int((cjk_chars * 0.6) + (other_chars * 0.3)) + 1)
+
+
+def is_cjk(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x20000 <= codepoint <= 0x2A6DF
+        or 0x2A700 <= codepoint <= 0x2B73F
+        or 0x2B740 <= codepoint <= 0x2B81F
+        or 0x2B820 <= codepoint <= 0x2CEAF
+        or 0x2CEB0 <= codepoint <= 0x2EBEF
+    )
 
 
 def check_extraction_budget(
@@ -393,56 +383,7 @@ def check_extraction_budget(
         )
 
 
-def estimate_deepseek_tokens(text: str) -> int:
-    cjk_chars = sum(1 for char in text if is_cjk(char))
-    other_chars = len(text) - cjk_chars
-    return max(1, int((cjk_chars * 0.6) + (other_chars * 0.3)) + 1)
-
-
-def is_cjk(char: str) -> bool:
-    codepoint = ord(char)
-    return (
-        0x3400 <= codepoint <= 0x4DBF
-        or 0x4E00 <= codepoint <= 0x9FFF
-        or 0xF900 <= codepoint <= 0xFAFF
-        or 0x20000 <= codepoint <= 0x2A6DF
-        or 0x2A700 <= codepoint <= 0x2B73F
-        or 0x2B740 <= codepoint <= 0x2B81F
-        or 0x2B820 <= codepoint <= 0x2CEAF
-        or 0x2CEB0 <= codepoint <= 0x2EBEF
-    )
-
-
-def validate_local_bundle(data: dict[str, Any]) -> None:
-    required = {
-        "unit_id": str,
-        "evidence_spans": list,
-        "entity_mentions": list,
-        "location_mentions": list,
-        "event_mentions": list,
-        "time_expressions": list,
-        "thread_candidates": list,
-        "warnings": list,
-    }
-    for key, expected_type in required.items():
-        if key not in data:
-            raise ValueError(f"missing extraction field: {key}")
-        if not isinstance(data[key], expected_type):
-            raise ValueError(f"field {key} must be {expected_type.__name__}")
-
-
-def result_from_json(payload: str) -> LocalBundleResult:
-    data = json.loads(payload)
-    return LocalBundleResult(**data)
-
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def sha256_json(data: Any) -> str:
-    payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return sha256_text(payload)
+# ── Text helpers ──
 
 
 def first_nonempty_line(text: str) -> str:
@@ -451,6 +392,35 @@ def first_nonempty_line(text: str) -> str:
         if stripped:
             return stripped
     return ""
+
+
+def last_nonempty_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+# ── Retry helper ──
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True for transient errors worth retrying (network, rate-limit, server)."""
+    try:
+        from openai import (  # type: ignore[import-untyped]
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+        )
+    except ImportError:
+        return False
+
+    return isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError))
+
+
+# ── Mock response generators ──
 
 
 def mock_overview_response(user_payload: dict[str, Any]) -> dict[str, Any]:
@@ -498,23 +468,26 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
                     "alias_confidence": "low",
                 }
             )
-        for event in segment.get("event_mentions", [])[:1]:
+        for atom in segment.get("atom_mentions", [])[:1]:
+            time_expr_ids = atom.get("time_expression_ids") or []
             event_records.append(
                 {
-                    "event_id": f"unit-event-{len(event_records) + 1:04d}",
-                    "summary": event.get("summary", "Mock merged event."),
+                    "atom_id": f"unit-atom-{len(event_records) + 1:04d}",
+                    "atom_kind": atom.get("atom_kind", "narrative_event"),
+                    "summary": atom.get("summary", "Mock merged atom."),
                     "segment_ids": [segment_id],
                     "source_order_hint": index,
                     "participant_entity_ids": [],
                     "location_ids": [],
                     "time_refs": [
                         {"segment_id": segment_id, "time_expression_id": time_id}
-                        for time_id in event.get("time_expression_ids", [])
+                        for time_id in time_expr_ids
                     ],
                     "evidence_refs": [
                         {"segment_id": segment_id, "evidence_id": evidence_id}
-                        for evidence_id in event.get("evidence_span_ids", [])
+                        for evidence_id in atom.get("evidence_span_ids", [])
                     ],
+                    "thread_ids": [],
                     "duplicate_of": None,
                     "qc_notes": ["mock finalization"],
                 }
@@ -523,7 +496,7 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
         "unit_id": unit_id,
         "entity_records": entity_records,
         "location_records": [],
-        "event_records": event_records,
+        "atom_records": event_records,
         "thread_records": [],
         "unresolved_items": [],
         "quality_notes": {
@@ -536,9 +509,7 @@ def mock_unit_finalization_response(user_payload: dict[str, Any]) -> dict[str, A
 
 def mock_unit_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     unit_records = user_payload.get("unit_records", {})
-    repair_targets = user_payload.get("repair_targets", {})
     unresolved = list(unit_records.get("unresolved_items", []))
-    # Simulate repair: move blocking concerns to resolved quality notes
     resolved_count = 0
     remaining = []
     for item in unresolved:
@@ -567,15 +538,15 @@ def mock_unit_repair_response(user_payload: dict[str, Any]) -> dict[str, Any]:
 
 def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
     unit_records = user_payload.get("unit_records", {})
-    events = unit_records.get("event_records", [])
+    events = unit_records.get("atom_records", [])
 
     ordered = []
     for i, event in enumerate(events):
         entry: dict[str, Any] = {
-            "event_id": event["event_id"],
+            "atom_id": event["atom_id"],
         }
         if i + 1 < len(events):
-            entry["before_events"] = [events[i + 1]["event_id"]]
+            entry["before_atoms"] = [events[i + 1]["atom_id"]]
             entry["rationale"] = f"source_order_hint {event.get('source_order_hint', i+1)} < {events[i+1].get('source_order_hint', i+2)}"
         ordered.append(entry)
 
@@ -583,7 +554,7 @@ def mock_unit_timeline_response(user_payload: dict[str, Any]) -> dict[str, Any]:
         "timeline_id": "unit-timeline-0001",
         "summary": "Mock timeline: all events in source order",
         "confidence": "medium",
-        "ordered_events": ordered,
+        "ordered_atoms": ordered,
     }
 
     return {
@@ -596,14 +567,13 @@ def mock_unit_timeline_repair_response(user_payload: dict[str, Any]) -> dict[str
     timelines = user_payload.get("timelines", [])
     missing_events = user_payload.get("repair_targets", {}).get("missing_events", [])
 
-    events = unit_records.get("event_records", [])
+    events = unit_records.get("atom_records", [])
     if missing_events and timelines:
-        # Attach missing events to the first timeline with no ordering edges
         timeline = timelines[0]
-        ordered = timeline.get("ordered_events", [])
+        ordered = timeline.get("ordered_atoms", [])
         for eid in missing_events:
-            ordered.append({"event_id": eid})
-        timeline["ordered_events"] = ordered
+            ordered.append({"atom_id": eid})
+        timeline["ordered_atoms"] = ordered
 
     return {
         "timelines": timelines,
@@ -614,26 +584,3 @@ def mock_unit_timeline_repair_response(user_payload: dict[str, Any]) -> dict[str
         "unresolved_items": [],
         "warnings": ["mock backend used; timeline repair is structural placeholder only"],
     }
-
-
-def last_nonempty_line(text: str) -> str:
-    for line in reversed(text.splitlines()):
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    return ""
-
-
-def _is_retryable(exc: Exception) -> bool:
-    """Return True for transient errors worth retrying (network, rate-limit, server)."""
-    try:
-        from openai import (  # type: ignore[import-untyped]
-            APIConnectionError,
-            APITimeoutError,
-            InternalServerError,
-            RateLimitError,
-        )
-    except ImportError:
-        return False
-
-    return isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError))

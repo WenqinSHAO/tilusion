@@ -156,14 +156,14 @@ def build_source_html(
     segments: list[dict[str, Any]],
     entities: list[dict[str, Any]],
     locations: list[dict[str, Any]],
-    events: list[dict[str, Any]],
+    atoms: list[dict[str, Any]],
     evidence_by_segment: dict[str, dict[str, str]],
     times_by_segment: dict[str, list[dict[str, Any]]],
 ) -> str:
     """Build the full source pane HTML with entity/location annotations.
 
     Renders the entire source text as a continuous scrollable block with
-    entity and location surfaces highlighted inline. Event evidence is
+    entity and location surfaces highlighted inline. Atom evidence is
     included as data for right-pane navigation, but not visible by default.
     """
     annotations: list[dict[str, Any]] = []
@@ -212,15 +212,15 @@ def build_source_html(
                     "id": f"{sid}:{time_id}",
                 })
 
-    # Event evidence locations are navigation targets, not source-side marks.
-    for ev in events:
-        for ref in ev.get("evidence_refs", []):
+    # Atom evidence locations are navigation targets, not source-side marks.
+    for atm in atoms:
+        for ref in atm.get("evidence_refs", []):
             seg_id = ref.get("segment_id", "")
             evidence_id = ref.get("evidence_id", "")
             located = evidence_locations.get((seg_id, evidence_id))
             if not located:
                 continue
-            annotations.append({"start": located[0], "end": located[1], "kind": "event", "id": ev["event_id"]})
+            annotations.append({"start": located[0], "end": located[1], "kind": "atom", "id": atm["atom_id"]})
 
     boundaries = {0, len(source_text)}
     for item in annotations:
@@ -242,7 +242,7 @@ def build_source_html(
         entity_ids = sorted({item["id"] for item in covered if item["kind"] == "entity"})
         location_ids = sorted({item["id"] for item in covered if item["kind"] == "location"})
         time_ids = sorted({item["id"] for item in covered if item["kind"] == "time"})
-        event_ids = sorted({item["id"] for item in covered if item["kind"] == "event"})
+        atom_ids = sorted({item["id"] for item in covered if item["kind"] == "atom"})
         classes = ["source-mark"]
         attrs = []
         if entity_ids:
@@ -254,8 +254,8 @@ def build_source_html(
         if time_ids:
             classes.append("time")
             attrs.append(f'data-times="{html.escape(",".join(time_ids))}"')
-        if event_ids:
-            attrs.append(f'data-events="{html.escape(",".join(event_ids))}"')
+        if atom_ids:
+            attrs.append(f'data-atoms="{html.escape(",".join(atom_ids))}"')
         parts.append(f'<mark class="{" ".join(classes)}" {" ".join(attrs)}>{chunk}</mark>')
 
     body = "".join(parts)
@@ -306,23 +306,20 @@ def build_timeline_nav(
 
 def build_thread_nav(
     threads: list[dict[str, Any]],
-    events: list[dict[str, Any]],
+    atoms: list[dict[str, Any]],
 ) -> str:
     """Build thread sidebar nav items. Returns nav HTML string."""
-    # Pre-compute event→segment mapping for counting
-    event_segment_sets = [
-        set(ev.get("segment_ids", []) or []) for ev in events
-    ]
+    atom_by_id = {a["atom_id"]: a for a in atoms}
     nav_parts: list[str] = []
     for thread in threads:
         tid = thread["thread_id"]
-        thread_segments = set(thread.get("segment_ids", []) or [])
-        event_count = sum(1 for ess in event_segment_sets if ess & thread_segments)
+        thread_atom_ids = thread.get("atom_ids", []) or []
+        atom_count = len(thread_atom_ids)
         summary = thread.get("summary", tid)
         nav_parts.append(
-            f'<button class="nav-item" data-thread="{html.escape(tid)}" title="{html.escape(summary)} ({event_count} events)">'
+            f'<button class="nav-item" data-thread="{html.escape(tid)}" title="{html.escape(summary)} ({atom_count} atoms)">'
             f'{html.escape(summary)}'
-            f'<span style="color:var(--muted);margin-left:6px;font-size:9px">{event_count}</span>'
+            f'<span style="color:var(--muted);margin-left:6px;font-size:9px">{atom_count}</span>'
             f'</button>'
         )
     return "\n".join(nav_parts)
@@ -332,7 +329,7 @@ def build_thread_nav(
 
 def build_data_script(
     entities: list[dict[str, Any]],
-    events: list[dict[str, Any]],
+    atoms: list[dict[str, Any]],
     locations: list[dict[str, Any]],
     threads: list[dict[str, Any]],
     timelines: list[dict[str, Any]],
@@ -343,25 +340,25 @@ def build_data_script(
         {k: e[k] for k in ("entity_id", "canonical_name", "surfaces", "kind", "summary") if k in e}
         for e in entities
     ]
-    slim_events = [
-        {k: ev[k] for k in ("event_id", "summary", "segment_ids", "source_order_hint",
+    slim_atoms = [
+        {k: a[k] for k in ("atom_id", "atom_kind", "summary", "segment_ids", "source_order_hint",
                              "participant_entity_ids", "location_ids", "evidence_refs",
-                             "qc_notes", "time_refs", "confidence") if k in ev}
-        for ev in events
+                             "qc_notes", "time_refs", "thread_ids") if k in a}
+        for a in atoms
     ]
     slim_locations = [
         {k: l[k] for k in ("location_id", "canonical_name", "surfaces", "kind", "summary") if k in l}
         for l in locations
     ]
     slim_threads = [
-        {k: t[k] for k in ("thread_id", "summary", "status", "segment_ids", "evidence_refs") if k in t}
+        {k: t[k] for k in ("thread_id", "summary", "status", "segment_ids", "atom_ids", "evidence_refs") if k in t}
         for t in threads
     ]
-    # Timelines already have the right shape (timeline_id, summary, confidence, ordered_events)
+    # Timelines already have the right shape (timeline_id, summary, confidence, ordered_atoms)
 
     payload = {
         "entities": slim_entities,
-        "events": slim_events,
+        "atoms": slim_atoms,
         "locations": slim_locations,
         "threads": slim_threads,
         "timelines": timelines,
@@ -400,7 +397,7 @@ def generate(
 
     data = package.get("data", package)
     entities: list[dict[str, Any]] = data.get("entity_records", [])
-    events: list[dict[str, Any]] = data.get("event_records", [])
+    atoms: list[dict[str, Any]] = data.get("atom_records", [])
     locations: list[dict[str, Any]] = data.get("location_records", [])
     threads: list[dict[str, Any]] = data.get("thread_records", [])
     timelines: list[dict[str, Any]] = data.get("timelines", [])
@@ -410,7 +407,7 @@ def generate(
     book_title = Path(book_path).stem
 
     # Build lookups
-    events_by_id = {e["event_id"]: e for e in events}
+    atoms_by_id = {a["atom_id"]: a for a in atoms}
     entities_by_id = {e["entity_id"]: e for e in entities}
     locations_by_id = {l["location_id"]: l for l in locations}
     threads_by_id = {t["thread_id"]: t for t in threads}
@@ -430,21 +427,21 @@ def generate(
         segments,
         entities,
         locations,
-        events,
+        atoms,
         evidence_by_segment,
         times_by_segment,
     )
     timeline_nav_html = build_timeline_nav(timelines)
-    thread_nav_html = build_thread_nav(threads, events)
-    data_script = build_data_script(entities, events, locations, threads, timelines)
+    thread_nav_html = build_thread_nav(threads, atoms)
+    data_script = build_data_script(entities, atoms, locations, threads, timelines)
 
     # Build JS constants (replace DATA_PLACEHOLDER_* with real JSON arrays)
     js_constants = (
         '<script>\n'
-        f'const EVENTS = {json.dumps([{k: ev[k] for k in ("event_id","summary","segment_ids","source_order_hint","participant_entity_ids","location_ids","evidence_refs","qc_notes","time_refs","confidence") if k in ev} for ev in events], ensure_ascii=False)};\n'
+        f'const ATOMS = {json.dumps([{k: a[k] for k in ("atom_id","atom_kind","summary","segment_ids","source_order_hint","participant_entity_ids","location_ids","evidence_refs","qc_notes","time_refs","thread_ids") if k in a} for a in atoms], ensure_ascii=False)};\n'
         f'const ENTITIES = {json.dumps([{k: e[k] for k in ("entity_id","canonical_name","surfaces","kind","summary") if k in e} for e in entities], ensure_ascii=False)};\n'
         f'const LOCATIONS = {json.dumps([{k: l[k] for k in ("location_id","canonical_name","surfaces","kind","summary") if k in l} for l in locations], ensure_ascii=False)};\n'
-        f'const THREADS = {json.dumps([{k: t[k] for k in ("thread_id","summary","status","segment_ids","evidence_refs") if k in t} for t in threads], ensure_ascii=False)};\n'
+        f'const THREADS = {json.dumps([{k: t[k] for k in ("thread_id","summary","status","segment_ids","atom_ids","evidence_refs") if k in t} for t in threads], ensure_ascii=False)};\n'
         f'const TIMELINES = {json.dumps(timelines, ensure_ascii=False)};\n'
         '</script>'
     )
@@ -454,7 +451,7 @@ def generate(
         "{{BOOK_TITLE}}": html.escape(book_title),
         "{{ENTITY_COUNT}}": str(len(entities)),
         "{{LOCATION_COUNT}}": str(len(locations)),
-        "{{EVENT_COUNT}}": str(len(events)),
+        "{{ATOM_COUNT}}": str(len(atoms)),
         "{{TIMELINE_COUNT}}": str(len(timelines)),
         "{{THREAD_COUNT}}": str(len(threads)),
         "{{UNRESOLVED_COUNT}}": str(len(unresolved)),
@@ -474,7 +471,7 @@ def generate(
             '</div>'
         ),
         "<!-- DATA_SCRIPT -->": js_constants,
-        "const EVENTS = DATA_PLACEHOLDER_EVENTS;": "",
+        "const ATOMS = DATA_PLACEHOLDER_ATOMS;": "",
         "const ENTITIES = DATA_PLACEHOLDER_ENTITIES;": "",
         "const LOCATIONS = DATA_PLACEHOLDER_LOCATIONS;": "",
         "const THREADS = DATA_PLACEHOLDER_THREADS;": "",
@@ -484,7 +481,7 @@ def generate(
     rendered = render(template, replacements)
     # Remove leftover placeholder lines
     for placeholder_line in [
-        "const EVENTS = DATA_PLACEHOLDER_EVENTS;",
+        "const ATOMS = DATA_PLACEHOLDER_ATOMS;",
         "const ENTITIES = DATA_PLACEHOLDER_ENTITIES;",
         "const LOCATIONS = DATA_PLACEHOLDER_LOCATIONS;",
         "const THREADS = DATA_PLACEHOLDER_THREADS;",
@@ -498,7 +495,7 @@ def generate(
     print(f"Wrote {output_path}")
     print(f"  Entities: {len(entities)}")
     print(f"  Locations: {len(locations)}")
-    print(f"  Events: {len(events)}")
+    print(f"  Atoms: {len(atoms)}")
     print(f"  Threads: {len(threads)}")
     print(f"  Timelines: {len(timelines)}")
     print(f"  Unresolved: {len(unresolved)}")

@@ -1,15 +1,16 @@
-overall guidline
+## overall guidline
 - Don't rebuild the wheel, search and use safe and mature exisiting lib or project when possible.
 - Don't over-design, stay simple and robust.
 - Fail fast and explicitly.
 - Take small, auditable steps.
+- adress me as <My lord>, and refer to yourself as <Shiye> 
 
-env and toolin:
-- work in virtualenv shredder.
+## env and tooling:
+- work in virtualenv shredder at ~/.virtualenvs/shredder
 - LLM backend DeepSeek v4 flash by default for extraction, with pro available for harder cases.
 - Preferred API key env var is DEEPSEEK_API_KEY; DS_API_KEY is kept as a local fallback.
 
-book keeping
+## book keeping
 - Maintain careful commits: each commit should have a focused subject and a body explaining intent, design choices, and verification when relevant.
 - Use commit history as the detailed development log. Prefer careful commit bodies over dumping detailed reasoning into PROGRESS.md.
 - PROGRESS.md is the compact shared memory for human and agent. Keep it current before finalizing each meaningful commit.
