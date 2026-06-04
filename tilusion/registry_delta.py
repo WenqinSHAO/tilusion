@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +24,7 @@ class RegistryDeltaResult:
     operations: list[dict[str, Any]] = field(default_factory=list)
     ambiguity_items: list[dict[str, Any]] = field(default_factory=list)
     id_remap: dict[str, str] = field(default_factory=dict)
+    item_id_remap: dict[str, str] = field(default_factory=dict)
     stats: dict[str, int] = field(default_factory=dict)
 
 
@@ -272,7 +274,8 @@ def apply_registry_delta(
             applied_ids.append(new_id)
 
         elif op_type == "add_item":
-            item_dict = op["item"]
+            item_dict = deepcopy(op["item"])
+            unit_item_id = item_dict.get("item_id", "")
             item_dict["concept_refs"] = _remap_refs(
                 item_dict.get("concept_refs", []), delta.id_remap
             )
@@ -291,33 +294,26 @@ def apply_registry_delta(
                 provenance=item_dict.get("provenance", {}),
             )
             item_id = registry.add_item(item)
+            if unit_item_id:
+                delta.item_id_remap[unit_item_id] = item_id
             applied_ids.append(item_id)
 
         elif op_type == "add_group":
-            group_dict = op["group"]
-            group_dict["concept_refs"] = _remap_refs(
-                group_dict.get("concept_refs", []), delta.id_remap
-            )
+            group_dict = _remap_group_refs(op["group"], delta.id_remap, delta.item_id_remap)
             group = _dict_to_logical_group(group_dict)
             group_id = registry.add_group(group)
             applied_ids.append(group_id)
 
         elif op_type == "continue_group":
             # LLM-confirmed continuation: add group with reference to book group
-            group_dict = op["group"]
-            group_dict["concept_refs"] = _remap_refs(
-                group_dict.get("concept_refs", []), delta.id_remap
-            )
+            group_dict = _remap_group_refs(op["group"], delta.id_remap, delta.item_id_remap)
             group = _dict_to_logical_group(group_dict)
             group_id = registry.add_group(group)
             applied_ids.append(group_id)
 
         elif op_type == "mutate_group":
             # LLM-confirmed mutation: add group with reference to book group
-            group_dict = op["group"]
-            group_dict["concept_refs"] = _remap_refs(
-                group_dict.get("concept_refs", []), delta.id_remap
-            )
+            group_dict = _remap_group_refs(op["group"], delta.id_remap, delta.item_id_remap)
             group = _dict_to_logical_group(group_dict)
             group_id = registry.add_group(group)
             applied_ids.append(group_id)
@@ -364,6 +360,23 @@ def _dict_to_temporal_attribute(value: Any) -> TemporalAttribute:
         source_block_ref=value.get("source_block_ref", ""),
         uncertainty=list(value.get("uncertainty", [])),
     )
+
+
+def _remap_group_refs(
+    group_dict: dict[str, Any],
+    concept_id_remap: dict[str, str],
+    item_id_remap: dict[str, str],
+) -> dict[str, Any]:
+    """Return a copy of a unit group with book-scope concept/item refs."""
+    group = deepcopy(group_dict)
+    group["concept_refs"] = _remap_refs(group.get("concept_refs", []), concept_id_remap)
+    group["item_refs"] = _remap_refs(group.get("item_refs", []), item_id_remap)
+    graph = group.get("graph")
+    if isinstance(graph, dict):
+        for node in graph.get("nodes", []) or []:
+            if isinstance(node, dict) and node.get("item_ref"):
+                node["item_ref"] = item_id_remap.get(node["item_ref"], node["item_ref"])
+    return group
 
 
 def _dict_to_logical_group(d: dict[str, Any]) -> LogicalGroup:

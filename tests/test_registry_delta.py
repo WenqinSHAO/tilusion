@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from tilusion.book_registry import BookRegistry
-from tilusion.reading_schema import Concept
+from tilusion.reading_schema import AtomicItem, Concept
 from tilusion.registry_delta import (
     RegistryDeltaResult,
     apply_registry_delta,
@@ -390,6 +390,63 @@ class TestApplyRegistryDelta:
             refs = item_dict.get("concept_refs", [])
             assert all(ref.startswith("concept-") for ref in refs)
             assert "c1" not in refs  # unit-local ID should be remapped
+
+    def test_apply_group_remaps_item_refs_and_graph_nodes(self, tmp_path: Path) -> None:
+        reg = _make_registry(tmp_path)
+        existing_item_id = reg.add_item(AtomicItem(
+            item_id="",
+            item_type="observation",
+            summary="Existing prior-unit item",
+            source_block_refs=["block-000001"],
+            concept_refs=[],
+            provenance={"source_unit": "unit-0001"},
+        ))
+        assert existing_item_id == "item-0001"
+        unit_data = {
+            "concepts": [
+                _make_concept_dict("c1", "Alpha", canonical_name="Alpha"),
+            ],
+            "atomic_items": [
+                {
+                    "item_id": "item-0001",
+                    "item_type": "event",
+                    "summary": "Unit-local item with colliding ID",
+                    "source_block_refs": ["block-000100"],
+                    "concept_refs": ["c1"],
+                    "temporal_attributes": [],
+                    "attributes": {},
+                    "uncertainty": [],
+                    "provenance": {"grounding": "source_grounded"},
+                }
+            ],
+            "logical_groups": [
+                {
+                    "group_id": "group-0001",
+                    "group_type": "timeline",
+                    "summary": "Unit-local group",
+                    "item_refs": ["item-0001"],
+                    "concept_refs": ["c1"],
+                    "graph": {
+                        "nodes": [
+                            {"node_id": "node-0001", "item_ref": "item-0001", "label": "event"},
+                        ],
+                        "edges": [],
+                    },
+                    "uncertainty": [],
+                    "provenance": {"grounding": "synthesis"},
+                }
+            ],
+            "unresolved_items": [],
+        }
+
+        delta = compute_registry_delta(unit_data, reg, unit_id="unit-0002")
+        apply_registry_delta(reg, delta)
+
+        assert delta.item_id_remap == {"item-0001": "item-0002"}
+        group = next(iter(reg._groups.values()))
+        assert group["item_refs"] == ["item-0002"]
+        assert group["graph"]["nodes"][0]["item_ref"] == "item-0002"
+        assert group["item_refs"][0] != existing_item_id
 
     def test_round_trip_extract_delta_apply(self, tmp_path: Path) -> None:
         """Full round-trip: extract → compute delta → apply → verify registry."""

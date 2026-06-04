@@ -2791,7 +2791,16 @@ def run_reading_pipeline(
             "overview": pass_summaries.get("overview_segmentation", {}).get("cache_key", ""),
             "per_segment": pass_summaries.get("per_segment_extraction", {}).get("segment_cache_keys", []),
             "logical_grouping": pass_summaries.get("unit_logical_grouping", {}).get("cache_key", ""),
+            "cross_unit_concept_resolution": pass_summaries.get("cross_unit_concept_resolution", {}).get("cache_key", ""),
+            "cross_unit_group_resolution": pass_summaries.get("cross_unit_group_resolution", {}).get("cache_key", ""),
         },
+        "passes": pass_summaries,
+        "cross_unit": {
+            "run_hash": cross_unit_run_hash,
+            "run_dir": str(cross_unit_cache_root) if cross_unit_cache_root is not None else "",
+            "concept_resolution": pass_summaries.get("cross_unit_concept_resolution", {}),
+            "group_resolution": pass_summaries.get("cross_unit_group_resolution", {}),
+        } if scope == "book" else {},
         "unit_package_path": package_path,
         "validation_passed": bool(final_validation.get("passed", False)),
     }
@@ -2831,6 +2840,10 @@ def run_reading_pipeline(
                 "pass_cache_keys": {
                     "concept_resolution": pass_summaries.get("cross_unit_concept_resolution", {}).get("cache_key", ""),
                     "group_resolution": pass_summaries.get("cross_unit_group_resolution", {}).get("cache_key", ""),
+                },
+                "passes": {
+                    "concept_resolution": pass_summaries.get("cross_unit_concept_resolution", {}),
+                    "group_resolution": pass_summaries.get("cross_unit_group_resolution", {}),
                 },
                 "registry_commit": registry.head_commit_hash() if registry is not None else "",
             }
