@@ -870,8 +870,19 @@ def build_group_index(registry: BookRegistry) -> list[CompactGroup]:
     return index
 
 
-def _semantic_candidates_by_unit(dual_trace: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Build per-unit semantic candidate rows from `_dual_signal_select` trace."""
+def _semantic_candidates_by_unit(
+    dual_trace: dict[str, Any],
+    *,
+    max_embedding: int = 5,
+    max_bm25_only: int = 3,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build per-unit semantic candidate rows from `_dual_signal_select` trace.
+
+    Caps per concept: at most *max_embedding* candidates with embedding
+    signal (pure embedding or BM25+embedding), plus at most *max_bm25_only*
+    BM25-only candidates. This keeps candidate-map rows bounded regardless
+    of ``top_k`` in the dual-signal selector.
+    """
     by_unit: dict[str, list[dict[str, Any]]] = {}
     for query in dual_trace.get("queries", []):
         unit_id = query.get("unit_concept_id", "")
@@ -892,8 +903,19 @@ def _semantic_candidates_by_unit(dual_trace: dict[str, Any]) -> dict[str, list[d
             score_by_id[cid] = max(score_by_id.get(cid, 0.0), float(row.get("score", 0.0)))
             methods_by_id[cid].add("embedding")
         rows: list[dict[str, Any]] = []
+        n_embedding = 0
+        n_bm25_only = 0
         for cid in query.get("selected", []):
             methods = sorted(methods_by_id.get(cid, set()))
+            has_embedding = "embedding" in methods
+            if has_embedding:
+                if n_embedding >= max_embedding:
+                    continue
+                n_embedding += 1
+            else:
+                if n_bm25_only >= max_bm25_only:
+                    continue
+                n_bm25_only += 1
             rows.append({
                 "concept_id": cid,
                 "score": round(score_by_id.get(cid, 0.0), 6),
@@ -1028,10 +1050,12 @@ def select_concept_candidates(
             semantic_by_unit=semantic_by_unit,
         )
         if registry_index and len(all_ids) >= int(len(registry_index) * 0.8):
-            trace["candidate_selection_warning"] = (
+            msg = (
                 f"selected {len(all_ids)}/{len(registry_index)} registry concepts; "
                 "use candidate_map rather than treating registry_index as selective"
             )
+            trace["candidate_selection_warning"] = msg
+            print(f"  [registry-index] WARNING: {msg}", file=sys.stderr)
 
     if not all_ids:
         return []

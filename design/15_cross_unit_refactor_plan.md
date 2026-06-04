@@ -1,22 +1,22 @@
 # Cross-Unit Entity Consistency: Refactoring & Implementation Plan
 
 Status: **plan + partial implementation** — derived from analysis in
-`14_cross_chunk_entity_consistency_analysis.md`. Phase 1's embedding cache
-has been implemented with text-hash cache keys; Phase 1.5 is the next
-retrieval-shape refactor.
+`14_cross_chunk_entity_consistency_analysis.md`. Phase 1 (embedding cache)
+and Phase 1.5 (per-concept candidate maps) are implemented. Phase 2
+(identity-gated soft typing) is the next step.
 
 ## Overview
 
 Five implementation phases, in dependency order. Each phase builds on the
 previous and produces independently mergeable, testable increments.
 
-| # | Phase | Est. scope | Depends on |
-|---|-------|------------|------------|
-| 1 | Embedding cache | ~250 lines | None |
-| 1.5 | Per-concept candidate maps | ~180 lines | Phase 1 |
-| 2 | Soft typing (identity-gated type facets) | ~400 lines | None (independent of Phase 1) |
-| 3 | Richer book digest & per-segment hints | ~350 lines | Phase 1.5, Phase 2 |
-| 4 | Concept-to-higher-order-reference | ~250 lines | Phase 3 |
+| # | Phase | Est. scope | Depends on | Status |
+|---|-------|------------|------------|--------|
+| 1 | Embedding cache | ~250 lines | None | Done |
+| 1.5 | Per-concept candidate maps | ~180 lines | Phase 1 | Done |
+| 2 | Soft typing (identity-gated type facets) | ~400 lines | None (independent of Phase 1) | Next |
+| 3 | Richer book digest & per-segment hints | ~350 lines | Phase 1.5, Phase 2 | — |
+| 4 | Concept-to-higher-order-reference | ~250 lines | Phase 3 | — |
 
 ### What we reuse and improve
 
@@ -217,7 +217,18 @@ concept summary as the search query when surface/cname matching fails.
 
 ## Phase 1.5: Per-Concept Candidate Maps
 
-### Motivation
+**Status: Done** (2026-06-04).
+
+### What was implemented
+
+- `_deterministic_filter()` returns `matches_by_unit: dict[str, list[str]]` — per-unit-concept deterministic candidate ids.
+- `_semantic_candidates_by_unit()` builds per-unit semantic candidate rows from the dual-signal trace, with per-concept caps (max 5 embedding + 3 BM25-only).
+- `_build_candidate_map()` merges deterministic and semantic candidates into the LLM-facing payload structure.
+- `select_concept_candidates()` writes `candidate_map` to the selection trace; the pipeline (`reading_pipeline.py:2570`) passes it through to `build_concept_resolution_payload()`.
+- Prompt `prompt_concept_resolution_v0.2.md` references `candidate_map` as the primary screening structure (items 1, 3, and rule at line 135).
+- A `candidate_selection_warning` is printed to stderr when ≥80% of the registry is selected, reminding operators to use the candidate_map rather than the flat index.
+
+### Original motivation
 
 The unit-0003 trace showed `select_concept_candidates()` picking 229 registry
 candidates for 235 unmatched unit concepts. That is almost the whole registry.
