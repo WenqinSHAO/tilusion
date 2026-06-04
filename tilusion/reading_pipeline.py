@@ -76,6 +76,7 @@ from .registry_index import (
     select_group_candidates,
 )
 from .registry_delta import RegistryDeltaResult, apply_registry_delta, compute_registry_delta
+from .reading_quality import compute_quality_metrics, log_quality_metrics
 
 # re-export for convenience
 __all__ = [
@@ -191,6 +192,124 @@ def _raise_on_validation_errors(pass_name: str, report: ReadingValidationReport)
         if issue.severity == "error"
     )
     raise ValueError(f"{pass_name} validation failed: {issue_summary}")
+
+
+# ── Human-readable merge/proposal logging ───────────────────────────────────
+
+
+def _log_concept_resolution_preview(
+    proposals: list[dict[str, Any]],
+    unit_concepts: list[dict[str, Any]],
+    registry: BookRegistry | None,
+    *,
+    limit: int = 8,
+) -> None:
+    if not proposals:
+        return
+    unit_by_id = {str(c.get("concept_id", "")): c for c in unit_concepts if isinstance(c, dict)}
+    interesting = [p for p in proposals if p.get("proposal_type") in {"link", "merge", "reclassify", "refine"}]
+    if not interesting:
+        return
+    print(f"    concept proposals preview ({min(len(interesting), limit)}/{len(interesting)}):", file=sys.stderr)
+    for prop in interesting[:limit]:
+        refs = [str(ref) for ref in prop.get("target_refs", [])]
+        unit = unit_by_id.get(refs[0], {}) if refs else {}
+        reg_id = str(prop.get("registry_ref") or "")
+        reg = registry.get_concept(reg_id).to_dict() if registry is not None and reg_id and registry.get_concept(reg_id) else {}
+        print(
+            f"      {prop.get('proposal_type')} {refs or ['?']} -> {reg_id or '-'} | "
+            f"unit {_concept_brief(unit)} | registry {_concept_brief(reg)} | "
+            f"why={_log_preview(prop.get('rationale', ''), limit=100)}",
+            file=sys.stderr,
+        )
+    if len(interesting) > limit:
+        print(f"      ... {len(interesting) - limit} more concept proposal(s)", file=sys.stderr)
+
+
+def _log_group_resolution_preview(
+    proposals: list[dict[str, Any]],
+    unit_groups: list[dict[str, Any]],
+    registry: BookRegistry | None,
+    *,
+    limit: int = 8,
+) -> None:
+    if not proposals:
+        return
+    unit_by_id = {str(g.get("group_id", "")): g for g in unit_groups if isinstance(g, dict)}
+    interesting = [p for p in proposals if p.get("proposal_type") in {"continue", "mutate", "merge_groups", "cross_group_edge"}]
+    if not interesting:
+        return
+    print(f"    group proposals preview ({min(len(interesting), limit)}/{len(interesting)}):", file=sys.stderr)
+    for prop in interesting[:limit]:
+        unit_id = str(prop.get("unit_group_ref") or "")
+        reg_id = str(prop.get("registry_group_ref") or "")
+        unit = unit_by_id.get(unit_id, {})
+        reg = registry._groups.get(reg_id, {}) if registry is not None and reg_id else {}
+        print(
+            f"      {prop.get('proposal_type')} {unit_id or '-'} -> {reg_id or '-'} | "
+            f"unit {_group_brief(unit)} | registry {_group_brief(reg)} | "
+            f"why={_log_preview(prop.get('rationale', ''), limit=100)}",
+            file=sys.stderr,
+        )
+    if len(interesting) > limit:
+        print(f"      ... {len(interesting) - limit} more group proposal(s)", file=sys.stderr)
+
+
+def _log_registry_delta_preview(
+    delta: RegistryDeltaResult,
+    registry: BookRegistry,
+    *,
+    limit: int = 10,
+) -> None:
+    interesting = [
+        op for op in delta.operations
+        if op.get("op_type") in {"merge_concepts", "continue_group", "mutate_group"}
+    ]
+    if not interesting:
+        return
+    print(f"  [book] merge preview ({min(len(interesting), limit)}/{len(interesting)}):", file=sys.stderr)
+    for op in interesting[:limit]:
+        op_type = op.get("op_type", "")
+        if op_type == "merge_concepts":
+            unit = op.get("unit_concept", {})
+            reg_id = str(op.get("book_concept_id") or "")
+            reg = registry.get_concept(reg_id).to_dict() if reg_id and registry.get_concept(reg_id) else {}
+            print(
+                f"    concept {unit.get('concept_id', '?')} -> {reg_id} "
+                f"({op.get('match_reason', '')}) | unit {_concept_brief(unit)} | registry {_concept_brief(reg)}",
+                file=sys.stderr,
+            )
+        else:
+            group = op.get("group", {})
+            reg_id = str(op.get("book_group_id") or "")
+            reg = registry._groups.get(reg_id, {}) if reg_id else {}
+            print(
+                f"    group {op_type} {group.get('group_id', '?')} -> {reg_id} | "
+                f"unit {_group_brief(group)} | registry {_group_brief(reg)}",
+                file=sys.stderr,
+            )
+    if len(interesting) > limit:
+        print(f"    ... {len(interesting) - limit} more merge operation(s)", file=sys.stderr)
+
+
+def _concept_brief(concept: dict[str, Any]) -> str:
+    if not concept:
+        return "<missing>"
+    name = concept.get("canonical_name") or concept.get("surface") or concept.get("concept_id") or "?"
+    return (
+        f"{concept.get('concept_id', '?')} {concept.get('concept_type', '?')} "
+        f"{_log_preview(name, limit=32)} — {_log_preview(concept.get('summary', ''), limit=72)}"
+    )
+
+
+def _group_brief(group: dict[str, Any]) -> str:
+    if not group:
+        return "<missing>"
+    return (
+        f"{group.get('group_id', '?')} {group.get('group_type', '?')} "
+        f"items={len(group.get('item_refs', []) or [])} concepts={len(group.get('concept_refs', []) or [])} — "
+        f"{_log_preview(group.get('summary', ''), limit=90)}"
+    )
 
 
 # ── Pass record ──────────────────────────────────────────────────────────────
@@ -2586,6 +2705,11 @@ def run_reading_pipeline(
                 f"    = {n_links} links, {n_new} new, {len(implicit_ref_map)} implicit ref maps",
                 file=sys.stderr,
             )
+            _log_concept_resolution_preview(
+                concept_resolution_proposals,
+                stabilized["concepts"],
+                registry,
+            )
         except Exception:
             _log_progress(step, TOTAL_STEPS, "Concept resolution", "FAILED", _elapsed_ms(t0))
             raise
@@ -2680,6 +2804,11 @@ def run_reading_pipeline(
                 f"    = {n_continues} continues, {n_new} new, {len(cross_group_edges)} cross-group edges",
                 file=sys.stderr,
             )
+            _log_group_resolution_preview(
+                group_resolution_proposals,
+                grouping_record.data["logical_groups"],
+                registry,
+            )
         except Exception:
             _log_progress(step, TOTAL_STEPS, "Group resolution", "FAILED", _elapsed_ms(t0))
             raise
@@ -2713,9 +2842,14 @@ def run_reading_pipeline(
             "source_index_id": source_index_id,
             "source_index_path": str(source_index_path),
             "run_hash": unit_run_hash,
+            "reader_language": "zh-Hans",
+            "normalized_language": "normalized",
         },
         "metrics": metrics,
     }
+    metrics["quality"] = compute_quality_metrics(final_data, reader_language="zh-Hans")
+    final_data["metrics"] = metrics
+    log_quality_metrics(metrics["quality"])
     final_validation_report = validate_extraction_unit_package(final_data)
     _raise_on_validation_errors("reading-unit-package", final_validation_report)
     final_validation = final_validation_report.to_dict()
@@ -2735,6 +2869,7 @@ def run_reading_pipeline(
             concept_resolution_proposals=concept_resolution_proposals,
             group_resolution_proposals=group_resolution_proposals,
         )
+        _log_registry_delta_preview(delta_result, registry)
         applied = apply_registry_delta(registry, delta_result)
 
         # ── Post-extraction digest update ──

@@ -905,3 +905,71 @@ def test_normalize_uncertainty_preserves_strings() -> None:
     }
     _normalize_uncertainty_fields(data)
     assert data["concepts"][0]["uncertainty"] == ["note 1", "note 2"]
+
+
+
+def test_quality_metrics_flag_language_and_structure_issues() -> None:
+    from tilusion.reading_quality import compute_quality_metrics
+
+    data = {
+        "source_blocks": [
+            {
+                "block_id": "block-0001",
+                "text": "芸为沈复藏粥，二人谈插瓶之法。",
+            }
+        ],
+        "concepts": [
+            {
+                "concept_id": "concept-0001",
+                "surface": "congee",
+                "canonical_name": "congee",
+                "concept_type": "event",
+                "summary": "Congee hidden by Yun for Shen Fu.",
+                "source_block_refs": ["block-0001"],
+                "observed_surfaces": ["congee"],
+                "facets": [],
+            },
+            {
+                "concept_id": "concept-0002",
+                "surface": "插瓶之法",
+                "canonical_name": "插瓶之法",
+                "concept_type": "method",
+                "summary": "插瓶的方法。",
+                "source_block_refs": ["block-0001"],
+                "observed_surfaces": ["插瓶之法"],
+                "facets": ["method", "flower_arrangement"],
+            },
+        ],
+        "atomic_items": [
+            {
+                "item_id": "item-0001",
+                "item_type": "event",
+                "summary": "Yun hides congee.",
+                "source_block_refs": ["block-0001"],
+                "concept_refs": ["concept-0001"],
+            }
+        ],
+        "logical_groups": [
+            {
+                "group_id": "group-0001",
+                "group_type": "temporal_sequence",
+                "summary": "A local episode in English.",
+                "item_refs": ["item-0001"],
+                "concept_refs": ["concept-0001"],
+                "graph": {
+                    "nodes": [{"node_id": "node-1", "item_ref": "item-0001"}],
+                    "edges": [{"source": "node-1", "target": "node-1", "edge_type": "custom_edge", "summary": "Self edge."}],
+                },
+            }
+        ],
+    }
+
+    metrics = compute_quality_metrics(data, reader_language="zh-Hans")
+
+    assert metrics["field_language"]["source_surface_issue_count"] >= 1
+    assert metrics["field_language"]["reader_language_issue_count"] >= 2
+    assert metrics["type_vocabulary"]["nonstandard_concept_types"] == {"event": 1}
+    assert metrics["type_vocabulary"]["nonstandard_edge_types"] == {"custom_edge": 1}
+    assert metrics["facets"]["empty_count"] == 1
+    assert metrics["canonical_names"]["eligible_total"] == 1
+    assert metrics["group_granularity"]["temporal_sequence_count"] == 1

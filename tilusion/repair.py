@@ -540,7 +540,7 @@ def _repair_loop(
             break
 
         repair_turns += 1
-        _log_llm_repair_start(remaining_issues, repair_turns, max_repair_turns, pass_name)
+        _log_llm_repair_start(remaining_issues, repair_turns, max_repair_turns, pass_name, validation_subject)
 
         repair_msg = build_repair_message(remaining_issues)
         conversation = backend.continue_conversation(conversation, repair_msg)
@@ -552,7 +552,7 @@ def _repair_loop(
             if repairs:
                 apply_repair_patch(validation_subject, repairs)
                 _propagate_fixes(data, validation_subject)
-                _log_repair_applied(repairs, pass_name)
+                _log_repair_applied(repairs, pass_name, validation_subject)
             else:
                 print(
                     f"  {pass_name}: LLM repair turn {repair_turns} returned no repairs",
@@ -742,9 +742,9 @@ def _log_llm_repair_start(
     turn: int,
     max_turns: int,
     pass_name: str,
+    data: dict[str, Any] | None = None,
 ) -> None:
     """Log the errors being sent to the LLM for repair."""
-    codes = [r.get("code", "?") for r in remaining]
     paths = [r.get("path", "?") for r in remaining[:5]]
     detail = ", ".join(paths)
     if len(remaining) > 5:
@@ -754,11 +754,26 @@ def _log_llm_repair_start(
         f"{len(remaining)} issues: {detail}",
         file=sys.stderr,
     )
+    if data is None:
+        return
+    for issue in remaining[:3]:
+        path = str(issue.get("path", ""))
+        code = str(issue.get("code", "?"))
+        message = str(issue.get("message", ""))
+        current = _preview_path_value(data, path)
+        msg = f" — {_truncate(message, 90)}" if message else ""
+        print(
+            f"    repair-target {code} {path}: current={current}{msg}",
+            file=sys.stderr,
+        )
+    if len(remaining) > 3:
+        print(f"    ... {len(remaining) - 3} more repair target(s)", file=sys.stderr)
 
 
 def _log_repair_applied(
     repairs: list[dict[str, Any]],
     pass_name: str,
+    data: dict[str, Any] | None = None,
 ) -> None:
     """Log a summary of repairs applied by the LLM."""
     ops: dict[str, int] = {}
@@ -770,3 +785,49 @@ def _log_repair_applied(
         f"  {pass_name}: LLM applied {len(repairs)} repair(s) ({op_summary})",
         file=sys.stderr,
     )
+    for repair in repairs[:5]:
+        path = str(repair.get("path", ""))
+        op = str(repair.get("operation", "replace"))
+        value_preview = _preview_value(repair.get("value"))
+        current = f" -> current={_preview_path_value(data, path)}" if data is not None and path else ""
+        print(
+            f"    repair {op} {path}: value={value_preview}{current}",
+            file=sys.stderr,
+        )
+    if len(repairs) > 5:
+        print(f"    ... {len(repairs) - 5} more repair(s)", file=sys.stderr)
+
+
+def _preview_path_value(data: dict[str, Any], path: str) -> str:
+    if not path:
+        return "<missing>"
+    try:
+        return _preview_value(_resolve_path(data, path))
+    except Exception:
+        parent_path, index = _parse_index_path(path)
+        if parent_path is not None and index is not None:
+            try:
+                parent = _resolve_path(data, parent_path)
+                if isinstance(parent, list) and 0 <= index < len(parent):
+                    return _preview_value(parent[index])
+            except Exception:
+                pass
+        return "<unresolved>"
+
+
+def _preview_value(value: Any, *, limit: int = 120) -> str:
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for key in ("concept_id", "group_id", "item_id", "surface", "canonical_name", "concept_type", "group_type", "summary", "item_ref", "edge_type"):
+            if key in value and value.get(key) not in (None, ""):
+                compact[key] = value.get(key)
+        text = json.dumps(compact or value, ensure_ascii=False, sort_keys=True)
+    else:
+        text = json.dumps(value, ensure_ascii=False) if isinstance(value, (list, str, int, float, bool)) or value is None else str(value)
+    return _truncate(" ".join(text.split()), limit)
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
