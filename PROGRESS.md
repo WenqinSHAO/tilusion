@@ -74,7 +74,8 @@
   - Cache layout refactor 2026-06-02: design doc `design/13_cache_layout_redesign.md` added; implementation now writes source index, registry, run manifests, unit packages, cross-unit pass caches, and book-scope `runs.json` under a clean `.tilusion_cache/book-{hash}/` root. Registry metadata now binds to `source_index_id` before book-scope deltas.
   - Source-index Phase 4/5 hardening 2026-06-02: package validation rejects legacy segment-derived block IDs when `source_index_id` is present; registry deltas carry/enforce `source_index_id`; per-segment extraction prompt now presents book-scoped `block-*` IDs as the normal evidence shape.
   - Cross-unit registry troubleshooting 2026-06-04: unit-0003/0004 book registry groups exposed a systematic item-ref remapping bug: group `item_refs` and graph node `item_ref`s retained unit-local IDs that collided with prior registry item IDs. The fix records `unit_item_id -> registry_item_id` during delta application and remaps group item refs before registry insertion; unit `run.json` now logs cross-unit pass artifact summaries directly.
-  - **Next step:** Rebuild a clean `.tilusion_cache/book-{hash}/` root through units 0002-0004 and re-evaluate group continuity/timeline slicing after the registry item-ref corruption is gone.
+  - Prompt/quality refactor plan 2026-06-04: `design/15_cross_unit_refactor_plan.md` and `design/18_prompt_simplification.md` now prioritize non-fatal quality metrics before prompt refresh, use one prompt template with field-language policy, and keep `timeline` distinct from local `temporal_sequence` groups.
+  - **Next step:** Implement Phase 2a quality metrics scaffolding and richer CLI logging for repair/merge decisions, then rebuild a clean `.tilusion_cache/book-{hash}/` root through units 0002-0004 for re-evaluation.
 
 ## Implementation Status
 

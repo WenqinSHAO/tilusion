@@ -1,12 +1,12 @@
 # Cross-Unit Entity Consistency: Unified Refactoring Plan
 
 Status: **plan + partial implementation** — Phase 1 (embedding cache) and
-Phase 1.5 (candidate maps) are done. Phase 2 (prompt refresh v0.3) is next.
+Phase 1.5 (candidate maps) are done. Phase 2a (quality metrics scaffolding) is next.
 
 This is the canonical plan. It incorporates findings from:
 - `16_extraction_quality_audit.md` — 10 quality problems found in units 2–4
 - `17_prompt_pipeline_audit.md` — root cause analysis of all pipeline prompts
-- `18_prompt_simplification.md` — language-specific prompt variant design
+- `18_prompt_simplification.md` — field-language policy and prompt simplification
 - `14_cross_chunk_entity_consistency_analysis.md` — original problem analysis
 
 ## Overview
@@ -15,9 +15,10 @@ This is the canonical plan. It incorporates findings from:
 |---|-------|------------|------------|--------|
 | 1 | Embedding cache | ~250 lines | None | Done |
 | 1.5 | Per-concept candidate maps | ~180 lines | Phase 1 | Done |
-| **2** | **Prompt refresh v0.3** | ~300 lines | None | **Next** |
-| 3 | Post-extraction validation | ~60 lines | Phase 2 | — |
-| 4 | Soft typing (identity-gated facets) | ~400 lines | Phase 2 | — |
+| **2a** | **Quality metrics scaffolding** | ~60 lines | None | **Next** |
+| **2b** | **Prompt refresh v0.3 + field-language policy** | ~260 lines | Phase 2a | — |
+| 3 | Repair/retry policy from quality metrics | ~40 lines | Phase 2b + run data | — |
+| 4 | Soft typing (identity-gated facets) | ~400 lines | Phase 2b | — |
 | 5 | Richer hints & known/new flagging | ~350 lines | Phase 4 | — |
 | 6 | Higher-order reference detection | ~250 lines | Phase 5 | — |
 
@@ -50,7 +51,23 @@ stderr when ≥80% of registry is selected.
 
 ---
 
-## Phase 2: Prompt Refresh v0.3
+## Phase 2a: Quality Metrics Scaffolding
+
+**Motivation**: Before changing prompts again, add cheap non-fatal
+metrics so the next LLM-backed run can show which failures remain. These
+metrics should not trigger repairs yet; they are visibility scaffolding.
+
+Add the Phase 3 validators first, but initially run them as warnings only:
+source-grounded field checks, reader-facing language checks, normalized
+facet checks, canonical-name coverage by type, non-standard type counts,
+and group granularity metrics.
+
+**Files**: `tilusion/reading_pipeline.py` (+60), pass/run metrics helpers as
+needed.
+
+---
+
+## Phase 2b: Prompt Refresh v0.3 + Field-Language Policy
 
 **Motivation**: The extraction quality audit found that current prompts
 have three structural problems:
@@ -59,24 +76,25 @@ have three structural problems:
    explanations, bloated schema examples (42 lines of empty JSON), repeated
    edge-case rules. This dilutes attention on binding constraints.
 
-2. **The language constraint is fragile.** An English instruction
-   ("CRITICAL — Language: write in the source language") is placed at line
-   3 of a 115-line prompt. By the time the model reaches the output schema
-   at line 44, the constraint is outside its attention window. Unit-0003
-   produced 79 English concepts and 15 English groups from Chinese source
-   text because of this.
+2. **The language constraint is underspecified.** The current prompt says
+   "write in the source language", but extraction output has three different
+   kinds of text fields: source-grounded identity fields, reader-facing prose
+   fields, and pipeline-normalized internal fields. Treating all of them as
+   one language category causes both English translations of Chinese surfaces
+   and weak machine signals for merge logic.
 
 3. **The same constraint is missing from the overview segmentation prompt,**
-   which feeds `extraction_hints` to the extractor. English hints prime
-   English extraction output.
+   which feeds `extraction_hints` to the extractor. Hints are reader-facing
+   prose and should follow an explicit `reader_language`, defaulting to
+   Simplified Chinese for the current app.
 
-### 2a. Strip structural overhead
+### 2b-1. Strip structural overhead
 
 Each prompt reduced to only what the LLM needs for its specific task:
 
 | Section | Current | Target | Rationale |
 |---------|---------|--------|-----------|
-| Language constraint | 3 lines (top) | N/A — prompt IS in target language | See 2b |
+| Language constraint | 3 lines (top) | Field-language policy near schema | See 2b |
 | Hierarchy explanation | 10 lines | **Removed** | LLM doesn't need pipeline architecture |
 | Input field descriptions | 8 lines | 6 lines | Keep, tighten |
 | Schema example | 42 lines (empty JSON) | ~12 lines (realistic populated example) | Empty JSON teaches model to output empties |
@@ -92,6 +110,7 @@ for grouping, overview, and resolution prompts.
 - `observed_surfaces` must list every surface form in the segment
 - Items are source-grounded, concepts may be inferred
 - `concept_refs` must reference concepts in the same response
+- Do not invent block IDs; use only IDs supplied in the segment payload
 - Do not merge distinct time expressions, places, or people
 
 **Content to drop:**
@@ -99,64 +118,62 @@ for grouping, overview, and resolution prompts.
 - "Later passes will..." (irrelevant to this pass's task)
 - "The caller provides JSON with..." field-by-field descriptions (the JSON
   itself is enough)
-- "Do not invent block IDs" (model does this naturally)
 - "Use simple IDs like concept-0001" (model does this naturally)
 - Empty schema examples that teach the model to output empty values
 
-### 2b. Language-specific prompt variants
+### 2b-2. Field-language policy, not language-specific prompt files
 
-Instead of one prompt with a language-switching instruction, create
-per-language variants where the entire system prompt — instructions,
-examples, field descriptions, rules — is in the target language.
+Keep one compact prompt template. Add explicit language roles to the payload:
 
-**Mechanism**: The pipeline detects or receives the book's primary language.
-At prompt composition time, the matching variant is loaded:
+- `source_language`: detected or caller-provided language of the source text.
+- `reader_language`: preferred language for reader-facing prose; default
+  `zh-Hans` for the current application.
+- `normalized_language`: language or tag policy for internal merge signals;
+  default `normalized` (stable controlled tags rather than reader prose).
 
-```
-prompt_per_segment_extraction_v0.3_zh.md   ← Chinese books
-prompt_per_segment_extraction_v0.3_en.md   ← English books (default)
-```
+The prompt must classify output fields into three groups:
 
-**What changes per language**: All human-language prose. Instructions,
-example field values, anti-examples, type definitions.
+| Field class | Examples | Policy |
+|-------------|----------|--------|
+| Source-grounded identity | `surface`, `canonical_name`, `aliases`, `observed_surfaces`, source text quotes | Copy from or normalize within the original source text. Never translate because of `reader_language`. |
+| Reader-facing prose | `summary`, `rationale`, overview `extraction_hints`, group summaries, graph edge notes | Write in `reader_language`; default Simplified Chinese. |
+| Pipeline-normalized internals | `concept_type`, `facets`, normalized time anchors, merge/type hints | Use stable controlled vocabulary/tags consistently across the pipeline. Prefer machine usefulness over reader prose. |
 
-**What stays language-agnostic**: JSON field names (`surface`,
-`concept_type`), type vocabulary (`person`, `place`, `temporal_sequence`),
-ID patterns.
+This avoids duplicated prompt files that can drift, while still preventing
+English translations of source identity fields and allowing the reader UI to
+request Chinese, English, or another prose language later.
 
-**Why this is general**: The mechanism is `source_language → prompt variant`.
-Works for any language — Chinese, English, French, Arabic. Not specific to
-Chinese classical texts. If a language lacks a dedicated variant, fall back
-to the English variant with the current "write in source language"
-instruction (graceful degradation).
-
-### 2c. Type vocabulary consolidation
+### 2b-3. Type vocabulary consolidation
 
 **Concept types**: Remove non-standard entries (`action`, `activity`,
 `statement`, `event`) from the extractor's effective vocabulary. Add
 explicit instruction: "Use ONLY the types listed above. If none fit, use
 `other`. Do not invent new types."
 
-**Group types**: Merge `timeline` and `temporal_sequence` into ONE type
-(`temporal_sequence`). Remove `custom` from the allowed list (keep `other`
-as the escape hatch). Add type definitions with distinguishing criteria:
+**Group types**: Keep both `timeline` and `temporal_sequence`, but define
+their granularity. Remove `custom` from the allowed list (keep `other` as
+the escape hatch). Add type definitions with distinguishing criteria:
 
 | Type | When to use |
 |------|------------|
-| `temporal_sequence` | Items with chronological order forming a narrative arc |
+| `timeline` | Coarse unit-level or book-level arc of major happenings; may be composed from multiple local temporal sequences |
+| `temporal_sequence` | Local/micro chronological episode or event chain; may later be aggregated into a timeline |
 | `theme_set` | Items sharing a theme/motif, no temporal ordering |
 | `method_example_set` | Techniques, methods, and their examples |
 | `claim_evidence_map` | Claims with supporting/contradicting evidence |
 | `contrast_set` | Items presented in explicit contrast |
 | `other` | None of the above fit |
 
-Add scale guidance: "A temporal_sequence should represent a meaningful
-narrative arc. Single events or outings with ≤5 items should use a
-different group type or be merged into a larger temporal_sequence.
-Adjacent temporal_sequences that form a continuous narrative (same key
-entities, sequential time periods) should be merged into one."
+Add scale guidance:
+- A `temporal_sequence` can be a small coherent episode if it has clear
+  local ordering.
+- A `timeline` should span at least a substantial unit section, whole unit,
+  or cross-unit/book arc and should contain coarser events.
+- Adjacent temporal sequences that form a continuous arc should either be
+  merged into a larger timeline or connected with `part_of` / `precedes`
+  cross-group edges.
 
-### 2d. Facet and canonical_name generation
+### 2b-4. Facet and canonical_name generation
 
 These were originally Phase 3 (soft typing). The prompt instruction to
 generate them belongs here — the schema change and merge logic stay in
@@ -166,20 +183,22 @@ Phase 4.
 > For each concept, provide 2–5 type-describing phrases at different
 > abstraction levels in `facets`. Example: a treaty concept →
 > `["treaty", "legal document", "historical event", "agreement"]`. Facets
-> supplement `concept_type` — they do not replace it. Use the source
-> language.
+> supplement `concept_type` — they do not replace it. Use normalized,
+> stable tags consistently across the pipeline; do not translate them for
+> reader presentation.
 
 **Canonical name** (new instruction + fixed example):
-> Every concept MUST have a `canonical_name`. For persons, use the full
-> standard name. For places, use the complete place name. For terms, use
-> the normalized form. Leave empty ONLY when no standardized form exists
-> (e.g., unnamed minor characters).
+> Stable named or recurring concepts SHOULD have a `canonical_name`. For
+> persons, use the full source-text name. For places, use the complete
+> source-text place name. For terms, use the normalized source-text form.
+> Leave empty when no stable source-text canonical form exists (e.g.,
+> unnamed minor characters or one-off objects).
 
 Change the schema example from `"canonical_name": ""` to a populated value
 like `"canonical_name": "沈复"` so the model doesn't learn to leave it
 empty.
 
-### 2e. Anti-examples
+### 2b-5. Anti-examples
 
 Add explicit wrong-value examples near the output schema to prevent common
 failure modes:
@@ -188,91 +207,100 @@ failure modes:
 WRONG: "surface": "congee"         (translation, not source text)
 RIGHT: "surface": "粥"              (copied from source block text)
 
-WRONG: "summary": "The method of arranging flowers"  (English for Chinese source)
-RIGHT: "summary": "插瓶之法：..."                     (source language)
+WRONG: "summary": "The method of arranging flowers"  (ignores reader_language=zh-Hans)
+RIGHT: "summary": "插瓶之法：..."                     (reader-facing prose)
+
+WRONG: "facets": ["插花方法", "花艺"]                 (reader prose, unstable)
+RIGHT: "facets": ["method", "flower_arrangement"]    (normalized internal tags)
 ```
 
-### 2f. Overview segmentation prompt fix
+### 2b-6. Overview segmentation prompt fix
 
-Add the CRITICAL language banner (currently missing). The overview pass
-produces `extraction_hints` that prime the extraction LLM — English hints
-trigger English extraction.
+Add the field-language policy and ensure `extraction_hints` are written in
+`reader_language`. The overview pass primes extraction; English hints should
+not appear unless the caller requested English reader-facing prose.
 
 ### Prompts affected
 
 | Prompt | Action |
 |--------|--------|
-| `prompt_per_segment_extraction_v0.2.md` | Replace with v0.3 zh+en variants |
-| `prompt_unit_grouping_v0.2.md` | Replace with v0.3 zh+en variants |
-| `overview_segmentation_v0.2.md` | Add language banner + tighten |
+| `prompt_per_segment_extraction_v0.2.md` | Replace with one v0.3 template using field-language policy |
+| `prompt_unit_grouping_v0.2.md` | Replace with one v0.3 template using field-language policy and group granularity rules |
+| `overview_segmentation_v0.2.md` | Add field-language policy + tighten |
 | `prompt_concept_resolution_v0.2.md` | Minor: add reclassify scan instruction |
-| `prompt_group_resolution_v0.2.md` | Minor: add adjacent-sequence merge guidance |
+| `prompt_group_resolution_v0.2.md` | Minor: add temporal aggregation / edge guidance |
 | `prompt_book_digest_v0.1.md` | Already OK, no change needed |
 
 ### Implementation approach
 
-1. Create `prompt_per_segment_extraction_v0.3_zh.md` — canonical tight
-   Chinese variant (~55 lines)
-2. Create `prompt_per_segment_extraction_v0.3_en.md` — English variant,
-   same structure
-3. Same for grouping prompt (zh + en)
-4. Update overview segmentation prompt
-5. Update agentic resolution prompts (minor edits)
-6. Add `source_language` parameter to pipeline (detected or caller-specified)
-7. Update `reading_prompts.py` — v0.3 composition builders that select
-   language-appropriate resource
-8. Wire into `run_reading_pipeline()`
-9. Validate: re-run unit-0003 with v0.3_zh prompts, compare metrics
+1. Create one compact `prompt_per_segment_extraction_v0.3.md` template.
+2. Create one compact `prompt_unit_grouping_v0.3.md` template.
+3. Update overview segmentation prompt with `reader_language` hint policy.
+4. Update agentic resolution prompts (minor edits for reader-facing rationale
+   and normalized internal fields).
+5. Add `source_language`, `reader_language`, and `normalized_language` to
+   prompt payloads, pass manifests, and cache identity. Defaults:
+   `source_language=auto`, `reader_language=zh-Hans`,
+   `normalized_language=normalized`.
+6. Update `reading_prompts.py` composition builders to inject the
+   field-language policy and language parameters.
+7. Wire into `run_reading_pipeline()`.
+8. Validate: re-run unit-0003 with v0.3 prompts and compare metrics.
 
-**Files**: `tilusion/prompts/` (+6 new files, ~4 modified),
-`tilusion/reading_prompts.py` (+40), `tilusion/reading_pipeline.py` (+15)
+**Files**: `tilusion/prompts/` (+2 new files, ~4 modified),
+`tilusion/reading_prompts.py` (+50), `tilusion/reading_pipeline.py` (+25),
+cache/run manifest helpers as needed.
 
 ### Validation criteria
 
-Run unit-0003 with v0.3_zh against the same source text:
-- English concept summaries: target 0 (was 79)
-- English group summaries: target 0 (was 15)
-- English-only surfaces: target 0 (was 19)
+Run unit-0003 with v0.3 against the same source text and
+`reader_language=zh-Hans`:
+- Reader-facing English concept summaries: target 0 (was 79)
+- Reader-facing English group summaries: target 0 (was 15)
+- Translated/non-source surfaces: target 0 (was 19)
 - Non-standard concept types: target 0 (was 25)
-- Canonical name coverage: target >90% (was 61%)
-- Facet coverage: target >90% (was 0%)
+- Canonical name coverage for stable named/recurring concepts: target >90%
+- Normalized facet coverage for merge-relevant concepts: target >90%
 - Non-standard group types: target 0 (was 3)
 
 ---
 
-## Phase 3: Post-Extraction Validation
+## Phase 3: Repair/Retry Policy from Quality Metrics
 
-**Motivation**: Prompts are instructions, not enforcement. A lightweight
-validation layer catches prompt non-compliance before bad data enters the
-registry. This is defense-in-depth: Phase 2 prevents most issues, Phase 3
-catches the rest.
+**Motivation**: Phase 2a adds non-fatal metrics. After one or more clean
+LLM-backed runs, use the observed distributions to decide which failures are
+severe enough to trigger repair or retry. This avoids expensive retry loops
+based on uncalibrated heuristics.
 
-### 3a. Language validator
+### 3a. Field-language validators
 
-After per-segment extraction, check concept summaries and surfaces against
-the expected source language:
+Calibrate the Phase 2a field-language metrics and decide which checks become fatal or repair-triggering:
 
-- If `source_language == "zh"` and >30% of concept summaries have more
-  ASCII alpha characters than CJK characters → emit warning, flag segment
-  for potential re-extraction.
-- If any concept surface is ASCII-only when `source_language == "zh"` and
-  the concept's source block text contains CJK characters → emit warning.
-- Log summary to stderr: `[seg-N] language check: 3/45 concepts appear
-  to be in wrong language`.
+- Source-grounded fields: warn when `surface` / `observed_surfaces` do not
+  appear in cited source block text; warn when `canonical_name` / aliases
+  look translated rather than source-normalized.
+- Reader-facing fields: if `reader_language == "zh-Hans"`, warn when
+  summaries/rationales/edge notes are predominantly ASCII prose.
+- Pipeline-normalized fields: warn when facets are empty, prose-like, or
+  inconsistent with the normalized tag policy.
+- Repair/retry only for severe cases, such as translated source-grounded
+  surfaces or invalid source refs.
+- Keep weaker signals, such as sparse facets, as warnings until thresholds
+  are proven stable.
 
 ### 3b. Canonical name coverage metric
 
-After within-unit merge, report canonical name coverage:
-- `canonical_name_coverage: 0.87` (fraction of concepts with non-empty
-  canonical_name)
-- Log to stderr: `[unit-N] canonical name coverage: 87% (52/60 concepts)`
+Use the Phase 2a canonical-name coverage metric to set type-specific thresholds. Do not use one global threshold for all concepts.
 
 ### 3c. Type vocabulary check
 
-After within-unit merge, flag concepts using types outside the standard
-vocabulary. Report count and list the non-standard types found.
+Promote non-standard concept/group types to repair candidates once the v0.3 prompt has had a chance to comply.
 
-**Files**: `tilusion/reading_pipeline.py` (+60)
+### 3d. Group granularity metrics
+
+Use timeline/temporal-sequence span metrics to decide whether group resolution should merge groups, add `part_of` edges, or leave local episodes separate.
+
+**Files**: `tilusion/reading_pipeline.py` (+40), repair/retry helpers as needed
 
 ---
 
@@ -283,7 +311,7 @@ gaps. Facet set intersection handles cross-type identity without manual
 ontology maintenance. Identity-gated: facet overlap relaxes type mismatch
 only after a name/surface/alias identity signal exists.
 
-Phase 2 ensures facets are generated. Phase 4 makes them mechanically useful.
+Phase 2b ensures facets are generated. Phase 4 makes them mechanically useful.
 
 ### 4a. Deterministic type compatibility via facet intersection
 
@@ -370,23 +398,21 @@ Build only after metrics from 6c confirm the problem is prevalent.
 
 ## Files Affected (All Phases)
 
-| File | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 |
-|------|---------|---------|---------|---------|---------|
-| `tilusion/prompts/prompt_per_segment_extraction_v0.3_zh.md` | **new** | — | — | — | +20 |
-| `tilusion/prompts/prompt_per_segment_extraction_v0.3_en.md` | **new** | — | — | — | — |
-| `tilusion/prompts/prompt_unit_grouping_v0.3_zh.md` | **new** | — | — | — | — |
-| `tilusion/prompts/prompt_unit_grouping_v0.3_en.md` | **new** | — | — | — | — |
-| `tilusion/prompts/overview_segmentation_v0.2.md` | ~10 | — | — | — | — |
-| `tilusion/prompts/prompt_concept_resolution_v0.2.md` | ~5 | — | — | — | — |
-| `tilusion/prompts/prompt_group_resolution_v0.2.md` | ~5 | — | — | — | — |
-| `tilusion/reading_prompts.py` | +40 | — | — | — | — |
-| `tilusion/reading_pipeline.py` | +15 | +60 | — | +70 | +30 |
-| `tilusion/registry_index.py` | — | — | +30, ~20 | +50 | — |
-| `tilusion/book_registry.py` | — | — | +15 | — | — |
-| `tilusion/reading_schema.py` | — | — | — | — | +3 |
-| `tilusion/book_digest.py` | — | — | — | +50 | — |
-| `tilusion/overview.py` | — | — | — | +30 | — |
-| `tilusion/registry_delta.py` | — | — | — | +15 | — |
+| File | Phase 2a | Phase 2b | Phase 3 | Phase 4 | Phase 5 | Phase 6 |
+|------|----------|----------|---------|---------|---------|---------|
+| `tilusion/prompts/prompt_per_segment_extraction_v0.3.md` | — | **new** | — | — | — | +20 |
+| `tilusion/prompts/prompt_unit_grouping_v0.3.md` | — | **new** | — | — | — | — |
+| `tilusion/prompts/overview_segmentation_v0.2.md` | — | ~10 | — | — | — | — |
+| `tilusion/prompts/prompt_concept_resolution_v0.2.md` | — | ~5 | — | — | — | — |
+| `tilusion/prompts/prompt_group_resolution_v0.2.md` | — | ~5 | — | — | — | — |
+| `tilusion/reading_prompts.py` | — | +50 | — | — | — | — |
+| `tilusion/reading_pipeline.py` | +60 | +25 | +40 | — | +70 | +30 |
+| `tilusion/registry_index.py` | — | — | — | +30, ~20 | +50 | — |
+| `tilusion/book_registry.py` | — | — | — | +15 | — | — |
+| `tilusion/reading_schema.py` | — | — | — | — | — | +3 |
+| `tilusion/book_digest.py` | — | — | — | — | +50 | — |
+| `tilusion/overview.py` | — | — | — | — | +30 | — |
+| `tilusion/registry_delta.py` | — | — | — | — | +15 | — |
 
 ---
 
@@ -402,8 +428,9 @@ After each phase:
   tests/test_reading_validation.py tests/test_reading_payloads_prompts.py -q
 ```
 
-After Phase 2: re-run unit-0003 with v0.3_zh prompts, verify zero English
-output, >90% canonical name coverage, >90% facet coverage.
+After Phase 2a: run existing cached or fixture data through metrics and verify the logs/manifests expose field-language, type, canonical-name, facet, and group-granularity counts.
+
+After Phase 2b: re-run unit-0003 with v0.3 prompts and `reader_language=zh-Hans`; verify zero reader-facing English output, zero translated/non-source surfaces, and high canonical/facet coverage for eligible concepts.
 
 After Phase 5: full `scope=book` pipeline run with ≥2 units, `known_in_registry`
 flagging visible in unit metrics.
