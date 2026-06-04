@@ -1,730 +1,409 @@
-# Cross-Unit Entity Consistency: Refactoring & Implementation Plan
+# Cross-Unit Entity Consistency: Unified Refactoring Plan
 
-Status: **plan + partial implementation** — derived from analysis in
-`14_cross_chunk_entity_consistency_analysis.md`. Phase 1 (embedding cache)
-and Phase 1.5 (per-concept candidate maps) are implemented. Phase 2
-(identity-gated soft typing) is the next step.
+Status: **plan + partial implementation** — Phase 1 (embedding cache) and
+Phase 1.5 (candidate maps) are done. Phase 2 (prompt refresh v0.3) is next.
+
+This is the canonical plan. It incorporates findings from:
+- `16_extraction_quality_audit.md` — 10 quality problems found in units 2–4
+- `17_prompt_pipeline_audit.md` — root cause analysis of all pipeline prompts
+- `18_prompt_simplification.md` — language-specific prompt variant design
+- `14_cross_chunk_entity_consistency_analysis.md` — original problem analysis
 
 ## Overview
-
-Five implementation phases, in dependency order. Each phase builds on the
-previous and produces independently mergeable, testable increments.
 
 | # | Phase | Est. scope | Depends on | Status |
 |---|-------|------------|------------|--------|
 | 1 | Embedding cache | ~250 lines | None | Done |
 | 1.5 | Per-concept candidate maps | ~180 lines | Phase 1 | Done |
-| 2 | Soft typing (identity-gated type facets) | ~400 lines | None (independent of Phase 1) | Next |
-| 3 | Richer book digest & per-segment hints | ~350 lines | Phase 1.5, Phase 2 | — |
-| 4 | Concept-to-higher-order-reference | ~250 lines | Phase 3 | — |
+| **2** | **Prompt refresh v0.3** | ~300 lines | None | **Next** |
+| 3 | Post-extraction validation | ~60 lines | Phase 2 | — |
+| 4 | Soft typing (identity-gated facets) | ~400 lines | Phase 2 | — |
+| 5 | Richer hints & known/new flagging | ~350 lines | Phase 4 | — |
+| 6 | Higher-order reference detection | ~250 lines | Phase 5 | — |
 
-### What we reuse and improve
+### Why Phase 2 changed
 
-- **Multi-round agentic loop**: `run_agentic_resolution_pass()` in
-  `reading_pipeline.py` — the loop survives; we feed it fewer/better
-  candidates so it runs fewer turns.
-- **BookRegistry**: `BookRegistry` with git-backed persistence — we add
-  embedding-aware fields and facet indexes but the save/load/rollback
-  contract is unchanged.
-- **Cache & git**: `book_cache_dir()`, `stable_book_id()`, git commits on
-  registry save — we extend the cache to cover embeddings.
-- **Registry tools**: `registry_tools.py` — `search_concepts` query
-  quality improves when embeddings of new concepts are pre-computed.
-- **Semantic search**: `_dual_signal_select()` in `registry_index.py` —
-  we add embedding caching so repeated calls reuse pre-computed vectors,
-  eliminating the dominant cost of re-encoding.
-
-### Review decisions after unit-0003 traces
-
-- **Embedding cache shape**: use a content-addressed text hash, not
-  `(concept_id, content_hash)`. The same searchable text should reuse the
-  same embedding across registry concepts, unit concepts, and search-tool
-  queries. `init_embedding_cache(registry.embedding_cache_dir)` wires this
-  once per book-scope pipeline run.
-- **No explicit unit-vector handoff through `registry_delta`**: when a new
-  unit concept is later indexed as a registry concept, it reuses the same
-  text-hash cache entry. We do not need to plumb embedding arrays through
-  registry delta application.
-- **Keep BM25**: BM25 is cheap and still catches partial lexical overlap.
-  The trace problem was not BM25 cost; it was embedding recomputation and
-  passing a nearly flat candidate union to the LLM.
-- **Candidate maps before more prompt work**: selection must produce a
-  per-unit-concept candidate map. A flat union of 229 registry concepts for
-  235 unmatched unit concepts is effectively the full registry and gives
-  the agent too little structure.
-- **Soft typing is not identity**: facet overlap may relax a hard-type
-  mismatch only after an identity signal exists across canonical name,
-  alias, observed surface, normalized surface, or equivalent name evidence.
-  Facet overlap alone must not authorize a merge.
-- **Source-block lookups are evidence, not enough memory**: prior registry
-  concepts cite prior source blocks, while a new unit cites new source
-  blocks. Segment hints therefore need lexical/name matching against the
-  segment text in addition to any `source_block_refs` reverse index.
+The original plan had soft typing as Phase 2. The extraction quality audit
+(units 2–4) showed that **prompt-level issues cause 8 of 10 observed
+problems** — language non-compliance, type proliferation, English surfaces,
+no facets, missing canonical names, temporal fragmentation. These are
+cheaper to fix than soft typing and block it: facets can't be used if the
+extractor never generates them. Prompt refresh comes first.
 
 ---
 
-## Phase 1: Embedding Cache (No Vector DB Needed)
+## Phase 1: Embedding Cache — DONE
 
-### Motivation
+Text-hash-addressed two-layer (memory + disk) embedding cache in
+`registry_index.py`. Eliminates ~11,200s of redundant embedding
+recomputation per unit. Details in commit history.
 
-From the unit-0003 run (240 unit concepts, ~260 registry concepts):
+**Key decisions**: `sha256(searchable_text)` keys (not concept_id+hash),
+BM25 retained as secondary lexical signal, no vector DB needed.
 
-**Per-`search_concepts` cost** (observed from agentic turn logs):
-Each `search_concepts` tool call re-runs `_dual_signal_select()`, which
-re-encodes ALL registry texts (~260, 140s) and ALL unit texts (~235, 115s)
-from scratch. Individual calls take **142–183 seconds** — almost entirely
-embedding recomputation. The actual BM25 + cosine compute is 35ms.
+## Phase 1.5: Per-Concept Candidate Maps — DONE
 
-**Per-turn example** (from actual logs):
-```
-Turn 6: 9 search_concepts calls × ~158s avg = ~1,422s
-Turn 7: 10 search_concepts calls × ~149s avg = ~1,490s
-Turn 8: 8 search_concepts calls × ~175s avg = ~1,400s
-3 turns alone: ~4,300s (72 min) — all embedding recomputation
-```
-
-**Full run estimate** (44 tool calls total):
-| Step | Time | % |
-|------|------|---|
-| Embedding recomputation (44 calls × ~255s) | **~11,200s** | **dominant** |
-| Actual cosine similarity (44 calls × 35ms) | ~1.5s | negligible |
-| LLM inference / judgment | modest | — |
-| **Total cross-unit merge** | **~44 min observed** | |
-
-The observed 44 minutes is NOT LLM inference — it's the embedding model
-running the same texts through Qwen3-0.6B 44 times. Each `search_concepts`
-call independently re-encodes the full registry + unit concept set.
-
-Three conclusions:
-
-1. **Embedding cache is the single biggest win.** After unit 1's first
-   `search_concepts` call, every subsequent call uses cached embeddings.
-   44 calls drop from ~11,200s to ~1.5s (cosine only). This is not a 10%
-   improvement — it eliminates the dominant cost entirely.
-2. **Vector DB is unnecessary** — cosine compute is 35ms on 260 vectors.
-   The problem was never retrieval speed; it was recomputing embeddings
-   inside every tool call. A simple file-based cache solves it completely.
-3. **After caching, agentic LLM turns become the next bottleneck** — but
-   each turn will be ~5-10s (LLM inference + 35ms cosine) instead of
-   ~160s. Phases 2+3 then reduce how many concepts need `search_concepts`
-   at all.
-
-Two fixes in this phase: (a) cache registry + unit embeddings so tool
-calls are ~35ms instead of ~160s, (b) improve agentic `search_concepts`
-query guidance so fewer turns are needed per concept. (Dropping BM25 was
-tested but reverted — BM25 catches partial token overlap that the
-deterministic filter misses, at negligible cost.)
-
-### 1a. Embedding cache in `_dual_signal_select` (`registry_index.py`)
-
-**What**: A two-layer cache that prevents `_dual_signal_select()` from
-re-encoding the same texts every time a `search_concepts` tool call fires.
-
-Layer 1 — **in-memory** (per pipeline run): After the first call encodes
-registry + unit texts, embeddings stay in module-level dicts. Subsequent
-`search_concepts` calls in the same agentic turn (or later turns) hit
-memory directly — no re-encoding. This is the critical path: turn 6's
-9 calls all share the same embeddings.
-
-Layer 2 — **disk** (persistent): Keyed by `sha256(searchable_text)`.
-Survives across pipeline runs. The key is intentionally independent of
-`concept_id`: the same searchable text produced as a unit concept, registry
-concept, or search query should reuse one embedding.
-
-**How**:
-- New class `EmbeddingCache` in `registry_index.py`:
-  ```python
-  class EmbeddingCache:
-      def __init__(self, cache_dir: Path): ...
-      def batch_get(self, texts: list[str]) -> tuple[dict[int, np.ndarray], list[int]]: ...
-      def put_many(self, texts: list[str], embeddings: np.ndarray) -> None: ...
-  ```
-- Cache directory: `<registry_cache_dir>/embeddings/` — alongside
-  `registry.json` in the git-backed cache.
-- Add module-level in-memory cache keyed by text hash, plus
-  `init_embedding_cache(registry.embedding_cache_dir)` at the start of a
-  book-scope pipeline run.
-- Modify `_dual_signal_select()`:
-  - Before `model.encode(texts)`: check each text's hash against memory and
-    disk. Only encode cache misses, merge cached + new into the return array.
-  - Use the same helper for registry concepts, unit concepts, groups, and
-    tool-search queries.
-  - Print cache hit rate and encode timings to stderr and selection traces.
-- Modify `_dual_signal_select_groups()`: same cache helper for group texts.
-- `BookRegistry` gains `embedding_cache_dir` property derived from its cache dir.
-
-**Expected impact**: Each `search_concepts` call drops from ~160s to ~35ms
-after the first call in a unit. For 44 calls: ~7,000s → ~1.5s.
-
-**Files**: `tilusion/registry_index.py` (+130), `tilusion/book_registry.py` (+5)
-
-### 1b. Reuse unit concept embeddings via text-hash cache
-
-**What**: After a concept is confirmed new and added to the registry, it
-naturally reuses the embedding cache entry created while the same unit concept
-text was selected. No embedding arrays need to move through registry delta.
-
-**How**:
-- The cache key is `sha256(searchable_text)`, so `_dual_signal_select()` and
-  later `build_registry_index()` generate the same key if the searchable text
-  is unchanged.
-- `registry_delta.py` does not receive embeddings. It only applies identity
-  decisions and saves registry data.
-- If a merge changes the searchable text, that is a legitimate new embedding
-  key. The old key remains harmless and may still be reused by future similar
-  text.
-
-**Files**: `tilusion/registry_index.py`, `tilusion/book_registry.py`,
-`tilusion/reading_pipeline.py`
-
-### 1c. Drop BM25 for deterministic-filter leftovers — REVERTED
-
-**Decision**: NOT implemented. BM25 (35ms) catches partial token overlap
-(e.g., "narrator" in both "the old man" and "Shen Fu" concepts) that the
-deterministic filter (exact surface/cname/alias match) misses. The real
-bottleneck was embedding recomputation, not BM25. With the cache, the
-pipeline keeps BM25 as a useful lexical signal at negligible cost.
-
-### 1d. Improve agentic search_concepts query guidance
-
-**What**: The agent currently composes poor `search_concepts` queries
-(mixed Chinese/English glosses, using surface alone instead of summary).
-Add a note to the v0.2 prompt instructing the agent to use the full
-concept summary as the search query when surface/cname matching fails.
-
-**How**:
-- Edit `prompt_concept_resolution_v0.2.md`: add a paragraph in the
-  tool-calling section explaining that `search_concepts` uses embedding
-  similarity, so passing the concept's full summary (not just surface)
-  produces better results.
-
-**Files**: `tilusion/prompts/prompt_concept_resolution_v0.2.md` (+10)
-
-### Tests for Phase 1
-
-- `test_embedding_cache_hit_and_miss`
-- `test_embedding_cache_persistence`
-- `test_text_hash_embedding_reuse_after_registry_add`
-
-### Verification
-
-```
-~/.virtualenvs/shredder/bin/python -m pytest tests/test_registry_index.py tests/test_registry_delta.py -q
-```
+`candidate_map` in LLM payload gives the agent per-unit-concept local
+candidate sets instead of a flat registry union. Per-concept caps: 5
+embedding-signal + 3 BM25-only. `candidate_selection_warning` printed to
+stderr when ≥80% of registry is selected.
 
 ---
 
+## Phase 2: Prompt Refresh v0.3
 
-## Phase 1.5: Per-Concept Candidate Maps
+**Motivation**: The extraction quality audit found that current prompts
+have three structural problems:
 
-**Status: Done** (2026-06-04).
+1. **~48% of content is overhead the LLM doesn't need.** Hierarchy
+   explanations, bloated schema examples (42 lines of empty JSON), repeated
+   edge-case rules. This dilutes attention on binding constraints.
 
-### What was implemented
+2. **The language constraint is fragile.** An English instruction
+   ("CRITICAL — Language: write in the source language") is placed at line
+   3 of a 115-line prompt. By the time the model reaches the output schema
+   at line 44, the constraint is outside its attention window. Unit-0003
+   produced 79 English concepts and 15 English groups from Chinese source
+   text because of this.
 
-- `_deterministic_filter()` returns `matches_by_unit: dict[str, list[str]]` — per-unit-concept deterministic candidate ids.
-- `_semantic_candidates_by_unit()` builds per-unit semantic candidate rows from the dual-signal trace, with per-concept caps (max 5 embedding + 3 BM25-only).
-- `_build_candidate_map()` merges deterministic and semantic candidates into the LLM-facing payload structure.
-- `select_concept_candidates()` writes `candidate_map` to the selection trace; the pipeline (`reading_pipeline.py:2570`) passes it through to `build_concept_resolution_payload()`.
-- Prompt `prompt_concept_resolution_v0.2.md` references `candidate_map` as the primary screening structure (items 1, 3, and rule at line 135).
-- A `candidate_selection_warning` is printed to stderr when ≥80% of the registry is selected, reminding operators to use the candidate_map rather than the flat index.
+3. **The same constraint is missing from the overview segmentation prompt,**
+   which feeds `extraction_hints` to the extractor. English hints prime
+   English extraction output.
 
-### Original motivation
+### 2a. Strip structural overhead
 
-The unit-0003 trace showed `select_concept_candidates()` picking 229 registry
-candidates for 235 unmatched unit concepts. That is almost the whole registry.
-The retrieval trace had useful per-query evidence, but the LLM payload only
-received a flat `registry_index` union. The agent therefore had to rediscover
-which registry concepts belonged to which unit concept and made many expensive
-`search_concepts` calls.
+Each prompt reduced to only what the LLM needs for its specific task:
 
-### 1.5a. Candidate map trace and payload
+| Section | Current | Target | Rationale |
+|---------|---------|--------|-----------|
+| Language constraint | 3 lines (top) | N/A — prompt IS in target language | See 2b |
+| Hierarchy explanation | 10 lines | **Removed** | LLM doesn't need pipeline architecture |
+| Input field descriptions | 8 lines | 6 lines | Keep, tighten |
+| Schema example | 42 lines (empty JSON) | ~12 lines (realistic populated example) | Empty JSON teaches model to output empties |
+| Rules | 32 lines | ~18 lines | Drop edge cases the model handles implicitly; keep binding constraints |
+| Region guidance | 6 lines | ~3 lines | Useful signal, over-detailed |
 
-**What**: Preserve the per-unit-concept retrieval shape instead of flattening
-all candidates into one undifferentiated list.
+**Target extraction prompt: ~55 lines (52% reduction).** Same principle
+for grouping, overview, and resolution prompts.
 
-**How**:
-- Extend deterministic filtering to return `unit_concept_id -> candidate_ids`
-  plus the existing flat candidate set.
-- Reuse `_dual_signal_select()` trace rows to build one map row per unmatched
-  unit concept:
-  ```json
-  {
-    "unit_concept_id": "concept-0010",
-    "deterministic_candidate_ids": [],
-    "semantic_candidates": [
-      {"concept_id": "concept-0157", "score": 0.82, "method": "embedding"},
-      {"concept_id": "concept-0108", "score": 0.77, "method": "bm25+embedding"}
-    ],
-    "candidate_ids": ["concept-0157", "concept-0108"]
-  }
-  ```
-- Add `candidate_map` to `selection_trace.json` and to the concept-resolution
-  LLM payload. Keep `registry_index` as the compact record table keyed by
-  candidate id.
+**Binding constraints that MUST stay:**
+- `surface` must be copied from source block text (not translated)
+- `source_block_refs` must cite provided block IDs
+- `observed_surfaces` must list every surface form in the segment
+- Items are source-grounded, concepts may be inferred
+- `concept_refs` must reference concepts in the same response
+- Do not merge distinct time expressions, places, or people
 
-### 1.5b. Agentic prompt contract
+**Content to drop:**
+- Pipeline architecture diagram (belongs in design docs)
+- "Later passes will..." (irrelevant to this pass's task)
+- "The caller provides JSON with..." field-by-field descriptions (the JSON
+  itself is enough)
+- "Do not invent block IDs" (model does this naturally)
+- "Use simple IDs like concept-0001" (model does this naturally)
+- Empty schema examples that teach the model to output empty values
 
-**What**: The agent should judge each unit concept against its local candidates
-first, instead of scanning the flat registry union or immediately searching.
+### 2b. Language-specific prompt variants
 
-**How**:
-- Update `prompt_concept_resolution_v0.2.md`:
-  - For each unit concept, use `candidate_map[unit_concept_id]` as the first
-    shortlist.
-  - Call `get_concept` only for plausible or ambiguous local candidates.
-  - Use `search_concepts` only when the local map is empty or all local
-    candidates fail despite the concept looking likely known from digest or
-    segment hints.
-  - Prefer source-language query text and full summaries over mixed-language
-    glosses.
+Instead of one prompt with a language-switching instruction, create
+per-language variants where the entire system prompt — instructions,
+examples, field descriptions, rules — is in the target language.
 
-### 1.5c. Bound candidate expansion
-
-**What**: Prevent the map from becoming another full-registry dump.
-
-**How**:
-- Keep BM25 as a secondary lexical signal, but cap per-concept rows, e.g.
-  top 5 embedding + top 3 BM25/RRF after type filtering.
-- Include scores and methods so low-confidence rows are explainable in traces.
-- If the union remains close to the full registry, log this as a warning and
-  rely on the per-concept map rather than pretending the flat shortlist is
-  selective.
-
-### Tests for Phase 1.5
-
-- `test_select_concept_candidates_records_candidate_map`
-- `test_concept_resolution_payload_includes_candidate_map`
-- `test_agentic_prompt_mentions_candidate_map_first`
-
-### Verification
+**Mechanism**: The pipeline detects or receives the book's primary language.
+At prompt composition time, the matching variant is loaded:
 
 ```
-~/.virtualenvs/shredder/bin/python -m pytest tests/test_registry_index.py tests/test_cross_unit_resolution.py tests/test_reading_payloads_prompts.py -q
+prompt_per_segment_extraction_v0.3_zh.md   ← Chinese books
+prompt_per_segment_extraction_v0.3_en.md   ← English books (default)
 ```
+
+**What changes per language**: All human-language prose. Instructions,
+example field values, anti-examples, type definitions.
+
+**What stays language-agnostic**: JSON field names (`surface`,
+`concept_type`), type vocabulary (`person`, `place`, `temporal_sequence`),
+ID patterns.
+
+**Why this is general**: The mechanism is `source_language → prompt variant`.
+Works for any language — Chinese, English, French, Arabic. Not specific to
+Chinese classical texts. If a language lacks a dedicated variant, fall back
+to the English variant with the current "write in source language"
+instruction (graceful degradation).
+
+### 2c. Type vocabulary consolidation
+
+**Concept types**: Remove non-standard entries (`action`, `activity`,
+`statement`, `event`) from the extractor's effective vocabulary. Add
+explicit instruction: "Use ONLY the types listed above. If none fit, use
+`other`. Do not invent new types."
+
+**Group types**: Merge `timeline` and `temporal_sequence` into ONE type
+(`temporal_sequence`). Remove `custom` from the allowed list (keep `other`
+as the escape hatch). Add type definitions with distinguishing criteria:
+
+| Type | When to use |
+|------|------------|
+| `temporal_sequence` | Items with chronological order forming a narrative arc |
+| `theme_set` | Items sharing a theme/motif, no temporal ordering |
+| `method_example_set` | Techniques, methods, and their examples |
+| `claim_evidence_map` | Claims with supporting/contradicting evidence |
+| `contrast_set` | Items presented in explicit contrast |
+| `other` | None of the above fit |
+
+Add scale guidance: "A temporal_sequence should represent a meaningful
+narrative arc. Single events or outings with ≤5 items should use a
+different group type or be merged into a larger temporal_sequence.
+Adjacent temporal_sequences that form a continuous narrative (same key
+entities, sequential time periods) should be merged into one."
+
+### 2d. Facet and canonical_name generation
+
+These were originally Phase 3 (soft typing). The prompt instruction to
+generate them belongs here — the schema change and merge logic stay in
+Phase 4.
+
+**Facets** (new instruction in extraction prompt):
+> For each concept, provide 2–5 type-describing phrases at different
+> abstraction levels in `facets`. Example: a treaty concept →
+> `["treaty", "legal document", "historical event", "agreement"]`. Facets
+> supplement `concept_type` — they do not replace it. Use the source
+> language.
+
+**Canonical name** (new instruction + fixed example):
+> Every concept MUST have a `canonical_name`. For persons, use the full
+> standard name. For places, use the complete place name. For terms, use
+> the normalized form. Leave empty ONLY when no standardized form exists
+> (e.g., unnamed minor characters).
+
+Change the schema example from `"canonical_name": ""` to a populated value
+like `"canonical_name": "沈复"` so the model doesn't learn to leave it
+empty.
+
+### 2e. Anti-examples
+
+Add explicit wrong-value examples near the output schema to prevent common
+failure modes:
+
+```
+WRONG: "surface": "congee"         (translation, not source text)
+RIGHT: "surface": "粥"              (copied from source block text)
+
+WRONG: "summary": "The method of arranging flowers"  (English for Chinese source)
+RIGHT: "summary": "插瓶之法：..."                     (source language)
+```
+
+### 2f. Overview segmentation prompt fix
+
+Add the CRITICAL language banner (currently missing). The overview pass
+produces `extraction_hints` that prime the extraction LLM — English hints
+trigger English extraction.
+
+### Prompts affected
+
+| Prompt | Action |
+|--------|--------|
+| `prompt_per_segment_extraction_v0.2.md` | Replace with v0.3 zh+en variants |
+| `prompt_unit_grouping_v0.2.md` | Replace with v0.3 zh+en variants |
+| `overview_segmentation_v0.2.md` | Add language banner + tighten |
+| `prompt_concept_resolution_v0.2.md` | Minor: add reclassify scan instruction |
+| `prompt_group_resolution_v0.2.md` | Minor: add adjacent-sequence merge guidance |
+| `prompt_book_digest_v0.1.md` | Already OK, no change needed |
+
+### Implementation approach
+
+1. Create `prompt_per_segment_extraction_v0.3_zh.md` — canonical tight
+   Chinese variant (~55 lines)
+2. Create `prompt_per_segment_extraction_v0.3_en.md` — English variant,
+   same structure
+3. Same for grouping prompt (zh + en)
+4. Update overview segmentation prompt
+5. Update agentic resolution prompts (minor edits)
+6. Add `source_language` parameter to pipeline (detected or caller-specified)
+7. Update `reading_prompts.py` — v0.3 composition builders that select
+   language-appropriate resource
+8. Wire into `run_reading_pipeline()`
+9. Validate: re-run unit-0003 with v0.3_zh prompts, compare metrics
+
+**Files**: `tilusion/prompts/` (+6 new files, ~4 modified),
+`tilusion/reading_prompts.py` (+40), `tilusion/reading_pipeline.py` (+15)
+
+### Validation criteria
+
+Run unit-0003 with v0.3_zh against the same source text:
+- English concept summaries: target 0 (was 79)
+- English group summaries: target 0 (was 15)
+- English-only surfaces: target 0 (was 19)
+- Non-standard concept types: target 0 (was 25)
+- Canonical name coverage: target >90% (was 61%)
+- Facet coverage: target >90% (was 0%)
+- Non-standard group types: target 0 (was 3)
 
 ---
 
-## Phase 2: Soft Typing (Type Facets)
+## Phase 3: Post-Extraction Validation
 
-### Motivation
+**Motivation**: Prompts are instructions, not enforcement. A lightweight
+validation layer catches prompt non-compliance before bad data enters the
+registry. This is defense-in-depth: Phase 2 prevents most issues, Phase 3
+catches the rest.
 
-`TYPE_FAMILIES` is a hand-maintained dict with known gaps (`term` ↔ `method`,
-`source` ↔ `term`, `time_anchor` ↔ `other`). AutoSchemaKG shows that set-based
-type compatibility (facet set intersection) handles these edge cases without
-manual ontology maintenance. Facets are a type-relaxation signal, not an
-identity signal: they can permit a cross-type merge only after name/surface/alias
-evidence suggests the two concepts are the same referent.
+### 3a. Language validator
 
-The `Concept` dataclass already has a `facets: list[str]` field (line 217 of
-`reading_schema.py`). It's currently unused — always empty. Phase 2 activates it.
+After per-segment extraction, check concept summaries and surfaces against
+the expected source language:
 
-### 2a. Extraction-time facet generation (`prompt_per_segment_extraction_v0.2.md`)
+- If `source_language == "zh"` and >30% of concept summaries have more
+  ASCII alpha characters than CJK characters → emit warning, flag segment
+  for potential re-extraction.
+- If any concept surface is ASCII-only when `source_language == "zh"` and
+  the concept's source block text contains CJK characters → emit warning.
+- Log summary to stderr: `[seg-N] language check: 3/45 concepts appear
+  to be in wrong language`.
 
-**What**: Instruct the extractor to populate `facets` with 2-5 type-describing
-phrases at varying abstraction levels for each concept.
+### 3b. Canonical name coverage metric
 
-**How**:
-- Edit `prompt_per_segment_extraction_v0.2.md`:
-  - Add `facets` to the concept schema example (already present as `"facets": []`).
-  - Add a rule: "For each concept, provide 2-5 type-describing phrases at
-    different abstraction levels in `facets`. Examples: a treaty concept →
-    `['treaty', 'legal document', 'historical event', 'agreement']`; an
-    emperor → `['person', 'ruler', 'historical figure', 'emperor']`."
-  - Facets are NOT a replacement for `concept_type` — they supplement it.
-- The extractor already runs per-segment, so it has local context to generate
-  meaningful facets. No additional API calls.
+After within-unit merge, report canonical name coverage:
+- `canonical_name_coverage: 0.87` (fraction of concepts with non-empty
+  canonical_name)
+- Log to stderr: `[unit-N] canonical name coverage: 87% (52/60 concepts)`
 
-**Files**: `tilusion/prompts/prompt_per_segment_extraction_v0.2.md` (+15)
+### 3c. Type vocabulary check
 
-### 2b. Deterministic type compatibility via facet intersection (`registry_index.py`)
+After within-unit merge, flag concepts using types outside the standard
+vocabulary. Report count and list the non-standard types found.
 
-**What**: Replace `TYPE_FAMILIES` + `_relaxed_types()` as the primary
-type-compatibility test with facet set intersection. Hard families remain a
-fallback for concepts without facets. This determines whether a candidate is
-worth considering; it does not prove identity.
-
-**How**:
-- New function in `registry_index.py`:
-  ```python
-  def _types_compatible(unit_facets: set[str], reg_facets: set[str],
-                        unit_type: str, reg_type: str) -> bool:
-      """True if facet sets intersect or hard types are in the same family."""
-      if unit_facets and reg_facets:
-          return bool(unit_facets & reg_facets)
-      # Fallback to TYPE_FAMILIES for legacy concepts without facets
-      relaxed = _relaxed_types(unit_type)
-      return reg_type in relaxed or "*" in relaxed
-  ```
-- Modify `_deterministic_filter()`:
-  - Add `facets` to the registry index entries in `build_registry_index()`.
-  - Use facet intersection as a type-compatibility gate for candidate
-    selection, then require surface/cname/alias evidence for deterministic
-    matching.
-- Modify `_dual_signal_select()` type-filter path:
-  - Use `_types_compatible()` instead of `_relaxed_types()` for the
-    type mask, when facets are available.
-- Keep `TYPE_FAMILIES` as fallback (no breaking change).
-- Add `"facets"` field to `build_registry_index()` output.
-
-**Files**: `tilusion/registry_index.py` (+30, ~20 modified)
-
-### 2c. Facet-aware merge boundary (`book_registry.py`)
-
-**What**: `_check_merge_boundary()` currently only considers hard types and
-name/surface overlap. Add facet intersection as a type-relaxation signal, but
-only after an identity signal exists. Shared facets alone are too broad: two
-separate places may both have `place` / `scenic site` facets and still be
-distinct.
-
-**How**:
-- In `_check_merge_boundary()`, compute two separate predicates:
-  ```python
-  identity_signal = shared_canonical_name or shared_alias or shared_surface
-  type_compatible = same_hard_type or shared_type_family or shared_facet
-  if identity_signal and type_compatible:
-      return None  # safe to merge
-  ```
-- For same hard type, existing same-surface/canonical-name rules still apply.
-- For different hard types, facet overlap may relax the type mismatch only when
-  identity evidence is already present across canonical names, aliases,
-  observed surfaces, or normalized surface forms.
-- `DeterministicConceptMerger.merge()` already unions facets, so merged
-  concepts accumulate facets from all members.
-
-**Files**: `tilusion/book_registry.py` (+15)
-
-### 2d. Registry index includes facets (`registry_index.py`)
-
-**What**: `build_registry_index()` already returns concept dicts; add
-`"facets"` field so the deterministic filter and dual-signal can use them.
-
-**How**:
-- Add `"facets": concept.facets[:10]` to the index entry dict in
-  `build_registry_index()`.
-- `_deterministic_filter()` reads `reg.get("facets", [])` and constructs
-  a set for intersection with unit concept facets.
-
-**Files**: `tilusion/registry_index.py` (+5, ~5 modified)
-
-### Migration path
-
-- Concepts already in the registry without facets: `_types_compatible()`
-  falls back to `TYPE_FAMILIES`. No data migration needed.
-- Concepts extracted after the prompt update: carry facets, get facet-based
-  matching.
-- Over time, as more concepts carry facets, `TYPE_FAMILIES` becomes dead
-  code that can be removed.
-
-### Tests for Phase 2
-
-- `test_identity_plus_facet_allows_cross_type_merge`
-- `test_facetless_concepts_fallback_to_type_families`
-- `test_deterministic_filter_with_facets`
-- `test_facet_overlap_without_identity_does_not_merge`
-- `test_merge_boundary_with_facets`
-
-### Verification
-
-```
-~/.virtualenvs/shredder/bin/python -m pytest tests/test_registry_index.py tests/test_book_registry.py -q
-```
+**Files**: `tilusion/reading_pipeline.py` (+60)
 
 ---
 
-## Phase 3: Richer Book Digest & Per-Segment Hints
+## Phase 4: Soft Typing (Identity-Gated Type Facets)
 
-### Motivation
+**Motivation**: (unchanged from original plan) `TYPE_FAMILIES` has known
+gaps. Facet set intersection handles cross-type identity without manual
+ontology maintenance. Identity-gated: facet overlap relaxes type mismatch
+only after a name/surface/alias identity signal exists.
 
-The current per-segment hint (`segment_hint_payload()` in `overview.py:315`)
-only passes the overview's `extraction_hints` list — lightweight natural
-language cues from the segmentation pass. These are too light to help the
-extractor distinguish:
+Phase 2 ensures facets are generated. Phase 4 makes them mechanically useful.
 
-1. **Known concepts**: concepts already in the registry that appear in this
-   segment. The extractor should flag them via aliases/observed_surfaces
-   rather than re-extracting them as new concepts.
-2. **New concepts**: genuinely new entities that need full extraction.
+### 4a. Deterministic type compatibility via facet intersection
 
-The book digest (`book_digest.py`) generates a prose summary of the registry
-state but is only updated between units, not per-segment, and is limited to
-50 entities.
+New `_types_compatible()` replacing `_relaxed_types()` when facets exist.
+`TYPE_FAMILIES` remains as fallback for facetless legacy concepts.
 
-### 3a. Per-segment known-concept lookup (`registry_index.py`)
+### 4b. Identity-gated merge boundary
 
-**What**: Given a segment's source blocks and text, identify registry concepts
-that plausibly appear in the segment. `source_block_refs` are useful evidence
-for reruns and already-indexed blocks, but they are not enough for new units:
-prior registry concepts cite prior blocks, while the current segment cites new
-blocks. The primary cross-unit signal must include normalized matching against
-registry canonical names, aliases, and observed surfaces in the segment text.
-
-**How**:
-- New function in `registry_index.py`:
-  ```python
-  def known_concepts_for_segment(
-      registry: BookRegistry,
-      segment_block_ids: list[str],
-      segment_text: str,
-      *,
-      max_concepts: int = 30,
-  ) -> list[dict[str, Any]]:
-      """Return registry concepts plausibly present in a segment."""
-  ```
-- Combine two evidence sources:
-  - reverse index `block_id -> {concept_id, ...}` from registry
-    `source_block_refs` for stable reruns and exact source continuity;
-  - normalized lexical matching of `canonical_name`, aliases, and observed
-    surfaces against `segment_text` for true cross-unit memory.
-- Rank by evidence strength, recent unit, and frequency, then return compact
-  entries (concept_id, surface, canonical_name, concept_type, summary truncated
-  to 80 chars, evidence method).
-- Called in `run_reading_pipeline()` per segment, result added to
-  `context["known_concepts"]`.
-
-**Files**: `tilusion/registry_index.py` (+50)
-
-### 3b. Revised per-segment hint payload (`reading_pipeline.py` / `overview.py`)
-
-**What**: Extend the context dict passed to the extraction LLM with:
-- `known_concepts`: registry concepts that appear in this segment's blocks
-- `new_concept_guidance`: if this is a later unit and most concepts are
-  known, tell the extractor to focus on detecting genuinely new entities
-  rather than re-describing known ones.
-
-**How**:
-- Modify `segment_hint_payload()` or add a wrapper that enriches the context:
-  ```python
-  def enriched_segment_context(
-      segment: ResolvedOverviewSegment,
-      known_concepts: list[dict[str, Any]],
-      unit_index: int,
-  ) -> dict[str, Any]:
-  ```
-- The extraction prompt already has a `context` field; these fields slot in.
-- Add a brief rule to the extraction prompt: "If `context.known_concepts`
-  lists concepts already in the registry, do not re-extract them as new.
-  Instead, add their surfaces to `observed_surfaces` of your local concept
-  and reference them via `aliases`." (The exact mechanism depends on whether
-  we want the extractor to emit link proposals or just flag presence.)
-
-**Files**: `tilusion/overview.py` (+30), `tilusion/reading_pipeline.py` (+30),
-`tilusion/prompts/prompt_per_segment_extraction_v0.2.md` (+15)
-
-### 3c. Improved book digest (`book_digest.py`)
-
-**What**: The current digest is a flat entity table limited to 50 entries.
-Improve it to be more useful as a "world model":
-- Stratify by concept type (persons, places, terms, time_anchors, etc.)
-- Mark high-frequency concepts (appearing in many segments) separately
-  from low-frequency ones.
-- Include a "recently added" section for concepts from the most recent
-  unit — these are most likely to appear again.
-
-**How**:
-- `_build_digest_payload()` already builds the payload. Extend it:
-  - Add `type_groups`: entities grouped by concept_type.
-  - Add `high_frequency`: concepts appearing in ≥3 source blocks.
-  - Add `recent`: concepts added in the last unit (tracked via
-    `provenance.source_unit`).
-- The `MAX_ENTITIES_IN_DIGEST` stays at 50 but the structured grouping
-  makes better use of the budget.
-- The digest prompt (`prompt_book_digest_v0.1.md`) already generates prose
-  sections; the structured input helps it produce better guidance.
-
-**Files**: `tilusion/book_digest.py` (+50)
-
-### 3d. Per-segment known/new concept flagging
-
-**What**: With known concepts identified per segment (3a), track per concept
-whether it's "known" (appears in registry already) or "new" (genuinely
-unseen). This metric feeds back into the cross-unit merge: known concepts
-should merge deterministically; new concepts need embedding search.
-
-**How**:
-- After per-segment extraction, compare extracted concept surfaces against
-  `known_concepts` for that segment.
-- Add a `known_in_registry: bool` field to the unit concept metadata
-  (internal, not part of the extraction schema).
-- In cross-unit merge (`compute_registry_delta`), skip embedding search
-  for concepts flagged `known_in_registry=True` and go straight to
-  deterministic merge.
-- This eliminates the 97% waste: only genuinely new concepts need
-  embedding-based search.
-
-**Files**: `tilusion/reading_pipeline.py` (+40), `tilusion/registry_delta.py` (+15)
-
-### Tests for Phase 3
-
-- `test_known_concepts_for_segment`
-- `test_enriched_segment_context`
-- `test_book_digest_with_type_groups`
-- `test_known_concept_skips_embedding_search`
-
-### Verification
-
+Two separate predicates in `_check_merge_boundary()`:
+```python
+identity_signal = shared_canonical_name or shared_alias or shared_surface
+type_compatible = same_hard_type or shared_type_family or shared_facet
+if identity_signal and type_compatible:
+    return None  # safe to merge
 ```
-~/.virtualenvs/shredder/bin/python -m pytest tests/test_registry_index.py tests/test_book_digest.py tests/test_reading_pipeline.py -q
-```
+
+### 4c. Registry index includes facets
+
+Add `"facets"` field to `build_registry_index()` output.
+
+**Files**: `tilusion/registry_index.py` (+30, ~20),
+`tilusion/book_registry.py` (+15)
 
 ---
 
-## Phase 4: Concept-to-Higher-Order-Reference Detection
+## Phase 5: Richer Hints & Known/New Flagging
 
-### Motivation
+**Motivation**: (unchanged from original plan) Current per-segment hints
+are too light. The extractor can't distinguish "flag this known concept"
+from "extract this new concept." Later units should converge toward
+consistent types and avoid re-extraction.
 
-The analysis identified a gap: concepts that refer to items/events/groups
-(e.g., "the battle" referring to a specific event item, "the treaty"
-referring to a source) have no first-class representation. The extractor
-may or may not resolve these locally. When unresolved, they become inputs
-for agentic resolution.
+### 5a. Per-segment known-concept lookup
 
-This phase adds detection and flagging — not full resolution — so we can
-measure the prevalence of the problem before building the resolution mechanism.
+New `known_concepts_for_segment()` in `registry_index.py`:
+- Reverse index `block_id → {concept_id, ...}` from registry
+  `source_block_refs` (for reruns and exact source continuity)
+- Normalized lexical matching of canonical names, aliases, and observed
+  surfaces against `segment_text` (for cross-unit memory)
+- Returns compact entries ranked by evidence strength
 
-### 4a. Extraction-time reference detection (`prompt_per_segment_extraction_v0.2.md`)
+### 5b. Enriched segment context
 
-**What**: Instruct the extractor to flag when a concept surface or summary
-refers to a higher-order structure (item, event, group) rather than a
-standalone entity.
+Extend `context` dict passed to extraction LLM with `known_concepts` and
+`new_concept_guidance`.
 
-**How**:
-- Add a new optional field to concepts: `refers_to: list[dict]` — each
-  entry has `{target_type: "item"|"group"|"event", confidence: "certain"|"likely"|"possible",
-  evidence: "brief quote from source"}`
-- Add to the extraction prompt:
-  - "When a concept mention in the text refers to an atomic item, event,
-    or logical group rather than a standalone entity, add a `refers_to`
-    entry. Example: 'the battle' referring to a specific battle event →
-    `{target_type: 'event', confidence: 'likely', evidence: 'the battle'}`."
-  - "This is a DETECTION only. You do not need to resolve the reference.
-    Flag it even if the target is not extracted in this segment."
+### 5c. Improved book digest
 
-**Files**: `tilusion/prompts/prompt_per_segment_extraction_v0.2.md` (+20)
+Stratify by concept type, mark high-frequency concepts, add "recently
+added" section for concepts from the most recent unit.
 
-### 4b. Schema changes (`reading_schema.py`)
+### 5d. Known/new flagging
 
-**What**: Add `refers_to` as an optional field on `Concept`.
+Add `known_in_registry: bool` to unit concept metadata. Skip embedding
+search for known concepts in cross-unit merge — go straight to
+deterministic merge.
 
-**How**:
-- Add `refers_to: list[dict[str, Any]] = field(default_factory=list)` to
-  the `Concept` dataclass.
-- Add to `to_dict()` output.
-- Add to `registry_delta.py` serialization (already uses `asdict()` so
-  should be automatic).
-- `DeterministicConceptMerger._union()` handles list fields generically
-  so `refers_to` is automatically merged.
-
-**Files**: `tilusion/reading_schema.py` (+3)
-
-### 4c. Metrics collection (`reading_pipeline.py`)
-
-**What**: Count how many concepts have `refers_to` entries, grouped by
-confidence level and target type. Report in unit metrics.
-
-**How**:
-- After `merge_segment_extraction_results()`, scan all concepts for
-  `refers_to` entries.
-- Add to unit metrics:
-  ```json
-  "higher_order_references": {
-      "total": 12,
-      "by_target_type": {"event": 5, "group": 4, "item": 3},
-      "by_confidence": {"certain": 2, "likely": 7, "possible": 3},
-      "unresolved": 10
-  }
-  ```
-- Log summary to stderr: `[unit-N] 12 higher-order references detected (2 certain, 7 likely, 3 possible)`.
-
-**Files**: `tilusion/reading_pipeline.py` (+30)
-
-### 4d. Cross-unit reference resolution (agentic, deferred)
-
-**What**: Once metrics confirm the problem is worth solving, add an agentic
-pass that takes `refers_to` entries and resolves them against the registry
-using `search_concepts`, `search_groups`, and `get_item` tools.
-
-**Deferred**: This is the "bonus feature" — implement only after Phases 1-3
-are stable and metrics from 4c justify it. The design sketch:
-
-- New agentic pass `run_reference_resolution_pass()`:
-  - Input: concepts with unresolved `refers_to` entries.
-  - Tools: `search_items` (new), `get_item`, `search_groups`, `get_group`.
-  - Output: `link_to_item` / `link_to_group` proposals.
-- This pass runs after concept resolution and before group resolution
-  in `run_reading_pipeline()`.
-- Resolved references become `concept_refs` in the linked item/group,
-  improving group formation.
-
-### Tests for Phase 4
-
-- `test_concept_refers_to_serialization`
-- `test_higher_order_reference_metrics`
-- `test_refers_to_field_in_extraction_schema`
-
-### Verification
-
-```
-~/.virtualenvs/shredder/bin/python -m pytest tests/test_reading_schema.py tests/test_reading_pipeline.py -q
-```
+**Files**: `tilusion/registry_index.py` (+50), `tilusion/overview.py` (+30),
+`tilusion/reading_pipeline.py` (+70), `tilusion/book_digest.py` (+50),
+`tilusion/registry_delta.py` (+15)
 
 ---
 
-## Implementation Order (Summary)
+## Phase 6: Higher-Order Reference Detection
 
-```
-Phase 1 (embedding cache + query guidance; BM25 retained)
-  ├─ Unblocks: faster iteration on all subsequent phases
-  ├─ Risk: low — pure optimization, no schema change
-  └─ Deliverable: ~250s → ~0s embedding overhead per unit after unit 1
+**Motivation**: (unchanged from original plan) Concepts that refer to
+items/events/groups have no first-class representation. Detection first,
+metrics second, resolution deferred.
 
-Phase 1.5 (per-concept candidate maps)
-  ├─ Unblocks: agent uses local candidate sets instead of a flat near-full registry
-  ├─ Risk: low/medium — payload and prompt shape change, no schema change
-  └─ Deliverable: clearer traces and fewer registry search tool calls
+### 6a–6c: Detection + schema + metrics
 
-Phase 2 (identity-gated soft typing via type facets)
-  ├─ Unblocks: broader deterministic matching reduces LLM load
-  ├─ Risk: medium — extraction prompt change, but backward-compatible
-  └─ Deliverable: fewer concepts need agentic merge
+Add optional `refers_to: list[dict]` field to `Concept`. Instruct extractor
+to flag when a concept refers to a higher-order structure. Collect metrics
+by confidence and target type.
 
-Phase 3 (richer hints + known/new flagging)
-  ├─ Unblocks: Phase 4 reference detection is more useful with known concepts
-  ├─ Risk: medium — touches extraction prompt, hint payload, pipeline wiring
-  └─ Deliverable: extractor distinguishes "flag known" from "extract new"
+### 6d: Agentic resolution (deferred)
 
-Phase 4 (concept-to-higher-order-reference detection)
-  ├─ Unblocks: metrics inform whether full resolution is worth building
-  ├─ Risk: low — detection only, no resolution yet
-  └─ Deliverable: metrics on prevalence of higher-order references
-```
+Build only after metrics from 6c confirm the problem is prevalent.
 
-## Files Affected
+**Files**: `tilusion/prompts/` (+20), `tilusion/reading_schema.py` (+3),
+`tilusion/reading_pipeline.py` (+30)
 
-| File | Phase 1 | Phase 1.5 | Phase 2 | Phase 3 | Phase 4 |
-|------|---------|-----------|---------|---------|---------|
-| `tilusion/registry_index.py` | +175, ~10 | +180 | +30, ~20 | +50 | — |
-| `tilusion/book_registry.py` | +5 | — | +15 | — | — |
-| `tilusion/registry_delta.py` | — | — | — | +15 | — |
-| `tilusion/reading_pipeline.py` | +20 | +30 | — | +70 | +30 |
+---
+
+## Files Affected (All Phases)
+
+| File | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 |
+|------|---------|---------|---------|---------|---------|
+| `tilusion/prompts/prompt_per_segment_extraction_v0.3_zh.md` | **new** | — | — | — | +20 |
+| `tilusion/prompts/prompt_per_segment_extraction_v0.3_en.md` | **new** | — | — | — | — |
+| `tilusion/prompts/prompt_unit_grouping_v0.3_zh.md` | **new** | — | — | — | — |
+| `tilusion/prompts/prompt_unit_grouping_v0.3_en.md` | **new** | — | — | — | — |
+| `tilusion/prompts/overview_segmentation_v0.2.md` | ~10 | — | — | — | — |
+| `tilusion/prompts/prompt_concept_resolution_v0.2.md` | ~5 | — | — | — | — |
+| `tilusion/prompts/prompt_group_resolution_v0.2.md` | ~5 | — | — | — | — |
+| `tilusion/reading_prompts.py` | +40 | — | — | — | — |
+| `tilusion/reading_pipeline.py` | +15 | +60 | — | +70 | +30 |
+| `tilusion/registry_index.py` | — | — | +30, ~20 | +50 | — |
+| `tilusion/book_registry.py` | — | — | +15 | — | — |
 | `tilusion/reading_schema.py` | — | — | — | — | +3 |
 | `tilusion/book_digest.py` | — | — | — | +50 | — |
 | `tilusion/overview.py` | — | — | — | +30 | — |
-| `tilusion/prompts/prompt_per_segment_extraction_v0.2.md` | — | — | +15 | +15 | +20 |
-| `tilusion/prompts/prompt_concept_resolution_v0.2.md` | +10 | +15 | — | — | — |
-| Tests (new) | ~120 | ~70 | ~100 | ~100 | ~80 |
+| `tilusion/registry_delta.py` | — | — | — | +15 | — |
 
-## Verification (End-to-End)
+---
+
+## Verification
 
 After each phase:
 
 ```
-# Unit tests for the phase
-~/.virtualenvs/shredder/bin/python -m pytest tests/test_registry_index.py tests/test_book_registry.py tests/test_registry_delta.py tests/test_reading_schema.py tests/test_reading_pipeline.py tests/test_book_digest.py -q
-
-# Existing tests must not regress
-~/.virtualenvs/shredder/bin/python -m pytest tests/test_cross_unit_resolution.py tests/test_reading_validation.py -q
+~/.virtualenvs/shredder/bin/python -m pytest \
+  tests/test_book_registry.py tests/test_registry_delta.py \
+  tests/test_reading_schema.py tests/test_reading_pipeline.py \
+  tests/test_book_digest.py tests/test_cross_unit_resolution.py \
+  tests/test_reading_validation.py tests/test_reading_payloads_prompts.py -q
 ```
 
-After Phase 3, a full `scope=book` pipeline run with `MockReadingBackend`
-must complete without errors for ≥2 units, and the `known_in_registry`
-flagging must be visible in unit metrics.
+After Phase 2: re-run unit-0003 with v0.3_zh prompts, verify zero English
+output, >90% canonical name coverage, >90% facet coverage.
+
+After Phase 5: full `scope=book` pipeline run with ≥2 units, `known_in_registry`
+flagging visible in unit metrics.
