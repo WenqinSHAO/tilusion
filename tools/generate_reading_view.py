@@ -59,6 +59,14 @@ def load_source_text(book_path: str, unit_id: str | None = None) -> str:
     raise ValueError(f"Unsupported book format: {suffix}")
 
 
+
+def _text_attr(value: Any, fallback: str = "") -> str:
+    """Return a safe display string for optional JSON text fields."""
+    if value is None:
+        return fallback
+    return str(value)
+
+
 # ── Source text annotation ────────────────────────────────────────────────────
 
 def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
@@ -110,8 +118,8 @@ def _annotate_text(
                 annotations.append({
                     "start": s, "end": e,
                     "concept_id": cid,
-                    "concept_type": c.get("concept_type", ""),
-                    "canonical_name": c.get("canonical_name", surf),
+                    "concept_type": _text_attr(c.get("concept_type")),
+                    "canonical_name": _text_attr(c.get("canonical_name"), surf),
                 })
 
     # Remove overlapping annotations (keep longer surface match)
@@ -132,11 +140,13 @@ def _annotate_text(
         if ann["start"] > cursor:
             parts.append(html.escape(text[cursor:ann["start"]]))
         surface_text = text[ann["start"]:ann["end"]]
-        ctype = ann["concept_type"]
+        ctype = _text_attr(ann.get("concept_type"))
+        concept_id = _text_attr(ann.get("concept_id"))
+        canonical_name = _text_attr(ann.get("canonical_name"), surface_text)
         parts.append(
             f'<mark class="concept-mark {html.escape(ctype)}" '
-            f'data-concept="{html.escape(ann["concept_id"])}" '
-            f'data-name="{html.escape(ann["canonical_name"])}">'
+            f'data-concept="{html.escape(concept_id)}" '
+            f'data-name="{html.escape(canonical_name)}">'
             f'{html.escape(surface_text)}</mark>'
         )
         cursor = ann["end"]

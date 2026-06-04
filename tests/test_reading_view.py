@@ -27,7 +27,11 @@ def test_generate_book_view_from_registry_and_source_index(tmp_path: Path) -> No
     book.write_text("Chapter 1\n\nAlpha begins.\n", encoding="utf-8")
     source_index = build_book_source_index(book)
     source_index_path = save_book_source_index(source_index, book, cache_root=tmp_path / "cache")
-    first_block_id = next(iter(source_index["blocks"]))
+    alpha_block_id = next(
+        block_id
+        for block_id, block in source_index["blocks"].items()
+        if "Alpha" in block["text"]
+    )
 
     registry = {
         "next_ids": {"concept": 2, "item": 2, "group": 2},
@@ -38,7 +42,7 @@ def test_generate_book_view_from_registry_and_source_index(tmp_path: Path) -> No
                 "concept_type": "term",
                 "summary": "Alpha concept",
                 "observed_surfaces": ["Alpha"],
-                "source_block_refs": [first_block_id],
+                "source_block_refs": [alpha_block_id],
             }
         },
         "items": {
@@ -46,7 +50,7 @@ def test_generate_book_view_from_registry_and_source_index(tmp_path: Path) -> No
                 "item_id": "item-0001",
                 "item_type": "observation",
                 "summary": "Alpha begins",
-                "source_block_refs": [first_block_id],
+                "source_block_refs": [alpha_block_id],
                 "concept_refs": ["concept-0001"],
             }
         },
@@ -74,6 +78,41 @@ def test_generate_book_view_from_registry_and_source_index(tmp_path: Path) -> No
     assert payload["diagnostics"]["missing_source_block_ref_count"] == 0
     assert 'data-block="block-000001"' in rendered
     assert 'data-unit="unit-0001"' in rendered
+
+
+def test_generate_book_view_handles_null_canonical_name(tmp_path: Path) -> None:
+    book = tmp_path / "book.txt"
+    book.write_text("Chapter 1\n\nAlpha begins.\n", encoding="utf-8")
+    source_index = build_book_source_index(book)
+    source_index_path = save_book_source_index(source_index, book, cache_root=tmp_path / "cache")
+    alpha_block_id = next(
+        block_id
+        for block_id, block in source_index["blocks"].items()
+        if "Alpha" in block["text"]
+    )
+    registry = {
+        "concepts": {
+            "concept-0001": {
+                "concept_id": "concept-0001",
+                "surface": "Alpha",
+                "concept_type": "term",
+                "canonical_name": None,
+                "summary": "Alpha concept",
+                "observed_surfaces": ["Alpha"],
+                "source_block_refs": [alpha_block_id],
+            }
+        },
+        "items": {},
+        "groups": {},
+    }
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    output = tmp_path / "book_view.html"
+
+    generate_book(_template_path(), str(registry_path), str(source_index_path), str(output))
+
+    rendered = output.read_text(encoding="utf-8")
+    assert 'data-name="Alpha"' in rendered
 
 
 def test_generate_book_view_reports_missing_legacy_refs(tmp_path: Path) -> None:
