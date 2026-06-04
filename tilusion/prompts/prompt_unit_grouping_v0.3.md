@@ -1,0 +1,78 @@
+You review one unit's resolved concepts and atomic items and build logical groups with optional graph structure. Concepts and items are already resolved; do not re-extract source text and do not edit concepts or items.
+
+## Field-language policy
+
+The payload includes `language_policy`:
+- Source-grounded identity fields remain copied/normalized from source text.
+- Reader-facing prose (`summary`, edge summaries, `warnings`, `unresolved_items.summary`) must use `language_policy.reader_language`.
+- Pipeline internals (`group_type`, `edge_type`, IDs) use the controlled English vocabulary below.
+
+Return only one JSON object. No prose, markdown, or code fences.
+
+Input keys: `task`, `schema_version`, `unit_id`, `unit_text`, `source`, `segments`, `concepts`, `atomic_items`, `implicit_refs`, `unresolved_items`, `context`, `language_policy`.
+
+Required output:
+```json
+{
+  "unit_id": "unit-0001",
+  "logical_groups": [
+    {
+      "group_id": "group-0001",
+      "group_type": "temporal_sequence",
+      "summary": "一次局部事件链，呈现人物行动的先后关系。",
+      "item_refs": ["item-0001", "item-0002"],
+      "concept_refs": ["concept-0001"],
+      "graph": {
+        "nodes": [{"node_id": "node-0001", "item_ref": "item-0001", "label": ""}],
+        "edges": [
+          {
+            "source": "node-0001",
+            "target": "node-0002",
+            "edge_type": "precedes",
+            "summary": "前一事项发生在后一事项之前。",
+            "source_block_refs": [],
+            "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"},
+            "uncertainty": []
+          }
+        ]
+      },
+      "uncertainty": [],
+      "provenance": {"grounding": "llm_inferred", "created_by": "llm_inferred"}
+    }
+  ],
+  "unresolved_items": [],
+  "warnings": []
+}
+```
+
+## Group type vocabulary and granularity
+
+Use only these group types. If none fit, use `other`; do not invent custom group types.
+
+- `timeline`: coarse unit-level, cross-unit, or book-level arc of major happenings. A timeline may aggregate multiple local temporal sequences into larger events.
+- `temporal_sequence`: local/micro chronological episode or event chain. It may be part of a larger timeline.
+- `theme_set`: items sharing a theme/motif without required ordering.
+- `method_example_set`: techniques, methods, rules, and their examples.
+- `claim_evidence_map`: claims with supporting, qualifying, or contradicting evidence.
+- `contrast_set`: items presented in explicit contrast.
+- `concept_map`: concept-to-concept explanation or taxonomy.
+- `discourse_graph`: argument, reflection, or commentary flow.
+- `motif_development`: recurring motif across multiple items.
+- `open_thread_list`: unresolved questions or threads.
+- `viewpoint_evolution`: change in viewpoint or stance.
+- `other`: use sparingly.
+
+## Rules
+
+- Build groups from `atomic_items`; `item_refs` must reference input item IDs.
+- `concept_refs` must reference input concept IDs.
+- Graph node `item_ref` must be in the same group's `item_refs`.
+- Graph edge endpoints must reference node IDs inside the same group.
+- Use only these edge types: `mentions`, `refers_to`, `aliases`, `same_as_candidate`, `part_of`, `elaborates`, `supports`, `contradicts`, `qualifies`, `contrasts`, `causes`, `enables`, `explains`, `follows_from`, `precedes`, `continues`, `resolves`, `raises_question`, `answers_question`, `exemplifies`, `defines`, `uses_method`, `produces_result`, `has_limitation`, `related_to`, `other`. Do not use custom edge types.
+- Prefer fewer meaningful groups, but do not force a local episode into a huge timeline. A small ordered episode can be a `temporal_sequence`; broader arcs should be `timeline`.
+- Adjacent temporal sequences with the same key entities and continuous time should either be represented as one `timeline` group or connected later through `part_of` / `precedes` cross-group edges. Inside one unit, use `timeline` when you can identify the larger arc confidently.
+- For `timeline` and `temporal_sequence`, order `item_refs` chronologically when possible. Use `temporal_attributes`; otherwise fall back to narrative order and note uncertainty.
+- Flat collections such as `theme_set`, `contrast_set`, and `method_example_set` may have an empty graph.
+- `source_block_refs` on graph edges should cite text supporting the relationship itself, not merely the source/target items. Omit when the edge is inferred.
+- Resolve input `unresolved_items` only when the current structures make the answer clear; otherwise carry them forward.
+- Preserve uncertainty instead of inventing facts.

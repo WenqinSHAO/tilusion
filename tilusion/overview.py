@@ -13,6 +13,7 @@ from .backend import (
     sha256_text,
 )
 from .extraction_prompts import build_overview_composition
+from .reading_payloads import build_language_policy
 from .extraction_quality import EvidenceLocation, relocate_evidence_quote
 from .pass_utils import (
     PromptComposition,
@@ -83,6 +84,7 @@ def run_overview_segmentation_pass(
     cache_dir: Path,
     use_cache: bool,
     context: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> JsonPassRecord:
     prompt = build_overview_composition()
     payload = {
@@ -98,6 +100,7 @@ def run_overview_segmentation_pass(
             "source_range": unit.source_range,
         },
         "text": text,
+        "language_policy": language_policy or build_language_policy(),
     }
     if context:
         payload["context"] = context

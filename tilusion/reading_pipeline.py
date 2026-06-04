@@ -38,6 +38,7 @@ from .pass_utils import (
 from .reading_payloads import (
     build_concept_resolution_payload,
     build_group_resolution_payload,
+    build_language_policy,
     build_per_segment_extraction_payload,
     build_unit_logical_grouping_payload,
     build_unit_logical_grouping_payload_v0_2,
@@ -666,6 +667,7 @@ def run_per_segment_extraction_pass(
     unit_text: str | None = None,
     source_blocks: list[SourceBlock] | None = None,
     source_index_id: str | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> ReadingPassRecord:
     """Run the reading per-segment extraction pass on one segment.
 
@@ -713,6 +715,7 @@ def run_per_segment_extraction_pass(
         source_blocks=blocks,
         segment_offset=block_unit_offset,
         context=context,
+        language_policy=language_policy,
     )
 
     cache_key = build_pass_cache_key(
@@ -1460,8 +1463,9 @@ def run_unit_logical_grouping_pass(
     use_cache: bool = True,
     implicit_refs: dict[str, dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> ReadingPassRecord:
-    """Run the unit-level logical grouping pass (v0.2).
+    """Run the unit-level logical grouping pass (v0.3).
 
     Concepts have already been resolved by a prior cross-unit pass.
     This pass only builds logical groups — it does not emit concept deltas.
@@ -1484,10 +1488,11 @@ def run_unit_logical_grouping_pass(
         unresolved_items=unresolved_items,
         implicit_refs=implicit_refs,
         context=context,
+        language_policy=language_policy,
     )
 
     cache_key = build_pass_cache_key(
-        pass_name="unit-logical-grouping-v0.2",
+        pass_name="unit-logical-grouping-v0.3",
         prompt=prompt,
         user_payload=payload,
         model_identity=backend.model_identity,
@@ -1530,7 +1535,7 @@ def run_unit_logical_grouping_pass(
             prompt=prompt,
             payload=payload,
             validation_subject_builder=_build_grouping_subject,
-            pass_name="unit-logical-grouping-v0.2",
+            pass_name="unit-logical-grouping-v0.3",
             return_subject=True,
         )
         raw_response = _last_assistant_content(conversation)
@@ -1562,13 +1567,13 @@ def run_unit_logical_grouping_pass(
             "context_metadata": {},
         }
         validation_report = validate_extraction_unit_package(validation_subject)
-        _raise_on_validation_errors("unit-logical-grouping-v0.2", validation_report)
+        _raise_on_validation_errors("unit-logical-grouping-v0.3", validation_report)
 
     # ── Compute factual grouping counts ──
     grouping_counts = _compute_grouping_counts(updated_groups, updated_items)
 
     record = ReadingPassRecord(
-        pass_name="unit-logical-grouping-v0.2",
+        pass_name="unit-logical-grouping-v0.3",
         cache_key=cache_key,
         cache_dir=str(pass_dir),
         cache_hit=cache_hit,
@@ -1922,6 +1927,7 @@ def run_cross_unit_concept_resolution_pass(
     registry: Any | None = None,  # BookRegistry for agentic tool execution
     selection_trace: dict[str, Any] | None = None,
     candidate_map: list[dict[str, Any]] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> ReadingPassRecord:
     """Run cross-unit concept identity resolution (Conversation D).
 
@@ -1945,6 +1951,7 @@ def run_cross_unit_concept_resolution_pass(
         candidate_map=candidate_map,
         unresolved_items=unresolved_items,
         context=context,
+        language_policy=language_policy,
     )
     blocks = source_blocks or []
 
@@ -2106,6 +2113,7 @@ def run_cross_unit_group_resolution_pass(
     context: dict[str, Any] | None = None,
     registry: Any | None = None,  # BookRegistry for agentic tool execution
     selection_trace: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> ReadingPassRecord:
     """Run cross-unit group resolution (Conversation E).
 
@@ -2129,6 +2137,7 @@ def run_cross_unit_group_resolution_pass(
         groups=groups,
         registry_groups=registry_groups,
         context=context,
+        language_policy=language_policy,
     )
     blocks = source_blocks or []
     items = atomic_items or []
@@ -2398,6 +2407,9 @@ def run_reading_pipeline(
     use_cache: bool = True,
     context: dict[str, Any] | None = None,
     scope: str = "unit",
+    source_language: str = "auto",
+    reader_language: str = "zh-Hans",
+    normalized_language: str = "normalized",
 ) -> ReadingPipelineRecord:
     """Run the full reading pipeline (Phase 3): overview → per-segment → concept
     resolution → logical grouping → group resolution.
@@ -2425,6 +2437,11 @@ def run_reading_pipeline(
     index = build_book_index(book_path)
     unit = index.unit_map()[unit_id]
     text = extract_unit_text(book_path, unit)
+    language_policy = build_language_policy(
+        source_language=source_language,
+        reader_language=reader_language,
+        normalized_language=normalized_language,
+    )
     source = {
         "book_path": str(book_path),
         "book_title": index.title or "",
@@ -2498,6 +2515,7 @@ def run_reading_pipeline(
         "registry_commit": registry_head_commit,
         "book_digest_hash": f"digest-{sha256_text(digest)[:16]}" if digest else "",
         "context_pack_hash": "",
+        "language_policy": language_policy,
     }
     unit_prompt_versions = {
         "overview": build_overview_composition().composition_id,
@@ -2543,6 +2561,7 @@ def run_reading_pipeline(
             cache_dir=unit_cache_root / "overview",
             use_cache=use_cache,
             context=context,
+            language_policy=language_policy,
         )
         segments, overview_repairs = resolve_overview_segments(overview_record.data, text)
         pass_summaries["overview_segmentation"] = {
@@ -2591,6 +2610,7 @@ def run_reading_pipeline(
                     unit_text=text,
                     source_blocks=indexed_blocks or None,
                     source_index_id=source_index_id if indexed_blocks else None,
+                    language_policy=language_policy,
                 )
                 future_to_seg[future] = seg
 
@@ -2687,6 +2707,7 @@ def run_reading_pipeline(
                 registry=registry,
                 selection_trace=concept_selection_trace,
                 candidate_map=concept_selection_trace.get("candidate_map", []),
+                language_policy=language_policy,
             )
             pass_summaries["cross_unit_concept_resolution"] = {
                 "cache_key": concept_resolution_record.cache_key,
@@ -2736,6 +2757,7 @@ def run_reading_pipeline(
             use_cache=use_cache,
             implicit_refs=implicit_ref_map if implicit_ref_map else None,
             context=None,
+            language_policy=language_policy,
         )
         pass_summaries["unit_logical_grouping"] = {
             "cache_key": grouping_record.cache_key,
@@ -2787,6 +2809,7 @@ def run_reading_pipeline(
                 context=None,
                 registry=registry,
                 selection_trace=group_selection_trace,
+                language_policy=language_policy,
             )
             pass_summaries["cross_unit_group_resolution"] = {
                 "cache_key": group_resolution_record.cache_key,
@@ -2842,12 +2865,11 @@ def run_reading_pipeline(
             "source_index_id": source_index_id,
             "source_index_path": str(source_index_path),
             "run_hash": unit_run_hash,
-            "reader_language": "zh-Hans",
-            "normalized_language": "normalized",
+            "language_policy": language_policy,
         },
         "metrics": metrics,
     }
-    metrics["quality"] = compute_quality_metrics(final_data, reader_language="zh-Hans")
+    metrics["quality"] = compute_quality_metrics(final_data, reader_language=reader_language)
     final_data["metrics"] = metrics
     log_quality_metrics(metrics["quality"])
     final_validation_report = validate_extraction_unit_package(final_data)

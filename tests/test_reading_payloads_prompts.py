@@ -6,6 +6,8 @@ from tilusion.pass_utils import generated_prompt_part
 from tilusion.reading_payloads import (
     _source_block_meta,
     build_concept_resolution_payload,
+    build_group_resolution_payload,
+    build_language_policy,
     build_per_segment_extraction_payload,
     merge_segment_extraction_results,
     render_text_with_block_markers,
@@ -13,8 +15,10 @@ from tilusion.reading_payloads import (
 from tilusion.reading_schema import RECOMMENDED_CONCEPT_TYPES, SourceBlock, normalize_concept_type
 from tilusion.reading_prompts import (
     build_concept_resolution_v0_2_composition,
+    build_group_resolution_v0_2_composition,
     build_per_segment_extraction_composition,
     build_unit_logical_grouping_composition,
+    build_unit_logical_grouping_v0_2_composition,
 )
 
 
@@ -28,13 +32,15 @@ def test_per_segment_extraction_composition_loads_static_contract() -> None:
 
     composition = build_per_segment_extraction_composition([generated])
 
-    assert composition.composition_id == "per-segment-extraction-v0.2"
+    assert composition.composition_id == "per-segment-extraction-v0.3"
     assert composition.parts[0].part_id == "per-segment-extraction-contract"
     assert composition.parts[-1].part_id == "context-pack"
     assert "Return only one JSON object" in composition.content
     assert "inline markers" in composition.content
     assert "atomic_items" in composition.content
     assert "Do not invent block IDs" in composition.content
+    assert "Field-language policy" in composition.content
+    assert "reader_language" in composition.content
     assert composition.to_dict()["parts"][0]["metadata"]["schema_version"] == "reading-unit-v0.3"
 
 
@@ -64,7 +70,8 @@ def test_per_segment_prompt_advertises_coarse_concept_types() -> None:
         "metric|component|format|substance|other|custom"
     )
     assert old_fine_grained_shape not in content
-    assert "person|group|organization|place|object|term|method|theme" in content
+    assert "Use only these concept types" in content
+    assert "do not invent custom concept types" in content
 
 
 def test_unit_grouping_prompt_prefers_schema_concept_types() -> None:
@@ -74,6 +81,17 @@ def test_unit_grouping_prompt_prefers_schema_concept_types() -> None:
     assert "work`/`collection` (use `source`)" in content
     assert "source`, `other`" in content
     assert "`work`/`collection`, `motif`" not in content
+
+
+def test_unit_grouping_v0_3_prompt_defines_temporal_granularity_and_language_policy() -> None:
+    composition = build_unit_logical_grouping_v0_2_composition()
+    content = composition.content
+
+    assert composition.composition_id == "unit-logical-grouping-v0.3"
+    assert "Field-language policy" in content
+    assert "reader_language" in content
+    assert "`timeline`: coarse" in content
+    assert "`temporal_sequence`: local" in content
 
 
 def test_per_segment_extraction_payload_includes_source_blocks_and_marked_text() -> None:
@@ -102,6 +120,7 @@ def test_per_segment_extraction_payload_includes_source_blocks_and_marked_text()
     assert payload["task"] == "per_segment_extraction"
     assert payload["schema_version"] == "reading-unit-v0.3"
     assert payload["context"]["context_pack_id"] == "context-pack-1"
+    assert payload["language_policy"] == build_language_policy()
     assert payload["text"] == "{seg-0001-block-0000:paragraph}Alice defines entropy.{/seg-0001-block-0000}"
     assert payload["source_blocks"] == [
         {"block_id": "seg-0001-block-0000", "block_type": "paragraph", "start": 0, "end": 22}
@@ -612,6 +631,7 @@ def test_concept_resolution_payload_includes_candidate_map() -> None:
     )
 
     assert payload["candidate_map"] == candidate_map
+    assert payload["language_policy"] == build_language_policy()
 
 
 def test_agentic_concept_prompt_uses_candidate_map_first() -> None:
@@ -620,4 +640,22 @@ def test_agentic_concept_prompt_uses_candidate_map_first() -> None:
 
     assert "candidate_map" in content
     assert "primary screening structure" in content
-    assert "search_concepts` is a fallback" in content
+    assert "Search only when needed" in content
+    assert "search_concepts(query)` only" in content
+    assert "Field-Language Policy" in content
+    assert "mixed-language glosses" in content
+
+
+def test_group_resolution_payload_and_prompt_include_language_policy() -> None:
+    payload = build_group_resolution_payload(
+        unit_id="unit-0002",
+        concepts=[],
+        groups=[],
+        registry_groups=[],
+    )
+    composition = build_group_resolution_v0_2_composition()
+
+    assert payload["language_policy"] == build_language_policy()
+    assert composition.composition_id == "group-resolution-v0.3"
+    assert "Field-Language Policy" in composition.content
+    assert "local temporal sequence can continue" in composition.content

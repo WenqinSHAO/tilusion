@@ -515,7 +515,7 @@ def test_run_unit_logical_grouping_pass_with_mock(tmp_path: Path) -> None:
         use_cache=True,
     )
 
-    assert record.pass_name == "unit-logical-grouping-v0.2"
+    assert record.pass_name == "unit-logical-grouping-v0.3"
     assert record.cache_hit is False
     assert record.data["unit_id"] == "unit-0001"
     assert record.data["source_blocks"] == source_blocks

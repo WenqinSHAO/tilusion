@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from .pass_utils import PromptComposition, PromptPart, load_static_prompt_part
 
-OVERVIEW_PROMPT_VERSION = "overview-segmentation-v0.2"
-OVERVIEW_PROMPT_RESOURCE = "overview_segmentation_v0.2.md"
+OVERVIEW_PROMPT_VERSION = "overview-segmentation-v0.3"
+OVERVIEW_PROMPT_RESOURCE = "overview_segmentation_v0.3.md"
 
 
 def build_overview_composition(

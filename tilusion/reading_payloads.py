@@ -7,6 +7,19 @@ import re
 from .reading_schema import READING_UNIT_SCHEMA_VERSION, normalize_concept_type
 
 
+def build_language_policy(
+    *,
+    source_language: str = "auto",
+    reader_language: str = "zh-Hans",
+    normalized_language: str = "normalized",
+) -> dict[str, str]:
+    return {
+        "source_language": source_language,
+        "reader_language": reader_language,
+        "normalized_language": normalized_language,
+    }
+
+
 def render_text_with_block_markers(
     segment_text: str,
     source_blocks: list[Any],
@@ -68,6 +81,7 @@ def build_per_segment_extraction_payload(
     source_blocks: list[Any] | None = None,
     segment_offset: int = 0,
     context: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     blocks = source_blocks or []
     marked_text = (
@@ -83,6 +97,7 @@ def build_per_segment_extraction_payload(
         "source_blocks": [_source_block_meta(b) for b in blocks],
         "text": marked_text,
         "context": context or {},
+        "language_policy": language_policy or build_language_policy(),
     }
 
 
@@ -97,6 +112,7 @@ def build_unit_logical_grouping_payload(
     atomic_items: list[dict[str, Any]],
     unresolved_items: list[dict[str, Any]],
     context: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the payload for the unit logical grouping + concept delta pass.
 
@@ -114,6 +130,7 @@ def build_unit_logical_grouping_payload(
         "atomic_items": atomic_items,
         "unresolved_items": unresolved_items or [],
         "context": context or {},
+        "language_policy": language_policy or build_language_policy(),
     }
 
 
@@ -125,6 +142,7 @@ def build_concept_resolution_payload(
     candidate_map: list[dict[str, Any]] | None = None,
     unresolved_items: list[dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the payload for cross-unit concept resolution (Conversation D).
 
@@ -139,6 +157,7 @@ def build_concept_resolution_payload(
         "candidate_map": candidate_map or [],
         "unresolved_items": unresolved_items or [],
         "context": context or {},
+        "language_policy": language_policy or build_language_policy(),
     }
 
 
@@ -153,6 +172,7 @@ def build_unit_logical_grouping_payload_v0_2(
     unresolved_items: list[dict[str, Any]],
     implicit_refs: dict[str, list[dict[str, Any]]] | None = None,
     context: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the payload for unit logical grouping v0.2 (Conversation C revised).
 
@@ -171,6 +191,7 @@ def build_unit_logical_grouping_payload_v0_2(
         "implicit_refs": implicit_refs or {},
         "unresolved_items": unresolved_items or [],
         "context": context or {},
+        "language_policy": language_policy or build_language_policy(),
     }
 
 
@@ -181,6 +202,7 @@ def build_group_resolution_payload(
     groups: list[dict[str, Any]],
     registry_groups: list[dict[str, Any]],
     context: dict[str, Any] | None = None,
+    language_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the payload for cross-unit group resolution (Conversation E)."""
     return {
@@ -191,6 +213,7 @@ def build_group_resolution_payload(
         "groups": groups,
         "registry_groups": registry_groups,
         "context": context or {},
+        "language_policy": language_policy or build_language_policy(),
     }
 
 

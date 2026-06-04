@@ -13,6 +13,9 @@ def test_parser_accepts_run_reading_defaults() -> None:
     assert args.backend == "mock"
     assert args.cache_dir == ".tilusion_cache"
     assert args.no_cache is False
+    assert args.source_language == "auto"
+    assert args.reader_language == "zh-Hans"
+    assert args.normalized_language == "normalized"
 
 
 def test_parser_accepts_split_blocks_options() -> None:

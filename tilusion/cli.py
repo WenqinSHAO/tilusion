@@ -58,6 +58,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true",
         help="Print full pipeline record as JSON to stdout (default: compact summary)",
     )
+    run_reading_parser.add_argument(
+        "--source-language",
+        default="auto",
+        help="Language of source-grounded fields such as surface, canonical_name, aliases",
+    )
+    run_reading_parser.add_argument(
+        "--reader-language",
+        default="zh-Hans",
+        help="Preferred language for reader-facing summaries and rationales",
+    )
+    run_reading_parser.add_argument(
+        "--normalized-language",
+        default="normalized",
+        help="Language policy label for internal normalized fields such as facets",
+    )
 
     source_index_parser = subparsers.add_parser(
         "source-index",
@@ -123,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir=args.cache_dir,
                 use_cache=not args.no_cache,
                 scope=args.scope,
+                source_language=args.source_language,
+                reader_language=args.reader_language,
+                normalized_language=args.normalized_language,
             )
         except (ExtractionError, OSError, ValueError, KeyError) as error:
             print(f"reading pipeline failed: {error}", file=sys.stderr)

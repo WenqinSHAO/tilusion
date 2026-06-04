@@ -4,20 +4,20 @@ from .pass_utils import PromptComposition, PromptPart, load_static_prompt_part
 from .reading_schema import READING_UNIT_SCHEMA_VERSION
 
 
-PER_SEGMENT_EXTRACTION_PROMPT_VERSION = "per-segment-extraction-v0.2"
-PER_SEGMENT_EXTRACTION_PROMPT_RESOURCE = "prompt_per_segment_extraction_v0.2.md"
+PER_SEGMENT_EXTRACTION_PROMPT_VERSION = "per-segment-extraction-v0.3"
+PER_SEGMENT_EXTRACTION_PROMPT_RESOURCE = "prompt_per_segment_extraction_v0.3.md"
 UNIT_LOGICAL_GROUPING_PROMPT_VERSION = "unit-logical-grouping-v0.1"
 UNIT_LOGICAL_GROUPING_PROMPT_RESOURCE = "prompt_unit_logical_grouping_v0.1.md"
-UNIT_LOGICAL_GROUPING_PROMPT_V0_2_VERSION = "unit-logical-grouping-v0.2"
-UNIT_LOGICAL_GROUPING_PROMPT_V0_2_RESOURCE = "prompt_unit_grouping_v0.2.md"
+UNIT_LOGICAL_GROUPING_PROMPT_V0_2_VERSION = "unit-logical-grouping-v0.3"
+UNIT_LOGICAL_GROUPING_PROMPT_V0_2_RESOURCE = "prompt_unit_grouping_v0.3.md"
 CONCEPT_RESOLUTION_PROMPT_VERSION = "concept-resolution-v0.1"
 CONCEPT_RESOLUTION_PROMPT_RESOURCE = "prompt_concept_resolution_v0.1.md"
 GROUP_RESOLUTION_PROMPT_VERSION = "group-resolution-v0.1"
 GROUP_RESOLUTION_PROMPT_RESOURCE = "prompt_group_resolution_v0.1.md"
-CONCEPT_RESOLUTION_PROMPT_V0_2_VERSION = "concept-resolution-v0.2"
-CONCEPT_RESOLUTION_PROMPT_V0_2_RESOURCE = "prompt_concept_resolution_v0.2.md"
-GROUP_RESOLUTION_PROMPT_V0_2_VERSION = "group-resolution-v0.2"
-GROUP_RESOLUTION_PROMPT_V0_2_RESOURCE = "prompt_group_resolution_v0.2.md"
+CONCEPT_RESOLUTION_PROMPT_V0_2_VERSION = "concept-resolution-v0.3"
+CONCEPT_RESOLUTION_PROMPT_V0_2_RESOURCE = "prompt_concept_resolution_v0.3.md"
+GROUP_RESOLUTION_PROMPT_V0_2_VERSION = "group-resolution-v0.3"
+GROUP_RESOLUTION_PROMPT_V0_2_RESOURCE = "prompt_group_resolution_v0.3.md"
 
 
 def build_per_segment_extraction_composition(
