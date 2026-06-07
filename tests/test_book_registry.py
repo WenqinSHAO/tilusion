@@ -13,6 +13,7 @@ from tilusion.book_registry import (
     DeterministicConceptMerger,
     KeepExistingConceptMerger,
     MergeRejectedError,
+    find_registry_duplicates,
 )
 from tilusion.reading_payloads import _merge_concept_group, _pick_canonical_name
 from tilusion.reading_schema import (
@@ -756,3 +757,68 @@ def test_registry_source_index_id_persists(tmp_path: Path) -> None:
     loaded = BookRegistry.load(book_path, cache_root=cache_root)
 
     assert loaded.source_index_id() == "source-index-a"
+
+
+# ── find_registry_duplicates ──────────────────────────────────────────────────
+
+
+class TestFindRegistryDuplicates:
+    def test_empty(self) -> None:
+        assert find_registry_duplicates({}) == []
+
+    def test_single_concept_no_duplicates(self) -> None:
+        c = Concept(concept_id="concept-0001", surface="沈复", concept_type="person")
+        assert find_registry_duplicates({"concept-0001": c}) == []
+
+    def test_same_surface_same_type_merges(self) -> None:
+        c1 = Concept(concept_id="concept-0001", surface="芸娘", concept_type="person",
+                     canonical_name="芸娘")
+        c2 = Concept(concept_id="concept-0032", surface="芸娘", concept_type="person",
+                     canonical_name="芸娘")
+        pairs = find_registry_duplicates({"concept-0001": c1, "concept-0032": c2})
+        assert len(pairs) == 1
+        assert pairs[0][0] == "concept-0001"
+        assert pairs[0][1] == "concept-0032"
+        assert "same surface" in pairs[0][2]
+
+    def test_shared_alias_same_type_merges(self) -> None:
+        c1 = Concept(concept_id="concept-0001", surface="沈复", concept_type="person",
+                     canonical_name="沈复", aliases=["沈复", "三白", "余"])
+        c2 = Concept(concept_id="concept-0031", surface="沈三白", concept_type="person",
+                     canonical_name="沈三白", aliases=["沈复", "沈三白"])
+        pairs = find_registry_duplicates({"concept-0001": c1, "concept-0031": c2})
+        assert len(pairs) == 1
+        assert pairs[0][0] == "concept-0001"
+        assert pairs[0][1] == "concept-0031"
+        assert "shared alias" in pairs[0][2]
+
+    def test_different_type_no_merge(self) -> None:
+        c1 = Concept(concept_id="concept-0001", surface="沈复", concept_type="person")
+        c2 = Concept(concept_id="concept-0002", surface="沈复", concept_type="place")
+        assert find_registry_duplicates({"concept-0001": c1, "concept-0002": c2}) == []
+
+    def test_different_surface_no_alias_no_merge(self) -> None:
+        c1 = Concept(concept_id="concept-0001", surface="沈复", concept_type="person")
+        c2 = Concept(concept_id="concept-0002", surface="先生", concept_type="person")
+        assert find_registry_duplicates({"concept-0001": c1, "concept-0002": c2}) == []
+
+    def test_older_absorbs_newer(self) -> None:
+        c1 = Concept(concept_id="concept-0100", surface="芸娘", concept_type="person")
+        c2 = Concept(concept_id="concept-0005", surface="芸娘", concept_type="person")
+        pairs = find_registry_duplicates({"concept-0100": c1, "concept-0005": c2})
+        assert len(pairs) == 1
+        # Older (lower ID) absorbs newer
+        assert pairs[0][0] == "concept-0005"
+        assert pairs[0][1] == "concept-0100"
+
+    def test_multiple_pairs(self) -> None:
+        c1 = Concept(concept_id="concept-0001", surface="芸娘", concept_type="person")
+        c2 = Concept(concept_id="concept-0002", surface="芸娘", concept_type="person")
+        c3 = Concept(concept_id="concept-0003", surface="沈复", concept_type="person",
+                     aliases=["三白"])
+        c4 = Concept(concept_id="concept-0004", surface="沈三白", concept_type="person",
+                     aliases=["沈复", "三白"])
+        pairs = find_registry_duplicates(
+            {"concept-0001": c1, "concept-0002": c2, "concept-0003": c3, "concept-0004": c4}
+        )
+        assert len(pairs) == 2

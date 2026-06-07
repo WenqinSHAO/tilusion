@@ -138,6 +138,81 @@ class KeepExistingConceptMerger:
         return members[0]
 
 
+def find_registry_duplicates(
+    concepts: dict[str, Concept],
+) -> list[tuple[str, str, str]]:
+    """Find deterministic duplicate pairs in a registry concept dict.
+
+    Returns a list of ``(id_a, id_b, reason)`` tuples where *id_a* is the
+    older (lower-numbered) concept that should absorb *id_b*.
+
+    Rules (both must be satisfied):
+    1. Same normalized type
+    2. Same surface, OR shared alias between the two concepts
+    """
+    # Group by normalized type
+    by_type: dict[str, list[tuple[str, Concept]]] = {}
+    for cid, c in concepts.items():
+        ntype = normalize_concept_type(c.concept_type)
+        by_type.setdefault(ntype, []).append((cid, c))
+
+    pairs: list[tuple[str, str, str]] = []
+    seen: set[frozenset[str]] = set()
+
+    for _ntype, group in by_type.items():
+        if len(group) < 2:
+            continue
+        # Build surface index: surface → list of (id, concept)
+        by_surface: dict[str, list[tuple[str, Concept]]] = {}
+        for cid, c in group:
+            key = c.surface.strip()
+            if key:
+                by_surface.setdefault(key, []).append((cid, c))
+
+        for _surf, matches in by_surface.items():
+            if len(matches) < 2:
+                continue
+            for i in range(len(matches)):
+                for j in range(i + 1, len(matches)):
+                    id_a, id_b = matches[i][0], matches[j][0]
+                    pair = frozenset({id_a, id_b})
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                    pairs.append((id_a, id_b, f"same surface '{_surf}'"))
+
+        # Alias overlap check: for each pair in the type group
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                id_a, c_a = group[i]
+                id_b, c_b = group[j]
+                pair = frozenset({id_a, id_b})
+                if pair in seen:
+                    continue
+                aliases_a = set(c_a.aliases or [])
+                aliases_b = set(c_b.aliases or [])
+                if aliases_a & aliases_b:
+                    seen.add(pair)
+                    shared = aliases_a & aliases_b
+                    pairs.append((id_a, id_b, f"shared alias {sorted(shared)}"))
+
+    # Sort: older (lower-numbered) ID absorbs newer
+    def _id_num(cid: str) -> int:
+        try:
+            return int(cid.split("-")[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    result: list[tuple[str, str, str]] = []
+    for id_a, id_b, reason in pairs:
+        na, nb = _id_num(id_a), _id_num(id_b)
+        if na <= nb:
+            result.append((id_a, id_b, reason))
+        else:
+            result.append((id_b, id_a, reason))
+    return result
+
+
 class BookRegistry:
     """Book-level concept/item/group store with git-backed persistence."""
 

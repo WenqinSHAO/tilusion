@@ -69,7 +69,7 @@ from .reading_validation import (
     validate_extraction_unit_package,
 )
 from .book_digest import build_book_digest, make_context_dict
-from .book_registry import BookRegistry
+from .book_registry import BookRegistry, find_registry_duplicates
 from .registry_index import (
     build_registry_index,
     init_embedding_cache,
@@ -2893,6 +2893,29 @@ def run_reading_pipeline(
         )
         _log_registry_delta_preview(delta_result, registry)
         applied = apply_registry_delta(registry, delta_result)
+
+        # ── Deterministic registry dedup ──
+        dup_pairs = find_registry_duplicates(registry._concepts)
+        if dup_pairs:
+            print(
+                f"  [registry-dedup] found {len(dup_pairs)} duplicate pair(s)",
+                file=sys.stderr,
+            )
+            for id_a, id_b, reason in dup_pairs[:5]:
+                print(
+                    f"    merge {id_b} -> {id_a} ({reason})",
+                    file=sys.stderr,
+                )
+            if len(dup_pairs) > 5:
+                print(
+                    f"    ... {len(dup_pairs) - 5} more pair(s)",
+                    file=sys.stderr,
+                )
+            for id_a, id_b, _reason in dup_pairs:
+                try:
+                    registry.merge_concepts([id_a, id_b])
+                except Exception:
+                    pass
 
         # ── Post-extraction digest update ──
         # Keep digest generation on the dedicated digest prompt. Reusing the
