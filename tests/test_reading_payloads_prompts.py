@@ -63,14 +63,13 @@ def test_per_segment_prompt_advertises_coarse_concept_types() -> None:
 
     # v0.3 prompt targets novels/essays; preferred types should appear
     narrative_preferred = {
-        "person", "place", "time_anchor", "object", "term", "method",
-        "theme", "motif", "emotion", "social_role", "symbol", "source", "other",
+        "person", "place", "time_anchor", "object", "term", "source", "other",
     }
     for concept_type in narrative_preferred:
         assert concept_type in content, f"preferred type '{concept_type}' missing from prompt"
 
-    # These should NOT appear for novels/essays
-    for dropped in {"dataset", "metric", "technical_component"}:
+    # These schema types should NOT appear in the prompt for novels/essays
+    for dropped in {"dataset", "metric", "technical_component", "social_role", "symbol"}:
         assert dropped not in content, f"'{dropped}' should not appear in narrative prompt"
 
     old_fine_grained_shape = (

@@ -27,8 +27,8 @@ The caller provides JSON with:
 - `context`: optional book digest/context.
 - `language_policy`: field-language policy.
 
-Allowed `concept_type` values (novels/essays): `person`, `place`, `time_anchor`, `object`, `term`, `method`, `theme`, `motif`, `emotion`, `social_role`, `symbol`, `source`, `group`, `organization`, `institution`, `scene_element`, `other`.
-Prefer the smaller set `person`, `place`, `time_anchor`, `object`, `term`, `method`, `theme`, `motif`, `emotion`, `social_role`, `symbol`, `source`, `other` unless another allowed type materially improves identity resolution.
+Allowed `concept_type` values (novels/essays): `person`, `place`, `time_anchor`, `object`, `term`, `source`, `group`, `organization`, `other`.
+
 
 ## Multi-Round Protocol
 
