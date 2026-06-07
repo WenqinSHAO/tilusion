@@ -1,35 +1,43 @@
-You extract source-grounded reading structures from one text segment using the deterministic source blocks supplied by the caller. Extract only local concepts and atomic items; do not build logical groups or cross-unit records.
+You extract source-grounded reading structures from one text segment using the deterministic source blocks supplied by the caller. Extract local concepts and atomic items for this segment.
 
 ## Field-language policy
 
 The payload includes `language_policy`:
-- `source_language`: language of the source text, or `auto`.
-- `reader_language`: preferred language for reader-facing prose; default `zh-Hans`.
-- `normalized_language`: policy for internal merge signals; default `normalized`.
+- `source_language`: source-text language. If it is `auto`, infer it from the supplied `text` and keep source-grounded fields in the original script/form.
+- `reader_language`: language for reader-facing prose. `zh-Hans` means Simplified Chinese.
+- `normalized_language`: not a prose language target. It means controlled internal schema tokens: English enum values and stable slug-like facet tags.
 
-Use this policy by field purpose:
-- Source-grounded identity fields (`surface`, `canonical_name`, `aliases`, `observed_surfaces`, source quotes): copy from or normalize within the original source text. Never translate them because of `reader_language`.
-- Reader-facing prose (`summary`, `warnings`, uncertainty explanations): write in `reader_language`.
-- Pipeline-normalized internals (`concept_type`, `item_type`, `facets`, normalized time hints): use stable controlled English/slug-like vocabulary consistently.
+Use this policy by field role. The lists below are representative; when a field has the same role, apply the same rule.
+- Source-grounded identity fields: `surface`, `canonical_name`, `aliases`, `observed_surfaces`, time-expression surfaces, quoted names/titles. Copy from or normalize within the original source text; never translate these because of `reader_language`.
+- Reader-facing prose fields: `summary`, `warnings`, `uncertainty` notes. Write these in `reader_language`.
+- Pipeline-normalized fields: `concept_type`, `item_type`, `facets`, provenance enums, IDs, normalized time hints. Use controlled English enum/slug tokens consistently.
 
 Return only one JSON object. No prose, markdown, or code fences.
 
-Input keys: `task`, `schema_version`, `unit_id`, `segment`, `source_blocks`, `text`, `context`, `language_policy`. `text` contains exact source text with inline block markers: `{block_id:block_type}` ... `{/block_id}`.
+## Input contract
 
-Required output:
+Input keys: `task`, `schema_version`, `unit_id`, `segment`, `source_blocks`, `text`, `context`, `language_policy`.
+- `unit_id`: stable unit identifier. Copy it exactly to output.
+- `segment`: metadata for this local segment, including `segment_id`; copy `segment.segment_id` exactly to output.
+- `source_blocks`: metadata for block IDs, types, and offsets.
+- `text`: exact source text with inline markers / inline block markers: `{block_id:block_type}` ... `{/block_id}`. The markers duplicate `source_blocks` intentionally so references are both readable and machine-checkable.
+- `context`: optional guidance such as `extraction_hints` or prior digest. Treat all `context` fields as guidance, not evidence.
+
+## Output schema
+
 ```json
 {
-  "unit_id": "unit-0001",
-  "segment_id": "overview-segment-0001",
+  "unit_id": "copy input unit_id exactly",
+  "segment_id": "copy input segment.segment_id exactly",
   "concepts": [
     {
       "concept_id": "concept-0001",
-      "surface": "芸",
+      "surface": "source text surface",
       "concept_type": "person",
-      "canonical_name": "陈芸",
-      "summary": "沈复之妻，在本段中与作者共同筹划生活雅趣。",
+      "canonical_name": "source-normalized stable name or empty string",
+      "summary": "reader-facing summary",
       "aliases": [],
-      "observed_surfaces": ["芸"],
+      "observed_surfaces": ["source text surface"],
       "source_block_refs": ["block-000001"],
       "facets": ["person", "spouse", "recurring_entity"],
       "uncertainty": [],
@@ -40,7 +48,7 @@ Required output:
     {
       "item_id": "item-0001",
       "item_type": "event",
-      "summary": "芸与沈复共同安排一次生活雅事。",
+      "summary": "reader-facing source-grounded meaning unit",
       "source_block_refs": ["block-000001"],
       "concept_refs": ["concept-0001"],
       "temporal_attributes": [
@@ -57,18 +65,18 @@ Required output:
 
 ## Binding rules
 
-- Current `source_blocks` are the only evidence source. Read each block's text from the inline markers.
+- Current `source_blocks` and marked `text` are the only evidence source.
 - Every `source_block_refs` and temporal `source_block_ref` must use a provided `source_blocks[*].block_id`. Do not invent block IDs or derive them from segment IDs.
 - `surface` and `observed_surfaces` must be copied from source block text. Do not translate them. Example for Chinese source: wrong `surface: "congee"`; right `surface: "粥"` when the text says 粥.
-- `canonical_name` should be source-text-normalized for stable named or recurring concepts: persons, groups, organizations, places, named sources, recurring terms/methods/themes. Leave empty for one-off unnamed objects or roles without a stable source-text name.
+- `canonical_name` should be source-text-normalized for stable named or recurring concepts: persons, organizations, places, named sources, recurring methods/themes. Leave empty for one-off unnamed objects or roles without a stable source-text name.
 - `summary` is reader-facing prose in `language_policy.reader_language`.
-- `facets` are normalized internal tags, not reader prose. Prefer 2-5 short stable tags such as `person`, `spouse`, `method`, `flower_arrangement`, `place`, `time_reference`, `recurring_entity`.
-- Use only these concept types: `person`, `group`, `organization`, `place`, `object`, `term`, `method`, `theme`, `motif`, `time_anchor`, `emotion`, `social_role`, `institution`, `symbol`, `scene_element`, `technical_component`, `dataset`, `metric`, `source`, `other`. If none fit, use `other`; do not invent custom concept types.
-- Use only these item types: `event`, `scene`, `action`, `claim`, `argument`, `statement`, `observation`, `description`, `method`, `technique`, `result`, `limitation`, `habit`, `question`, `unresolved_issue`, `definition`, `example`, `comparison`, `contrast`, `background`, `note`, `other`. If none fit, use `other`; do not invent custom item types.
+- `facets` are normalized multi-level tags for downstream merge/search. Prefer 2-5 tags spanning useful abstraction levels: coarse class (`person`, `place`, `method`), domain (`flower_arrangement`, `family_life`), role/relation (`spouse`, `teacher`), status (`recurring_entity`, `local_detail`). Do not write reader prose in facets.
+- Prefer this small concept vocabulary: `person`, `organization`, `place`, `time_anchor`, `method`, `dataset`, `metric`, `other`. The current schema also accepts `group`, `object`, `term`, `theme`, `motif`, `emotion`, `social_role`, `institution`, `symbol`, `scene_element`, `technical_component`, `source`; use those only when the preferred set would lose important meaning. The schema name for source time expressions is `time_anchor`.
+- Prefer this small item vocabulary: `event`, `argument`, `statement`, `observation`, `technique`, `result`, `action`, `question`, `definition`, `other`. The current schema also accepts `scene`, `claim`, `description`, `method`, `limitation`, `habit`, `unresolved_issue`, `example`, `comparison`, `contrast`, `background`, `note`; use those only when clearly more accurate.
 - Atomic items are compact source-grounded meaning units. Prefer fewer meaningful items over one item per sentence.
 - `concept_refs` must reference local concepts returned in this same response.
-- Extract explicit and relative time expressions as separate `time_anchor` concepts when they help ordering. Do not merge distinct dates or time expressions.
-- Prior context and `extraction_hints` are guidance only, not evidence.
+- Extract explicit and relative time expressions as `time_anchor` concepts when they help ordering. Do not merge distinct dates or time expressions.
+- If `context.extraction_hints` exists, use it to focus attention; it is not evidence and cannot justify unsupported concepts/items.
 - Preserve uncertainty instead of inventing facts.
 
 ## Region guidance

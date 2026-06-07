@@ -76,6 +76,10 @@ have three structural problems:
    explanations, bloated schema examples (42 lines of empty JSON), repeated
    edge-case rules. This dilutes attention on binding constraints.
 
+Implementation note: hierarchy is useful only when it defines the current pass boundary and explains why inputs are already resolved/merged. Full pipeline architecture should stay out of extraction prompts because it consumes attention without improving local extraction decisions.
+
+Schema-contract note: recent structured-output practice points toward code-owned input/output schemas with compact field descriptions, provider structured-output enforcement where available, and local validation/repair for portability. The next prompt-system cleanup should generate or render prompt contracts from the same Python schema/validator metadata instead of maintaining hand-written schema prose in every prompt.
+
 2. **The language constraint is underspecified.** The current prompt says
    "write in the source language", but extraction output has three different
    kinds of text fields: source-grounded identity fields, reader-facing prose

@@ -2,10 +2,10 @@ You review one unit's logical groups against candidate registry groups from prio
 
 ## Field-Language Policy
 
-The caller provides `language_policy` with:
-- `source_language`: language of source-grounded identity fields. `auto` means infer from source evidence.
-- `reader_language`: preferred language for reader-facing explanations. Default is `zh-Hans`.
-- `normalized_language`: label for internal normalized fields.
+The payload includes `language_policy`:
+- `source_language`: source-text language. If it is `auto`, infer it from source-grounded fields.
+- `reader_language`: language for reader-facing prose. `zh-Hans` means Simplified Chinese.
+- `normalized_language`: controlled internal enum/slug tokens; not a prose target.
 
 Apply the policy by field role:
 - Source-grounded identity fields stay in source form: concept names, observed source surfaces, source titles, person names, and place names.
@@ -13,6 +13,18 @@ Apply the policy by field role:
 - Internal normalized fields use stable schema vocabulary: `proposal_type`, `group_type`, `edge_type`, provenance enums, tool action names, and IDs.
 
 Return only valid JSON. Do not include prose, markdown, or code fences.
+
+## Input contract
+
+The caller provides JSON with:
+- `task`: `cross_unit_group_resolution`.
+- `schema_version`: `reading-unit-v0.3`.
+- `unit_id`: parent reader unit identifier; copy it exactly to final output.
+- `concepts`: resolved unit concepts; linked concepts may have `registry_ref`.
+- `groups`: unit logical groups with `group_id`, `group_type`, `summary`, `item_refs`, `concept_refs`, and optional `graph`.
+- `registry_groups`: candidate groups from prior units.
+- `context`: optional book digest/context.
+- `language_policy`: field-language policy.
 
 ## Multi-Round Protocol
 
@@ -22,7 +34,7 @@ Workflow:
 2. **Request detail when uncertain.** If a candidate group looks plausible but compact data is insufficient, call `get_group(id)`. Call `get_concept(id)` for key concepts when identity or role is unclear.
 3. **Search only when needed.** Use `search_groups(query)` for groups that sound familiar but were not shortlisted. Use reader-language/source-language summaries rather than keyword/gloss mixtures.
 4. **Propose cross-group edges.** After placement, add cross-group relationships only when they clarify timeline/theme structure.
-5. **Finish decisively.** When all unit groups have a decision (`continue`, `mutate`, `new_thread`, `merge_groups`), emit `status: complete` with no tool calls.
+5. **Finish decisively.** When all unit groups have a decision (`continue`, `mutate`, `new_thread`, `merge_groups`), emit `status: "complete"` with no tool calls. `status` means tool use is finished and proposals are ready for deterministic validation/application.
 
 Tool call format:
 
@@ -40,7 +52,7 @@ Final response shape:
 ```json
 {
   "status": "complete",
-  "unit_id": "unit-0001",
+  "unit_id": "copy input unit_id exactly",
   "group_resolution_proposals": [
     {
       "proposal_id": "grp-res-0001",
@@ -58,29 +70,14 @@ Final response shape:
 }
 ```
 
-## Hierarchy
-
-- Concepts are resolved across units before this pass.
-- Unit logical groups are built from resolved concepts and source-grounded atomic items.
-- This pass resolves groups across units and records book-level continuity.
-- The pipeline applies proposals to maintain registry groups and cross-group edges.
-
-The caller provides JSON with:
-- `task`: `cross_unit_group_resolution`.
-- `schema_version`: `reading-unit-v0.3`.
-- `unit_id`: parent reader unit identifier.
-- `concepts`: resolved unit concepts; linked concepts may have `registry_ref`.
-- `groups`: unit logical groups with `group_id`, `group_type`, `summary`, `item_refs`, `concept_refs`, and optional `graph`.
-- `registry_groups`: candidate groups from prior units.
-- `context`: optional book digest/context.
-- `language_policy`: field-language policy.
-
 ## Group Semantics
 
-- `timeline`: coarser unit/book-span chain of major happenings. A timeline may aggregate local temporal sequences.
-- `temporal_sequence`: local, microscopic sequence of actions or events inside one episode, scene, or method.
-- A local temporal sequence can continue, mutate into, or become `part_of` a broader timeline when its items are the next concrete step in an existing narrative.
-- Do not create many disconnected timelines for the same main narrative when a `continue`, `mutate`, or `cross_group_edge` can preserve continuity.
+- `timeline`: coarser unit/book-span chain of major happenings. It should usually contain or connect multiple local episodes and should be anchored by explicit/relative time expressions, narrative order, or recurring participants/places.
+- `temporal_sequence`: local, microscopic sequence of actions/events inside one episode, scene, method, or short time span.
+- Use item `temporal_attributes`, time-anchor concepts, item summaries, and source order to judge continuity. Prefer explicit time expressions; when time is implicit, say so in `uncertainty`.
+- A local `temporal_sequence` may become part of a broader `timeline`. In group resolution, express this by `continue`/`mutate` when the registry group is the broader timeline, or by a `cross_group_edge` with `edge_type: "part_of"` / `"precedes"` when both groups should remain distinct.
+- If several local temporal sequences together form one larger event, do not create many disconnected timelines. Continue/mutate the broader timeline and summarize the aggregate event in `changes.summary` when useful.
+- Do not force hobby/method/theme collections into timelines unless there is a real event progression.
 
 ## Proposal Rules
 

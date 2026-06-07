@@ -70,8 +70,8 @@ def test_per_segment_prompt_advertises_coarse_concept_types() -> None:
         "metric|component|format|substance|other|custom"
     )
     assert old_fine_grained_shape not in content
-    assert "Use only these concept types" in content
-    assert "do not invent custom concept types" in content
+    assert "Prefer this small concept vocabulary" in content
+    assert "The current schema also accepts" in content
 
 
 def test_unit_grouping_prompt_prefers_schema_concept_types() -> None:
@@ -658,4 +658,4 @@ def test_group_resolution_payload_and_prompt_include_language_policy() -> None:
     assert payload["language_policy"] == build_language_policy()
     assert composition.composition_id == "group-resolution-v0.3"
     assert "Field-Language Policy" in composition.content
-    assert "local temporal sequence can continue" in composition.content
+    assert "may become part of a broader `timeline`" in composition.content
