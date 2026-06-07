@@ -1,7 +1,8 @@
 # Cross-Unit Entity Consistency: Unified Refactoring Plan
 
-Status: **plan + partial implementation** — Phase 1 (embedding cache) and
-Phase 1.5 (candidate maps) are done. Phase 2a (quality metrics scaffolding) is next.
+Status: **plan + partial implementation** — Phase 1, Phase 1.5, Phase 2a,
+and Phase 2b are done. Phase 2c (prompt/data-model contract refactor) is the
+next planning/implementation step before Phase 3.
 
 This is the canonical plan. It incorporates findings from:
 - `16_extraction_quality_audit.md` — 10 quality problems found in units 2–4
@@ -15,10 +16,11 @@ This is the canonical plan. It incorporates findings from:
 |---|-------|------------|------------|--------|
 | 1 | Embedding cache | ~250 lines | None | Done |
 | 1.5 | Per-concept candidate maps | ~180 lines | Phase 1 | Done |
-| **2a** | **Quality metrics scaffolding** | ~60 lines | None | **Next** |
-| **2b** | **Prompt refresh v0.3 + field-language policy** | ~260 lines | Phase 2a | — |
-| 3 | Repair/retry policy from quality metrics | ~40 lines | Phase 2b + run data | — |
-| 4 | Soft typing (identity-gated facets) | ~400 lines | Phase 2b | — |
+| **2a** | **Quality metrics scaffolding** | ~60 lines | None | Done |
+| **2b** | **Prompt refresh v0.3 + field-language policy** | ~260 lines | Phase 2a | Done |
+| **2c** | **Prompt/data-model contract refactor** | ~300-500 lines | Phase 2b | **Before Phase 3** |
+| 3 | Repair/retry policy from quality metrics | ~40 lines | Phase 2c + run data | — |
+| 4 | Soft typing (identity-gated facets) | ~400 lines | Phase 2c | — |
 | 5 | Richer hints & known/new flagging | ~350 lines | Phase 4 | — |
 | 6 | Higher-order reference detection | ~250 lines | Phase 5 | — |
 
@@ -147,6 +149,8 @@ This avoids duplicated prompt files that can drift, while still preventing
 English translations of source identity fields and allowing the reader UI to
 request Chinese, English, or another prose language later.
 
+---
+
 ### 2b-3. Type vocabulary consolidation
 
 **Concept types**: Remove non-standard entries (`action`, `activity`,
@@ -268,6 +272,128 @@ Run unit-0003 with v0.3 against the same source text and
 - Non-standard group types: target 0 (was 3)
 
 ---
+
+## Phase 2c: Prompt/Data-Model Contract Refactor — BEFORE PHASE 3
+
+**Motivation**: Phase 2b exposed a deeper architecture issue. Prompt text,
+Python schema objects, validators, quality metrics, deterministic merge
+safety, and tests all repeat pieces of the same data model. A small type
+change such as narrowing concept/item vocabularies should not require
+manual prompt rewrites plus scattered test/code edits. Before using quality
+metrics to drive more repairs, make the prompt/data contract explicit and
+composable.
+
+This phase is not a large semantic change to extraction behavior. It is a
+base-layer refactor that should make future semantic changes cheaper and
+safer.
+
+### 2c-1. Code-owned data model contracts
+
+Create a small contract module that owns the prompt-facing data interface:
+
+- pass input fields, output fields, required keys, and copy-through rules;
+- field role metadata: `source_identity`, `reader_prose`,
+  `normalized_internal`, `id_ref`, `provenance`;
+- enum/type registries for concepts, items, groups, and edges;
+- per-pass allowed/preferred type subsets;
+- validator hints and repair labels tied to fields.
+
+Prompt text should render compact input/output contract sections from this
+metadata instead of hand-maintaining JSON prose in every prompt. Tests should
+assert the contract metadata and rendered prompt snippets, not duplicate the
+full wording.
+
+Target effect: changing an allowed type or field-language role should touch
+the contract registry and a small number of focused tests, not every prompt
+and validator by hand.
+
+### 2c-2. Composable prompt sections
+
+Split prompts into reusable structured parts:
+
+| Section | Reused by | Purpose |
+|---------|-----------|---------|
+| `overall_task` | pass-specific | One concise sentence defining the job boundary |
+| `language_policy` | all passes | Field-role language rules |
+| `data_interface` | all passes | Rendered input/output contract from code metadata |
+| `tool_protocol` | agentic passes | Tool-call turn format and completion semantics |
+| `scope_guidance` | book/unit sensitive passes | Clarify unit-scope vs book-scope behavior |
+| `binding_rules` | extraction/grouping | Evidence, ID, and reference constraints |
+| `semantic_guidance` | pluggable | Timeline, temporal sequence, argument graph, method/example guidance |
+
+The prompt builder should compose these sections so shared behavior cannot
+drift across overview, extraction, grouping, and registry-resolution prompts.
+
+### 2c-3. Extensible type and guidance registries
+
+Separate structurally special core types from customizable extraction types.
+
+Core structural types should remain first-class in code because validators
+and merge safety rely on them:
+
+- temporal: `time_anchor`, `timeline`, `temporal_sequence`;
+- identity safety: enough entity categories to protect person/place/source
+  merges;
+- graph/ref plumbing: IDs, item refs, group refs, provenance.
+
+Everything else should move toward a registry/config shape:
+
+```json
+{
+  "concept_types": {
+    "person": {"core": true, "identity_bearing": true, "prompt_preferred": true},
+    "method": {"core": false, "identity_bearing": false, "prompt_preferred": true},
+    "other": {"escape_hatch": true}
+  },
+  "aliases": {"time_expression": "time_anchor", "work": "source"},
+  "item_types": {
+    "event": {"temporal_candidate": true, "prompt_preferred": true},
+    "argument": {"argument_graph_candidate": true, "prompt_preferred": true}
+  },
+  "guidance_plugins": ["temporal", "argumentation", "method_example"]
+}
+```
+
+The registry should generate:
+
+- prompt enum lists and preferred subsets;
+- normalization maps;
+- non-standard-type quality metrics;
+- merge-safety policy lookups;
+- reader-facing labels/descriptions where needed.
+
+### 2c-4. Pluggable semantic guidance
+
+Keep concept and item types concise and general, then improve extraction
+quality through pluggable guidance modules instead of ever-growing enum
+lists. Start with three guidance modules:
+
+1. **Temporal guidance**: time expressions, event ordering, local
+   `temporal_sequence`, larger `timeline`, aggregation via `part_of` /
+   `precedes`, and uncertainty when time is implicit.
+2. **Argumentation guidance**: claim/argument/statement/evidence graph
+   formation, support/contradict/qualify edges, and discourse flow.
+3. **Method/example guidance**: method, technique, example, result,
+   limitation relationships.
+
+Each module should expose prompt guidance, allowed graph/group type hints,
+and validator/metric checks. This lets us gradually improve new graph types
+without rewriting the whole prompt.
+
+### 2c-5. Acceptance criteria
+
+- One source of truth renders concept/item/group/edge vocabularies into
+  prompts.
+- Language policy field roles are declared in metadata and reused by every
+  prompt.
+- Unit-scope vs book-scope behavior is explicit in reusable scope guidance.
+- Adding a non-core type requires editing the type registry plus targeted
+  tests only.
+- Temporal and argumentation guidance can be strengthened as plugins without
+  changing unrelated prompt sections.
+- Existing tests pass and prompt snapshot/string tests avoid brittle prose
+  duplication.
+
 
 ## Phase 3: Repair/Retry Policy from Quality Metrics
 
