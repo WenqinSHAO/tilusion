@@ -16,9 +16,9 @@ from typing import Any
 
 from .reading_schema import (
     RECOMMENDED_CONCEPT_TYPES,
-    RECOMMENDED_EDGE_TYPES,
     RECOMMENDED_GROUP_TYPES,
     RECOMMENDED_ITEM_TYPES,
+    get_domain_config,
 )
 
 
@@ -212,83 +212,27 @@ class PassContract:
 # one of these (~15 lines).  No YAML/JSON config indirection.
 
 
-NARRATIVE_CONCEPT_TYPES = TypeVocabulary(
-    category="concept",
-    all_types=RECOMMENDED_CONCEPT_TYPES,
-    preferred=frozenset(
-        {
-            "person",
-            "place",
-            "time_anchor",
-            "object",
-            "term",
-            "source",
-            "other",
-        }
-    ),
-    extended=frozenset({"group", "organization"}),
-    definitions={
-        "person": "named or referenced individual human",
-        "place": "named or described location",
-        "time_anchor": "explicit date, season, or relative time expression",
-        "object": "physical thing with narrative significance (includes animals, plants, artifacts)",
-        "term": "specialized word or concept used in the text",
-        "source": "cited or referenced text, letter, document, poem, or work",
-    },
-)
+def _build_domain_vocabulary(category: str, domain: str) -> TypeVocabulary:
+    """Build a TypeVocabulary from the shared JSON config."""
+    dom = get_domain_config(category, domain)
+    return TypeVocabulary(
+        category=category,
+        all_types=_ALL_TYPES[category],
+        preferred=frozenset(dom.get("preferred", [])),
+        extended=frozenset(dom.get("extended", [])),
+        definitions=dom.get("definitions", {}),
+    )
 
-NARRATIVE_ITEM_TYPES = TypeVocabulary(
-    category="item",
-    all_types=RECOMMENDED_ITEM_TYPES,
-    preferred=frozenset(
-        {
-            "event",
-            "action",
-            "statement",
-            "argument",
-            "observation",
-            "technique",
-            "process",
-            "other",
-        }
-    ),
-    extended=frozenset({"scene", "claim", "result", "definition", "habit"}),
-    definitions={
-        "event": "discrete happening with temporal extent",
-        "action": "single agentive act",
-        "statement": "something said, written, or asserted by a character or narrator",
-        "argument": "reasoned claim with supporting logic or evidence",
-        "observation": "narrator or character noticing or perceiving something",
-        "technique": "specific method, skill, or procedure applied",
-        "process": "multi-step sequence of actions or changes",
-    },
-)
 
-NARRATIVE_GROUP_TYPES = TypeVocabulary(
-    category="group",
-    all_types=RECOMMENDED_GROUP_TYPES,
-    preferred=frozenset(
-        {
-            "timeline",
-            "temporal_sequence",
-            "theme_set",
-            "method_example_set",
-            "motif_development",
-            "contrast_set",
-            "viewpoint_evolution",
-            "other",
-        }
-    ),
-    definitions={
-        "timeline": "coarse unit-level, cross-unit, or book-level arc of major happenings",
-        "temporal_sequence": "local or micro chronological episode or event chain",
-        "theme_set": "items sharing a theme or motif without required ordering",
-        "method_example_set": "techniques, methods, rules, and their examples",
-        "motif_development": "recurring motif tracked across multiple items",
-        "contrast_set": "items presented in explicit contrast",
-        "viewpoint_evolution": "change in viewpoint or stance across the text",
-    },
-)
+_ALL_TYPES = {
+    "concept": RECOMMENDED_CONCEPT_TYPES,
+    "item": RECOMMENDED_ITEM_TYPES,
+    "group": RECOMMENDED_GROUP_TYPES,
+}
+
+NARRATIVE_CONCEPT_TYPES = _build_domain_vocabulary("concept", "narrative")
+NARRATIVE_ITEM_TYPES = _build_domain_vocabulary("item", "narrative")
+NARRATIVE_GROUP_TYPES = _build_domain_vocabulary("group", "narrative")
 
 # ── Pass contracts ────────────────────────────────────────────────────────────
 #

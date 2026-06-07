@@ -1,28 +1,58 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import asdict, dataclass, field
+from importlib import resources
 from typing import Any
 
 
 READING_UNIT_SCHEMA_VERSION = "reading-unit-v0.3"
 
-_CONCEPT_TYPE_NORMALIZATION: dict[str, str] = {
-    "thing": "object",
-    "substance": "object",
-    "format": "object",
-    "component": "technical_component",
-    "technical_component": "technical_component",
-    "work": "source",
-    "collection": "source",
-    "source_statement": "source",
-    "condition": "theme",
-    "phenomenon": "theme",
-    "event_type": "theme",
-    "concept": "theme",
-    "role": "social_role",
-    "relationship": "social_role",
-}
+
+def _load_type_config() -> dict[str, Any]:
+    """Load type vocabularies from the shared JSON config file."""
+    raw = (
+        resources.files("tilusion.prompts")
+        .joinpath("type_vocabularies.json")
+        .read_text(encoding="utf-8")
+    )
+    return json.loads(raw)
+
+
+_TYPE_CONFIG = _load_type_config()
+
+
+def _frozen(config: dict[str, Any], *keys: str) -> frozenset[str]:
+    """Extract a frozenset from nested config keys."""
+    node: Any = config
+    for k in keys:
+        node = node[k]
+    if not isinstance(node, list):
+        raise TypeError(f"Expected list at {'.'.join(keys)}, got {type(node).__name__}")
+    return frozenset(node)
+
+
+# ── Type vocabularies (derived from tilusion/prompts/type_vocabularies.json) ──
+
+_CONCEPT_TYPE_NORMALIZATION: dict[str, str] = _TYPE_CONFIG["concept"].get(
+    "normalization", {}
+)
+
+RECOMMENDED_CONCEPT_TYPES = _frozen(_TYPE_CONFIG, "concept", "all")
+RECOMMENDED_ITEM_TYPES = _frozen(_TYPE_CONFIG, "item", "all")
+RECOMMENDED_GROUP_TYPES = _frozen(_TYPE_CONFIG, "group", "all")
+RECOMMENDED_EDGE_TYPES = _frozen(_TYPE_CONFIG, "edge", "all")
+RECOMMENDED_PROVENANCE_VALUES = _frozen(_TYPE_CONFIG, "provenance", "all")
+
+
+def get_domain_config(category: str, domain: str) -> dict[str, Any]:
+    """Return the domain-specific configuration for a type category.
+
+    Returns a dict with ``preferred``, ``extended``, and ``definitions`` keys,
+    or an empty dict if the domain is not configured.
+    """
+    return _TYPE_CONFIG.get(category, {}).get(domain, {})
 
 
 def normalize_concept_type(value: Any) -> str:
@@ -34,117 +64,6 @@ def normalize_concept_type(value: Any) -> str:
     return _CONCEPT_TYPE_NORMALIZATION.get(key, key)
 
 Grounding = str  # "source_grounded" | "synthesis" | "deterministic" | "llm_inferred" | "user_corrected"
-
-RECOMMENDED_CONCEPT_TYPES = frozenset(
-    {
-        "person",
-        "group",
-        "organization",
-        "place",
-        "object",
-        "term",
-        "method",
-        "theme",
-        "motif",
-        "time_anchor",
-        "emotion",
-        "social_role",
-        "institution",
-        "symbol",
-        "scene_element",
-        "technical_component",
-        "dataset",
-        "metric",
-        "source",
-        "other",
-    }
-)
-
-RECOMMENDED_ITEM_TYPES = frozenset(
-    {
-        "event",
-        "scene",
-        "action",
-        "claim",
-        "argument",
-        "statement",
-        "observation",
-        "description",
-        "method",
-        "technique",
-        "process",
-        "result",
-        "limitation",
-        "habit",
-        "question",
-        "unresolved_issue",
-        "definition",
-        "example",
-        "comparison",
-        "contrast",
-        "background",
-        "note",
-        "other",
-    }
-)
-
-RECOMMENDED_GROUP_TYPES = frozenset(
-    {
-        "timeline",
-        "temporal_sequence",
-        "theme_set",
-        "concept_map",
-        "discourse_graph",
-        "claim_evidence_map",
-        "viewpoint_evolution",
-        "open_thread_list",
-        "method_example_set",
-        "motif_development",
-        "contrast_set",
-        "other",
-    }
-)
-
-RECOMMENDED_EDGE_TYPES = frozenset(
-    {
-        "mentions",
-        "refers_to",
-        "aliases",
-        "same_as_candidate",
-        "part_of",
-        "elaborates",
-        "supports",
-        "contradicts",
-        "qualifies",
-        "contrasts",
-        "causes",
-        "enables",
-        "explains",
-        "follows_from",
-        "precedes",
-        "continues",
-        "resolves",
-        "raises_question",
-        "answers_question",
-        "exemplifies",
-        "defines",
-        "uses_method",
-        "produces_result",
-        "has_limitation",
-        "related_to",
-        "other",
-    }
-)
-
-RECOMMENDED_PROVENANCE_VALUES = frozenset(
-    {
-        "source_grounded",
-        "synthesis",
-        "deterministic",
-        "llm_inferred",
-        "user_corrected",
-    }
-)
 
 REGISTRY_DELTA_OPERATION_TYPES = frozenset(
     {

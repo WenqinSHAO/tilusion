@@ -1,0 +1,111 @@
+{
+  "concept": {
+    "all": [
+      "person", "group", "organization", "place", "object", "term",
+      "method", "theme", "motif", "time_anchor", "emotion", "social_role",
+      "institution", "symbol", "scene_element", "technical_component",
+      "dataset", "metric", "source", "other"
+    ],
+    "normalization": {
+      "thing": "object",
+      "substance": "object",
+      "format": "object",
+      "component": "technical_component",
+      "technical_component": "technical_component",
+      "work": "source",
+      "collection": "source",
+      "source_statement": "source",
+      "condition": "theme",
+      "phenomenon": "theme",
+      "event_type": "theme",
+      "concept": "theme",
+      "role": "social_role",
+      "relationship": "social_role"
+    },
+    "narrative": {
+      "preferred": [
+        "person", "place", "time_anchor", "object", "term",
+        "source", "other"
+      ],
+      "extended": ["group", "organization"],
+      "definitions": {
+        "person": "named or referenced individual human",
+        "place": "named or described location",
+        "time_anchor": "explicit date, season, or relative time expression",
+        "object": "physical thing with narrative significance (includes animals, plants, artifacts)",
+        "term": "specialized word or concept used in the text",
+        "source": "cited or referenced text, letter, document, poem, or work"
+      }
+    }
+  },
+
+  "item": {
+    "all": [
+      "event", "scene", "action", "claim", "argument", "statement",
+      "observation", "description", "method", "technique", "process",
+      "result", "limitation", "habit", "question", "unresolved_issue",
+      "definition", "example", "comparison", "contrast", "background",
+      "note", "other"
+    ],
+    "narrative": {
+      "preferred": [
+        "event", "action", "statement", "argument", "observation",
+        "technique", "process", "other"
+      ],
+      "extended": ["scene", "claim", "result", "definition", "habit"],
+      "definitions": {
+        "event": "discrete happening with temporal extent",
+        "action": "single agentive act",
+        "statement": "something said, written, or asserted by a character or narrator",
+        "argument": "reasoned claim with supporting logic or evidence",
+        "observation": "narrator or character noticing or perceiving something",
+        "technique": "specific method, skill, or procedure applied",
+        "process": "multi-step sequence of actions or changes"
+      }
+    }
+  },
+
+  "group": {
+    "all": [
+      "timeline", "temporal_sequence", "theme_set", "concept_map",
+      "discourse_graph", "claim_evidence_map", "viewpoint_evolution",
+      "open_thread_list", "method_example_set", "motif_development",
+      "contrast_set", "other"
+    ],
+    "narrative": {
+      "preferred": [
+        "timeline", "temporal_sequence", "theme_set",
+        "method_example_set", "motif_development", "contrast_set",
+        "viewpoint_evolution", "other"
+      ],
+      "extended": [],
+      "definitions": {
+        "timeline": "coarse unit-level, cross-unit, or book-level arc of major happenings",
+        "temporal_sequence": "local or micro chronological episode or event chain",
+        "theme_set": "items sharing a theme or motif without required ordering",
+        "method_example_set": "techniques, methods, rules, and their examples",
+        "motif_development": "recurring motif tracked across multiple items",
+        "contrast_set": "items presented in explicit contrast",
+        "viewpoint_evolution": "change in viewpoint or stance across the text"
+      }
+    }
+  },
+
+  "edge": {
+    "all": [
+      "mentions", "refers_to", "aliases", "same_as_candidate",
+      "part_of", "elaborates", "supports", "contradicts", "qualifies",
+      "contrasts", "causes", "enables", "explains", "follows_from",
+      "precedes", "continues", "resolves", "raises_question",
+      "answers_question", "exemplifies", "defines", "uses_method",
+      "produces_result", "has_limitation", "related_to", "other"
+    ]
+  },
+
+  "provenance": {
+    "all": [
+      "source_grounded", "synthesis", "deterministic",
+      "llm_inferred", "user_corrected"
+    ]
+  }
+}
