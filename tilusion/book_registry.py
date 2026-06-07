@@ -674,39 +674,61 @@ def _check_merge_boundary(members: list[Concept]) -> str | None:
     }
     types: set[str] = {normalize_concept_type(m.concept_type) for m in members}
 
-    # Shared canonical_name across multiple members → identity established,
-    # even across different types (e.g. person ↔ social_role).
+    # ── Identity signals ─────────────────────────────────────────────────
+    # Same surface across all → probable duplicate extraction
+    same_surface = len(surfaces) == 1
+
+    # Shared canonical_name across multiple members
     _cname_counts = Counter(
         m.canonical_name for m in members if m.canonical_name
     )
     shared_cnames: set[str] = {
         cn for cn, n in _cname_counts.items() if n >= 2
     }
-    if len(shared_cnames) == 1 and all(m.canonical_name for m in members):
-        return None
+    shared_cname = len(shared_cnames) == 1 and all(
+        m.canonical_name for m in members
+    )
 
-    # Same surface across all → probable duplicate extraction
-    if len(surfaces) == 1:
-        return None
+    # Surface or alias overlap
+    has_surface_overlap = _surfaces_overlap(members)
 
-    # Same type with surface or aliases overlap → safe
+    identity_signal = same_surface or shared_cname or has_surface_overlap
+    if not identity_signal:
+        reason = _make_rejection_reason(surfaces, types, shared_cnames)
+        _log_rejected_merge(members, reason)
+        return reason
+
+    # ── Type compatibility ───────────────────────────────────────────────
+    # Hard match: all members share the same normalized type
     if len(types) == 1:
-        if _surfaces_overlap(members):
-            return None
-
-    # Same type with a single canonical_name + surface/alias overlap →
-    # identity established.  For identity-bearing types (person, place,
-    # organization, source), a lone canonical_name on one side is NOT
-    # sufficient by itself — it must be backed by surface or alias
-    # overlap (already checked above).  This prevents "先生" merging
-    # into "沈复" just because both have type=person and one has a cname.
-    if len(types) == 1 and len(all_cnames) == 1:
         return None
 
-    # ── Rejection path: log detailed member info to stderr ──────────────
+    # Soft typing: different types but overlapping facets → compatible.
+    # Identity-gated: we only reach here if identity_signal is already
+    # true (same surface, shared cname, or alias overlap).
+    if _facets_overlap(members):
+        return None
+
+    # ── Rejection path ───────────────────────────────────────────────────
     reason = _make_rejection_reason(surfaces, types, shared_cnames)
     _log_rejected_merge(members, reason)
     return reason
+
+
+def _facets_overlap(members: list[Concept]) -> bool:
+    """True if any two members share at least one facet (case-insensitive)."""
+    facet_sets: list[set[str]] = []
+    for m in members:
+        fs = {f.strip().lower() for f in (m.facets or []) if f.strip()}
+        if fs:
+            facet_sets.append(fs)
+    if len(facet_sets) < 2:
+        return False
+    for i in range(len(facet_sets)):
+        for j in range(i + 1, len(facet_sets)):
+            if facet_sets[i] & facet_sets[j]:
+                return True
+    return False
 
 
 def _make_rejection_reason(

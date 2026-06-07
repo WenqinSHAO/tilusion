@@ -842,6 +842,7 @@ def build_registry_index(registry: BookRegistry) -> list[dict[str, Any]]:
             "summary": summary,
             "observed_surfaces": concept.observed_surfaces[:10],
             "aliases": concept.aliases[:10],
+            "facets": (concept.facets or [])[:10],
         })
     return index
 
