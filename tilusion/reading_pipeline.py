@@ -73,6 +73,7 @@ from .book_registry import BookRegistry, find_registry_duplicates
 from .registry_index import (
     build_registry_index,
     init_embedding_cache,
+    known_concepts_for_blocks,
     select_concept_candidates,
     select_group_candidates,
 )
@@ -2599,6 +2600,14 @@ def run_reading_pipeline(
                         f"{block_ids[0]}..{block_ids[-1]}",
                         file=sys.stderr,
                     )
+                # Enrich segment context with known registry concepts
+                if scope == "book" and registry is not None and registry.has_concepts() and indexed_blocks:
+                    seg_block_ids = {b.block_id for b in indexed_blocks}
+                    known = known_concepts_for_blocks(
+                        registry._concepts, seg_block_ids
+                    )
+                    if known:
+                        seg_context["known_concepts"] = known
                 future = executor.submit(
                     run_per_segment_extraction_pass,
                     unit_id=unit_id,

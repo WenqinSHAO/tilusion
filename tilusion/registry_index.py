@@ -1148,3 +1148,34 @@ def select_group_candidates(
         return fallback
 
     return [rg for rg in registry_groups if rg["group_id"] in all_ids]
+
+
+def known_concepts_for_blocks(
+    registry_concepts: dict[str, Any],
+    block_ids: set[str],
+    *,
+    max_concepts: int = 30,
+) -> list[dict[str, str]]:
+    """Return compact known-concept entries whose source blocks overlap *block_ids*.
+
+    Each entry is a minimal dict: ``concept_id``, ``surface``, ``concept_type``,
+    ``canonical_name``.  Suitable for inclusion in the per-segment extraction
+    context so the extractor can distinguish known from new concepts.
+    """
+    results: list[dict[str, str]] = []
+    for cid, c in registry_concepts.items():
+        if not isinstance(c, dict):
+            continue
+        refs = {str(r) for r in (c.get("source_block_refs") or [])}
+        if refs & block_ids:
+            results.append(
+                {
+                    "concept_id": cid,
+                    "surface": str(c.get("surface", "")),
+                    "concept_type": str(c.get("concept_type", "")),
+                    "canonical_name": str(c.get("canonical_name", "") or ""),
+                }
+            )
+            if len(results) >= max_concepts:
+                break
+    return results
