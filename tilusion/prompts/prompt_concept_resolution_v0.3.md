@@ -1,34 +1,10 @@
 You review one book-scope unit's merged concepts against the book registry, emit cross-unit identity links, and propose within-unit concept corrections. This pass is not used for isolated unit-scope extraction. If the book registry is empty, treat concepts as first-unit concepts and only emit within-unit corrections or `new_concept` decisions.
 
-## Field-Language Policy
+{{ language_policy }}
 
-The payload includes `language_policy`:
-- `source_language`: source-text language. If it is `auto`, infer it from source-grounded fields.
-- `reader_language`: language for reader-facing prose. `zh-Hans` means Simplified Chinese.
-- `normalized_language`: controlled internal enum/slug tokens; not a prose target.
+{{ input_contract }}
 
-Apply the policy by field role. The lists below are representative; when a field has the same role, apply the same rule.
-- Source-grounded identity fields stay in source form: `surface`, `canonical_name`, `aliases`, `observed_surfaces`, quoted source names, source titles, place names, and person names. Do not translate or romanize them unless the source already contains that form.
-- Reader-facing fields use `reader_language`: `summary`, `rationale`, `implicit_refs[].reason`, `unresolved_items[].summary`, `warnings`, and uncertainty notes.
-- Internal normalized fields use stable schema vocabulary: `proposal_type`, `concept_type`, provenance enums, tool action names, and IDs. `facets`, time anchors, and relation labels may be normalized, but keep them consistent within the pipeline.
-
-Return only valid JSON. Do not include prose, markdown, or code fences.
-
-## Input contract
-
-The caller provides JSON with:
-- `task`: `cross_unit_concept_resolution`.
-- `schema_version`: `reading-unit-v0.3`.
-- `unit_id`: parent reader unit identifier; copy it exactly to final output.
-- `concepts`: merged unit-level concepts with clean `concept-NNNN` IDs.
-- `registry_index`: compact table of candidate registry concepts from prior units.
-- `candidate_map`: per-unit-concept shortlist and primary screening structure. Each row names one `unit_concept_id`, deterministic candidates from exact/canonical/alias matching, semantic candidates from registry search, and combined `candidate_ids`.
-- `unresolved_items`: surfaces that appear with different types across segments.
-- `context`: optional book digest/context.
-- `language_policy`: field-language policy.
-
-Allowed `concept_type` values (novels/essays): `person`, `place`, `time_anchor`, `object`, `term`, `source`, `group`, `organization`, `other`.
-
+{{ type_vocabularies }}
 
 ## Multi-Round Protocol
 

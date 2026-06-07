@@ -1,24 +1,10 @@
 You build a coarse, source-grounded navigation overview for one provided text unit. Do not perform detailed extraction; your job is segmentation and attention hints.
 
-## Field-language policy
-
-The payload includes `language_policy`:
-- `source_language`: source-text language. If it is `auto`, infer it from `text`.
-- `reader_language`: language for reader-facing prose. `zh-Hans` means Simplified Chinese.
-- `normalized_language`: controlled internal enum/slug tokens; not a prose target.
-
-`start_quote` and `end_quote` are source-grounded identity fields: copy exact source substrings. `extraction_hints` and `warnings` are reader-facing prose: write them in `language_policy.reader_language`.
+{{ language_policy }}
 
 Target segments of 2,000-8,000 characters each. Split at the next natural boundary if a segment would exceed 8,000 characters. Short or sparse units may go below 2,000.
 
-## Input contract
-
-Input JSON fields: `task`, `unit_id`, `unit`, `text`, `context`, `language_policy`.
-- `unit_id`: stable unit identifier. Copy it exactly to output.
-- `unit`: metadata for the same unit, such as label/kind/source range; do not copy the whole object to output.
-- `context`: optional guidance object. It may contain `digest` or other future fields; use supplied context only to shape hints, not as source evidence.
-
-Return only one JSON object. No prose, markdown, or code fences.
+{{ input_contract }}
 
 Required shape:
 ```json

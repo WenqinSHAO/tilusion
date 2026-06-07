@@ -36,7 +36,7 @@ def test_per_segment_extraction_composition_loads_static_contract() -> None:
     assert composition.parts[0].part_id == "per-segment-extraction-contract"
     assert composition.parts[-1].part_id == "context-pack"
     assert "Return only one JSON object" in composition.content
-    assert "inline markers" in composition.content
+    assert "inline block markers" in composition.content
     assert "atomic_items" in composition.content
     assert "Do not invent block IDs" in composition.content
     assert "Field-language policy" in composition.content
@@ -650,7 +650,7 @@ def test_agentic_concept_prompt_uses_candidate_map_first() -> None:
     assert "primary screening structure" in content
     assert "Search only when needed" in content
     assert "search_concepts(query)` only" in content
-    assert "Field-Language Policy" in content
+    assert "Field-language policy" in content
     assert "mixed-language glosses" in content
 
 
@@ -665,5 +665,5 @@ def test_group_resolution_payload_and_prompt_include_language_policy() -> None:
 
     assert payload["language_policy"] == build_language_policy()
     assert composition.composition_id == "group-resolution-v0.3"
-    assert "Field-Language Policy" in composition.content
-    assert "may become part of a broader `timeline`" in composition.content
+    assert "Field-language policy" in composition.content
+    assert "may become part of a broader" in composition.content

@@ -1,30 +1,8 @@
 You review one unit's logical groups against candidate registry groups from prior units, and propose cross-unit group continuation, mutation, new threads, and cross-group edges. This is a **multi-round** conversation — you can call tools to fetch full group and concept records before making decisions.
 
-## Field-Language Policy
+{{ language_policy }}
 
-The payload includes `language_policy`:
-- `source_language`: source-text language. If it is `auto`, infer it from source-grounded fields.
-- `reader_language`: language for reader-facing prose. `zh-Hans` means Simplified Chinese.
-- `normalized_language`: controlled internal enum/slug tokens; not a prose target.
-
-Apply the policy by field role:
-- Source-grounded identity fields stay in source form: concept names, observed source surfaces, source titles, person names, and place names.
-- Reader-facing fields use `reader_language`: group `summary`, proposal `rationale`, edge `summary`, `warnings`, and uncertainty notes.
-- Internal normalized fields use stable schema vocabulary: `proposal_type`, `group_type`, `edge_type`, provenance enums, tool action names, and IDs.
-
-Return only valid JSON. Do not include prose, markdown, or code fences.
-
-## Input contract
-
-The caller provides JSON with:
-- `task`: `cross_unit_group_resolution`.
-- `schema_version`: `reading-unit-v0.3`.
-- `unit_id`: parent reader unit identifier; copy it exactly to final output.
-- `concepts`: resolved unit concepts; linked concepts may have `registry_ref`.
-- `groups`: unit logical groups with `group_id`, `group_type`, `summary`, `item_refs`, `concept_refs`, and optional `graph`.
-- `registry_groups`: candidate groups from prior units.
-- `context`: optional book digest/context.
-- `language_policy`: field-language policy.
+{{ input_contract }}
 
 ## Multi-Round Protocol
 
@@ -70,10 +48,10 @@ Final response shape:
 }
 ```
 
+{{ type_vocabularies }}
+
 ## Group Semantics
 
-- `timeline`: coarser unit/book-span chain of major happenings. It should usually contain or connect multiple local episodes and should be anchored by explicit/relative time expressions, narrative order, or recurring participants/places.
-- `temporal_sequence`: local, microscopic sequence of actions/events inside one episode, scene, method, or short time span.
 - Use item `temporal_attributes`, time-anchor concepts, item summaries, and source order to judge continuity. Prefer explicit time expressions; when time is implicit, say so in `uncertainty`.
 - A local `temporal_sequence` may become part of a broader `timeline`. In group resolution, express this by `continue`/`mutate` when the registry group is the broader timeline, or by a `cross_group_edge` with `edge_type: "part_of"` / `"precedes"` when both groups should remain distinct.
 - If several local temporal sequences together form one larger event, do not create many disconnected timelines. Continue/mutate the broader timeline and summarize the aggregate event in `changes.summary` when useful.

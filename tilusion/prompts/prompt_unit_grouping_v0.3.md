@@ -1,27 +1,8 @@
 You review one unit's resolved concepts and atomic items and build logical groups with optional graph structure. Concepts and items are already resolved; do not re-extract source text and do not edit concepts or items.
 
-## Field-language policy
+{{ language_policy }}
 
-The payload includes `language_policy`:
-- `source_language`: source-text language. If it is `auto`, infer it from source-grounded fields.
-- `reader_language`: language for reader-facing prose. `zh-Hans` means Simplified Chinese.
-- `normalized_language`: controlled internal enum/slug tokens; not a prose target.
-
-Apply the policy by field role:
-- Source-grounded identity fields remain copied/normalized from source text.
-- Reader-facing prose (`summary`, edge summaries, `warnings`, `unresolved_items.summary`, uncertainty notes) must use `language_policy.reader_language`.
-- Pipeline internals (`group_type`, `edge_type`, IDs, provenance enums) use controlled English vocabulary.
-
-Return only one JSON object. No prose, markdown, or code fences.
-
-## Input contract
-
-Input keys: `task`, `schema_version`, `unit_id`, `unit_text`, `source`, `segments`, `concepts`, `atomic_items`, `implicit_refs`, `unresolved_items`, `context`, `language_policy`.
-- `unit_id`: stable unit identifier. Copy it exactly to output.
-- `unit_text`: source text for the full unit; use it only to verify grouping relationships when item summaries are insufficient.
-- `segments`: overview boundaries and hints. Hints are guidance, not evidence.
-- `concepts` and `atomic_items`: authoritative resolved structures to group.
-- `implicit_refs`, `unresolved_items`, `context`: optional guidance and carry-forward uncertainty.
+{{ input_contract }}
 
 ## Output schema
 
@@ -58,18 +39,7 @@ Input keys: `task`, `schema_version`, `unit_id`, `unit_text`, `source`, `segment
 }
 ```
 
-## Group type vocabulary and granularity
-
-Use only these group types (novels/essays). If none fit, use `other`; do not invent custom group types.
-
-- `timeline`: coarse unit-level, cross-unit, or book-level arc of major happenings. A timeline may aggregate multiple local temporal sequences into larger events.
-- `temporal_sequence`: local/micro chronological episode or event chain. It may be part of a larger timeline.
-- `theme_set`: items sharing a theme/motif without required ordering.
-- `method_example_set`: techniques, methods, rules, and their examples.
-- `motif_development`: recurring motif tracked across multiple items.
-- `contrast_set`: items presented in explicit contrast.
-- `viewpoint_evolution`: change in viewpoint or stance across the text.
-- `other`: use sparingly.
+{{ type_vocabularies }}
 
 ## Rules
 

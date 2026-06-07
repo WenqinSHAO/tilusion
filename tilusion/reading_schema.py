@@ -72,6 +72,7 @@ RECOMMENDED_ITEM_TYPES = frozenset(
         "description",
         "method",
         "technique",
+        "process",
         "result",
         "limitation",
         "habit",
