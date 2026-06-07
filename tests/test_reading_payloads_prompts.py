@@ -61,8 +61,17 @@ def test_per_segment_prompt_advertises_coarse_concept_types() -> None:
     composition = build_per_segment_extraction_composition()
     content = composition.content
 
-    for concept_type in RECOMMENDED_CONCEPT_TYPES:
-        assert concept_type in content
+    # v0.3 prompt targets novels/essays; preferred types should appear
+    narrative_preferred = {
+        "person", "place", "time_anchor", "object", "term", "method",
+        "theme", "motif", "emotion", "social_role", "symbol", "source", "other",
+    }
+    for concept_type in narrative_preferred:
+        assert concept_type in content, f"preferred type '{concept_type}' missing from prompt"
+
+    # These should NOT appear for novels/essays
+    for dropped in {"dataset", "metric", "technical_component"}:
+        assert dropped not in content, f"'{dropped}' should not appear in narrative prompt"
 
     old_fine_grained_shape = (
         "person|place|term|method|theme|time_anchor|event_type|object|"
@@ -70,8 +79,8 @@ def test_per_segment_prompt_advertises_coarse_concept_types() -> None:
         "metric|component|format|substance|other|custom"
     )
     assert old_fine_grained_shape not in content
-    assert "Prefer this small concept vocabulary" in content
-    assert "The current schema also accepts" in content
+    assert "Prefer this concept vocabulary" in content
+    assert "Also accepted when needed" in content
 
 
 def test_unit_grouping_prompt_prefers_schema_concept_types() -> None:

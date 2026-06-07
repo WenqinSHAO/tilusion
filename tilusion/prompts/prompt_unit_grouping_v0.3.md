@@ -60,19 +60,15 @@ Input keys: `task`, `schema_version`, `unit_id`, `unit_text`, `source`, `segment
 
 ## Group type vocabulary and granularity
 
-Use only these group types. If none fit, use `other`; do not invent custom group types.
+Use only these group types (novels/essays). If none fit, use `other`; do not invent custom group types.
 
 - `timeline`: coarse unit-level, cross-unit, or book-level arc of major happenings. A timeline may aggregate multiple local temporal sequences into larger events.
 - `temporal_sequence`: local/micro chronological episode or event chain. It may be part of a larger timeline.
 - `theme_set`: items sharing a theme/motif without required ordering.
 - `method_example_set`: techniques, methods, rules, and their examples.
-- `claim_evidence_map`: claims with supporting, qualifying, or contradicting evidence.
+- `motif_development`: recurring motif tracked across multiple items.
 - `contrast_set`: items presented in explicit contrast.
-- `concept_map`: concept-to-concept explanation or taxonomy.
-- `discourse_graph`: argument, reflection, or commentary flow.
-- `motif_development`: recurring motif across multiple items.
-- `open_thread_list`: unresolved questions or threads.
-- `viewpoint_evolution`: change in viewpoint or stance.
+- `viewpoint_evolution`: change in viewpoint or stance across the text.
 - `other`: use sparingly.
 
 ## Rules
