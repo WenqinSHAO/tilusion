@@ -227,6 +227,56 @@ def _fix_missing_source_block_refs(data: dict[str, Any], path: str, issue: dict[
     return False
 
 
+# ── Cross-category type fix ──────────────────────────────────────────────
+
+# Map item-type names (commonly misused as concept_type) to nearest concept type.
+_ITEM_TO_CONCEPT_TYPE: dict[str, str] = {
+    "event": "other",
+    "technique": "method",
+    "action": "other",
+    "statement": "term",
+    "observation": "other",
+    "process": "other",
+    "argument": "term",
+    "claim": "term",
+    "result": "other",
+    "definition": "term",
+    "description": "other",
+    "habit": "other",
+    "question": "other",
+    "example": "other",
+    "comparison": "other",
+    "contrast": "other",
+    "background": "other",
+    "note": "other",
+    "scene": "other",
+    "limitation": "other",
+    "unresolved_issue": "other",
+}
+
+
+def _fix_cross_category_type(
+    data: dict[str, Any], path: str, issue: dict[str, Any]
+) -> bool:
+    """Reclassify a concept_type (or item_type) that belongs to the wrong category."""
+    parent_path, key = _parse_dot_path(path)
+    if parent_path is None or key is None:
+        return False
+    try:
+        parent = _resolve_path(data, parent_path)
+    except (KeyError, IndexError, TypeError):
+        return False
+    if not isinstance(parent, dict):
+        return False
+    current = str(parent.get(key, "")).strip()
+    mapped = _ITEM_TO_CONCEPT_TYPE.get(current)
+    if mapped:
+        parent[key] = mapped
+        return True
+    parent[key] = "other"
+    return True
+
+
 # ── Registry ──
 
 AUTO_FIXERS: dict[str, Callable[[dict[str, Any], str, dict[str, Any]], bool]] = {
@@ -237,6 +287,7 @@ AUTO_FIXERS: dict[str, Callable[[dict[str, Any], str, dict[str, Any]], bool]] = 
     "missing_required_field": _fix_missing_required_field,
     "schema_version_mismatch": _fix_schema_version_mismatch,
     "stale_core_field": _fix_stale_core_field,
+    "cross_category_type": _fix_cross_category_type,
     "wrong_field_type": _fix_wrong_field_type,
     "wrong_item_type": _fix_wrong_string_list_item,
     "missing_source_block_refs": _fix_missing_source_block_refs,
