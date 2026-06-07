@@ -475,25 +475,15 @@ def mock_unit_logical_grouping_response(user_payload: dict[str, Any]) -> dict[st
 
 
 def mock_book_digest_response(user_payload: dict[str, Any]) -> dict[str, Any]:
-    entities = user_payload.get("entities", [])
-    entity_names = [e.get("name", "?") for e in entities[:5]]
-    table_rows = "\n".join(
-        f"| {e.get('name', '?')} | {e.get('type', '?')} | {e.get('summary', '')} | {', '.join(e.get('aliases', []))} |"
-        for e in entities
-    )
     digest = (
         "# Book Context Digest\n\n"
-        "## Known Entities\n"
-        "| Name | Type | Summary | Aliases |\n"
-        "|---|---|---|---|\n"
-        f"{table_rows}\n\n"
+        "## Narrative State\n"
+        "Mock narrative state for the upcoming unit.\n\n"
         "## Extraction Guidance\n"
-        f"Mock digest for {len(entities)} known entities: {', '.join(entity_names)}. "
-        "Look for these entities in the upcoming unit."
+        "Mock extraction guidance: watch for character development and thematic patterns."
     )
     return {
         "digest": digest,
-        "entity_count": len(entities),
         "warnings": ["mock book digest: placeholder"],
     }
 

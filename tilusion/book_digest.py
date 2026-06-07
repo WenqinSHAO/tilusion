@@ -12,7 +12,7 @@ from .pass_utils import PromptComposition, PromptPart, build_pass_cache_key, loa
 BOOK_DIGEST_PROMPT_VERSION = "book-digest-v0.2"
 BOOK_DIGEST_PROMPT_RESOURCE = "prompt_book_digest_v0.1.md"
 
-MAX_ENTITIES_IN_DIGEST = 50
+MAX_ENTITIES_IN_DIGEST = 0  # entity awareness now handled by known_concepts_for_blocks
 
 
 def build_book_digest(
@@ -96,28 +96,12 @@ def _build_digest_payload(
     unit_id: str,
     previous_digest: str | None,
 ) -> dict[str, Any]:
-    entities: list[dict[str, Any]] = []
-    # Sort by concept_id so the table is stable across runs
-    sorted_concepts = sorted(
-        registry._concepts.values(), key=lambda c: c.concept_id
-    )
-    for concept in sorted_concepts[:MAX_ENTITIES_IN_DIGEST]:
-        entities.append({
-            "name": concept.canonical_name or concept.surface,
-            "type": concept.concept_type,
-            "summary": concept.summary,
-            "aliases": list(concept.aliases),
-        })
-
-    total = len(registry._concepts)
-    omitted = total - len(entities) if total > MAX_ENTITIES_IN_DIGEST else 0
-
+    # Entity awareness now handled by known_concepts_for_blocks() at the
+    # per-segment extraction level.  The digest carries only narrative
+    # state and extraction guidance — no concept table.
     payload: dict[str, Any] = {
         "task": "book_digest",
         "unit_id": unit_id,
-        "entities": entities,
-        "total_entities": total,
-        "omitted_entities": omitted,
     }
     if previous_digest:
         payload["previous_digest"] = previous_digest
