@@ -287,6 +287,31 @@ This phase is not a large semantic change to extraction behavior. It is a
 base-layer refactor that should make future semantic changes cheaper and
 safer.
 
+### 2c-0. Practice scan and comparison
+
+Do not invent a prompt framework first. Current good practice in structured
+LLM applications is schema-first and validation-first:
+
+| Practice | Examples / sources | What to borrow | Limitation for Tilusion |
+|----------|--------------------|----------------|--------------------------|
+| Provider-native structured output | OpenAI Structured Outputs, LangChain ProviderStrategy | Prefer provider-enforced JSON Schema when the backend supports it; schemas should be explicit and strict. | DeepSeek/backend portability may not expose the same strict guarantees; semantic validity still needs app validators. |
+| Tool-calling structured output fallback | LangChain ToolStrategy, Pydantic AI ToolOutput | Use tool/schema calls as a portable fallback when native structured output is unavailable. | Our agentic passes already use tools for registry lookup, so final-output schema and operational tools must be separated carefully. |
+| Pydantic/dataclass/TypedDict as code-owned schemas | LangChain structured output, Pydantic AI output types, MLflow prompt registry | Keep schema in code, derive JSON Schema / prompt contracts from it, and validate returned data. | Our current dataclasses are not enough because field-language roles, source-ref constraints, and merge-safety policy are semantic metadata beyond JSON Schema. |
+| Validation feedback and retry loops | Instructor retries, Pydantic AI output validators, current Tilusion repair loop | Feed compact validation failures back to the model instead of relying on prompt prose alone. | Retry budget must be controlled because extraction is expensive; not every quality metric should trigger repair. |
+| Prompt signatures / task interfaces | DSPy Signatures | Express each pass as typed inputs -> typed outputs with field descriptions; avoid hand-maintained prompt schema prose. | DSPy itself is likely overkill for this repo, but its signature idea is useful. |
+| Prompt registry / versioned prompt metadata | MLflow Prompt Registry | Track schema/prompt versions and expected output contracts as metadata. | Registry metadata does not enforce validation by itself; enforcement remains in code. |
+| Constrained decoding for open models | Outlines JSON generation | For local/open-source backends, constrained JSON can enforce syntax/shape. | Backend-specific; does not solve semantic grounding or source-ref correctness. |
+
+Sources reviewed: OpenAI Structured Outputs, LangChain structured output,
+DSPy Signatures, Pydantic AI output/validators, Instructor retry mechanisms,
+Outlines JSON structured generation, and MLflow Prompt Registry.
+
+Implication for this plan: implement the smallest local contract layer that
+lets Tilusion adopt these practices without committing to one framework.
+The contract layer should own schema metadata, render compact prompt
+interfaces, select backend output strategy when available, and keep current
+local validation/repair as the semantic safety net.
+
 ### 2c-1. Code-owned data model contracts
 
 Create a small contract module that owns the prompt-facing data interface:
