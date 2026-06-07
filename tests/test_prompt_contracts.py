@@ -203,7 +203,7 @@ class TestNarrativeDomainRegistries:
         assert NARRATIVE_GROUP_TYPES.preferred.issubset(RECOMMENDED_GROUP_TYPES)
 
     def test_concept_preferred_set_matches_v0_3_prompt(self) -> None:
-        expected = {"person", "place", "time_anchor", "object", "term", "source", "other"}
+        expected = {"person", "place", "time_anchor", "object", "term", "method", "source", "other"}
         assert NARRATIVE_CONCEPT_TYPES.preferred == expected
 
     def test_concept_extended_set_matches_v0_3_prompt(self) -> None:

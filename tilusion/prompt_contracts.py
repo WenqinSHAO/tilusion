@@ -214,11 +214,13 @@ class PassContract:
         cat_names = {v.category for v in categories}
         if "concept" in cat_names and "item" in cat_names:
             blocks.append(
-                "**Important:** concept types and item types are separate "
-                "vocabularies.  Do not use item types (event, action, "
-                "technique, observation, etc.) as `concept_type` values.  "
-                "If the best-fitting descriptor is an item type, use the "
-                "nearest concept type or `other`.\n"
+                "**Important:** `concept_type` and `item_type` are separate "
+                "vocabularies.  Never use an item type as a concept type.  "
+                "Examples of WRONG concept_type values: `event` (use `term` "
+                "or `other`), `technique` (use `method`), `action` (use "
+                "`other`), `statement` (use `term` or `other`).  When the "
+                "best-fitting descriptor is an item type, use the nearest "
+                "concept type or `other`.\n"
             )
         return "\n".join(blocks).rstrip() + "\n"
 

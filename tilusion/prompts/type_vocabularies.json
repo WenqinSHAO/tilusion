@@ -25,15 +25,16 @@
     "narrative": {
       "preferred": [
         "person", "place", "time_anchor", "object", "term",
-        "source", "other"
+        "method", "source", "other"
       ],
       "extended": ["group", "organization"],
       "definitions": {
-        "person": "named or referenced individual human",
+        "person": "named or referenced individual human (not deities or spirits)",
         "place": "named or described location",
         "time_anchor": "explicit date, season, or relative time expression",
         "object": "physical thing with narrative significance (includes animals, plants, artifacts)",
         "term": "specialized word or concept used in the text",
+        "method": "technique, procedure, or systematic approach described in the text",
         "source": "cited or referenced text, letter, document, poem, or work"
       }
     }

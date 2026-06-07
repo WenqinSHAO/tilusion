@@ -51,7 +51,7 @@ You extract source-grounded reading structures from one text segment using the d
 - Current `source_blocks` and marked `text` are the only evidence source.
 - Every `source_block_refs` and temporal `source_block_ref` must use a provided `source_blocks[*].block_id`. Do not invent block IDs or derive them from segment IDs.
 - `surface` and `observed_surfaces` must be copied from source block text. Do not translate them. Example for Chinese source: wrong `surface: "congee"`; right `surface: "粥"` when the text says 粥.
-- `canonical_name` should be source-text-normalized for stable named or recurring concepts: persons, organizations, places, named sources, recurring methods/themes. Leave empty for one-off unnamed objects or roles without a stable source-text name.
+- `canonical_name` should be source-text-normalized for stable named or recurring concepts: persons, organizations, places, named sources, recurring methods/themes. For `time_anchor` concepts, use the surface as the canonical_name (e.g., surface "七月" → canonical_name "七月"). Leave empty only for one-off unnamed objects or roles without a stable source-text name.
 - `summary` is reader-facing prose in `language_policy.reader_language`.
 - `facets` are normalized multi-level tags for downstream merge/search. Prefer 2-5 tags spanning useful abstraction levels: coarse class (`person`, `place`, `method`), domain (`flower_arrangement`, `family_life`), role/relation (`spouse`, `teacher`), status (`recurring_entity`, `local_detail`). Do not write reader prose in facets.
 - Atomic items are compact source-grounded meaning units. Prefer fewer meaningful items over one item per sentence.
@@ -59,6 +59,7 @@ You extract source-grounded reading structures from one text segment using the d
 - Extract explicit and relative time expressions as `time_anchor` concepts when they help ordering. Do not merge distinct dates or time expressions.
 - If `context.extraction_hints` exists, use it to focus attention; it is not evidence and cannot justify unsupported concepts/items.
 - Preserve uncertainty instead of inventing facts.
+- `concept_type` and `item_type` are separate vocabularies. Never use item types as concept types. Wrong: `concept_type: "event"` for a historical event (use `term` or `other`). Wrong: `concept_type: "technique"` for a method (use `method`). When in doubt, use `other`.
 
 ## Region guidance
 
