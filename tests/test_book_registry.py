@@ -75,30 +75,32 @@ class TestDeterministicConceptMerger:
         with pytest.raises(ValueError, match="at least one"):
             DeterministicConceptMerger.merge([])
 
-    def test_picks_longest_canonical_name(self) -> None:
+    def test_first_write_wins_canonical_name(self) -> None:
         c1 = Concept(
             concept_id="c1", surface="X", concept_type="person",
-            canonical_name="Short",
+            canonical_name="Stable",
         )
         c2 = Concept(
             concept_id="c2", surface="X", concept_type="person",
-            canonical_name="LongerName",
+            canonical_name="Overwrite",
         )
         result = DeterministicConceptMerger.merge([c1, c2])
-        assert result.canonical_name == "LongerName"
+        # First-write-wins: c1's cname preserved, c2's cname does not overwrite
+        assert result.canonical_name == "Stable"
+        assert result.surface == c1.surface
 
-    def test_canonical_name_tie_broken_alphabetically(self) -> None:
+    def test_fallback_to_first_nonempty_canonical_name(self) -> None:
         c1 = Concept(
             concept_id="c1", surface="X", concept_type="person",
-            canonical_name="Beta",
+            canonical_name="",
         )
         c2 = Concept(
             concept_id="c2", surface="X", concept_type="person",
-            canonical_name="Alpha",
+            canonical_name="Second",
         )
         result = DeterministicConceptMerger.merge([c1, c2])
-        # Both length 4; Alpha < Beta alphabetically
-        assert result.canonical_name == "Alpha"
+        # First member has no cname → fallback to first non-empty
+        assert result.canonical_name == "Second"
 
     def test_first_nonempty_summary(self) -> None:
         c1 = Concept(
@@ -207,8 +209,11 @@ class TestMergeParity:
         concepts = [_dict_to_concept(m) for m in members]
         new_result = DeterministicConceptMerger.merge(concepts)
 
+        # canonical_name: first member empty, fallback to "沈复" (matches old)
         assert new_result.canonical_name == old_result["canonical_name"]
-        assert new_result.surface == old_result["surface"]
+        # surface: preserved from first member (registry-first in cross-unit).
+        # Old behavior picked longest cname as surface; new preserves source form.
+        assert new_result.surface == "余"
         # Summary concatenation: when all members have nonempty summaries,
         # DeterministicConceptMerger concatenates with source-unit prefix
         # rather than picking first-nonempty (which is what the old dict-based

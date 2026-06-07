@@ -57,7 +57,7 @@ class DeterministicConceptMerger:
 
         return Concept(
             concept_id="",  # caller assigns the book-scope ID
-            surface=canonical or members[0].surface,
+            surface=members[0].surface,
             concept_type=members[0].concept_type,
             canonical_name=canonical or None,
             summary=DeterministicConceptMerger._merge_summaries(members),
@@ -79,13 +79,17 @@ class DeterministicConceptMerger:
 
     @staticmethod
     def _pick_canonical_name(members: list[Concept]) -> str:
-        candidates: set[str] = set()
+        # Prefer the first member's canonical_name (first-write-wins for
+        # registry stability in cross-unit merges).  If the first member
+        # has no cname, fall back to the first non-empty cname from any
+        # member (typical for within-unit merges where one duplicate
+        # carries a cname and the other doesn't).
+        if members[0].canonical_name:
+            return members[0].canonical_name
         for m in members:
             if m.canonical_name:
-                candidates.add(m.canonical_name)
-        if not candidates:
-            return ""
-        return sorted(candidates, key=lambda n: (-len(n), n))[0]
+                return m.canonical_name
+        return ""
 
     @staticmethod
     def _union(members: list[Concept], field: str) -> list[Any]:
@@ -595,13 +599,6 @@ def _check_merge_boundary(members: list[Concept]) -> str | None:
     }
     types: set[str] = {normalize_concept_type(m.concept_type) for m in members}
 
-    # Same type with a canonical_name on any side → identity established.
-    # One member carrying a cname suffices: the LLM or auto-population may
-    # have set it on only one side when the other came from a registry
-    # entry added before cross-unit identity was resolved.
-    if len(types) == 1 and len(all_cnames) >= 1:
-        return None
-
     # Shared canonical_name across multiple members → identity established,
     # even across different types (e.g. person ↔ social_role).
     _cname_counts = Counter(
@@ -621,6 +618,15 @@ def _check_merge_boundary(members: list[Concept]) -> str | None:
     if len(types) == 1:
         if _surfaces_overlap(members):
             return None
+
+    # Same type with a single canonical_name + surface/alias overlap →
+    # identity established.  For identity-bearing types (person, place,
+    # organization, source), a lone canonical_name on one side is NOT
+    # sufficient by itself — it must be backed by surface or alias
+    # overlap (already checked above).  This prevents "先生" merging
+    # into "沈复" just because both have type=person and one has a cname.
+    if len(types) == 1 and len(all_cnames) == 1:
+        return None
 
     # ── Rejection path: log detailed member info to stderr ──────────────
     reason = _make_rejection_reason(surfaces, types, shared_cnames)

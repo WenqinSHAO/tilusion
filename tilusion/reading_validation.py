@@ -5,6 +5,8 @@ from typing import Any
 
 from .reading_schema import (
     READING_UNIT_SCHEMA_VERSION,
+    RECOMMENDED_CONCEPT_TYPES,
+    RECOMMENDED_ITEM_TYPES,
     REGISTRY_DELTA_OPERATION_TYPES,
     RECOMMENDED_PROVENANCE_VALUES,
     is_open_type_string,
@@ -179,6 +181,10 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
             continue
         _require_type(concept, "surface", str, issues, path)
         _require_open_type(concept.get("concept_type"), f"{path}.concept_type", issues)
+        _check_cross_category_type(
+            concept.get("concept_type"), RECOMMENDED_ITEM_TYPES,
+            f"{path}.concept_type", "item", issues,
+        )
         _validate_ref_list(
             concept.get("source_block_refs"),
             block_ids,
@@ -200,6 +206,10 @@ def validate_extraction_unit_package(package: Any) -> ReadingValidationReport:
         if not isinstance(item, dict):
             continue
         _require_open_type(item.get("item_type"), f"{path}.item_type", issues)
+        _check_cross_category_type(
+            item.get("item_type"), RECOMMENDED_CONCEPT_TYPES,
+            f"{path}.item_type", "concept", issues,
+        )
         _require_type(item, "summary", str, issues, path)
         _validate_ref_list(
             item.get("source_block_refs"),
@@ -534,6 +544,33 @@ def _require_open_type(value: Any, path: str, issues: list[ReadingValidationIssu
                 path,
                 "Type fields must be non-empty strings.",
                 "Use a recommended type, `other`, or a justified custom string.",
+            )
+        )
+
+
+def _check_cross_category_type(
+    value: Any,
+    other_category_types: frozenset[str],
+    path: str,
+    other_category: str,
+    issues: list[ReadingValidationIssue],
+) -> None:
+    """Warn when a type value appears to belong to a different category.
+
+    For example, ``event`` is an item type, not a concept type.
+    """
+    raw = str(value or "").strip()
+    if not raw or raw == "other":
+        return
+    if raw in other_category_types:
+        issues.append(
+            _issue(
+                "warning",
+                "cross_category_type",
+                path,
+                f"'{raw}' is an {other_category} type, not a valid type for this field. "
+                f"Use the nearest equivalent from the correct vocabulary, or 'other'.",
+                "Reclassify to the correct type vocabulary.",
             )
         )
 

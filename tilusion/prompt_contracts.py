@@ -131,12 +131,16 @@ class PassContract:
 
     pass_name: str
     input_fields: list[FieldMeta]
+    output_fields: list[FieldMeta] = field(default_factory=list)
     type_vocabularies: dict[str, TypeVocabulary] = field(default_factory=dict)
 
     # ── helpers ──────────────────────────────────────────────────────────
 
+    def _all_fields(self) -> list[FieldMeta]:
+        return self.input_fields + self.output_fields
+
     def _fields_by_role(self, role: FieldRole) -> list[FieldMeta]:
-        return [f for f in self.input_fields if f.role == role]
+        return [f for f in self._all_fields() if f.role == role]
 
     def _field_names(self, role: FieldRole) -> str:
         names = [f"`{f.name}`" for f in self._fields_by_role(role)]
@@ -194,7 +198,8 @@ class PassContract:
         if not self.type_vocabularies:
             return ""
         blocks = []
-        for vocab in self.type_vocabularies.values():
+        categories = list(self.type_vocabularies.values())
+        for vocab in categories:
             blocks.append(
                 f"## {vocab.category.title()} type vocabulary\n"
                 f"\n"
@@ -203,6 +208,18 @@ class PassContract:
             defs = vocab.render_definitions()
             if defs:
                 blocks.append(f"{defs}\n")
+
+        # Cross-category guard: when multiple vocabularies are present,
+        # warn the LLM not to mix types between categories.
+        cat_names = {v.category for v in categories}
+        if "concept" in cat_names and "item" in cat_names:
+            blocks.append(
+                "**Important:** concept types and item types are separate "
+                "vocabularies.  Do not use item types (event, action, "
+                "technique, observation, etc.) as `concept_type` values.  "
+                "If the best-fitting descriptor is an item type, use the "
+                "nearest concept type or `other`.\n"
+            )
         return "\n".join(blocks).rstrip() + "\n"
 
 
@@ -251,6 +268,18 @@ EXTRACTION_CONTRACT = PassContract(
         FieldMeta("context", FieldRole.READER_PROSE, "optional guidance such as `extraction_hints` or prior digest; treat as guidance, not evidence"),
         FieldMeta("language_policy", FieldRole.NORMALIZED_INTERNAL, "field-language policy object"),
     ],
+    output_fields=[
+        FieldMeta("surface", FieldRole.SOURCE_IDENTITY, "verbatim source text surface form"),
+        FieldMeta("canonical_name", FieldRole.SOURCE_IDENTITY, "source-normalized stable name"),
+        FieldMeta("aliases", FieldRole.SOURCE_IDENTITY, "alternate names and surface forms"),
+        FieldMeta("observed_surfaces", FieldRole.SOURCE_IDENTITY, "every surface form found in the segment"),
+        FieldMeta("summary", FieldRole.READER_PROSE, "reader-facing concept or item description"),
+        FieldMeta("concept_type", FieldRole.NORMALIZED_INTERNAL, "controlled concept type enum"),
+        FieldMeta("item_type", FieldRole.NORMALIZED_INTERNAL, "controlled item type enum"),
+        FieldMeta("facets", FieldRole.NORMALIZED_INTERNAL, "normalized multi-level tags for merge/search"),
+        FieldMeta("warnings", FieldRole.READER_PROSE, "reader-facing warnings"),
+        FieldMeta("uncertainty", FieldRole.READER_PROSE, "uncertainty notes"),
+    ],
     type_vocabularies={
         "concept": NARRATIVE_CONCEPT_TYPES,
         "item": NARRATIVE_ITEM_TYPES,
@@ -273,6 +302,12 @@ GROUPING_CONTRACT = PassContract(
         FieldMeta("context", FieldRole.READER_PROSE, "optional guidance such as prior digest"),
         FieldMeta("language_policy", FieldRole.NORMALIZED_INTERNAL, "field-language policy object"),
     ],
+    output_fields=[
+        FieldMeta("summary", FieldRole.READER_PROSE, "reader-facing group description"),
+        FieldMeta("group_type", FieldRole.NORMALIZED_INTERNAL, "controlled group type enum"),
+        FieldMeta("edge_type", FieldRole.NORMALIZED_INTERNAL, "controlled edge type enum"),
+        FieldMeta("warnings", FieldRole.READER_PROSE, "reader-facing warnings"),
+    ],
     type_vocabularies={
         "group": NARRATIVE_GROUP_TYPES,
     },
@@ -291,6 +326,11 @@ CONCEPT_RESOLUTION_CONTRACT = PassContract(
         FieldMeta("context", FieldRole.READER_PROSE, "optional book digest or context"),
         FieldMeta("language_policy", FieldRole.NORMALIZED_INTERNAL, "field-language policy object"),
     ],
+    output_fields=[
+        FieldMeta("rationale", FieldRole.READER_PROSE, "reason for the proposal in reader_language"),
+        FieldMeta("proposal_type", FieldRole.NORMALIZED_INTERNAL, "controlled proposal type enum"),
+        FieldMeta("concept_type", FieldRole.NORMALIZED_INTERNAL, "controlled concept type enum"),
+    ],
     type_vocabularies={
         "concept": NARRATIVE_CONCEPT_TYPES,
     },
@@ -308,6 +348,12 @@ GROUP_RESOLUTION_CONTRACT = PassContract(
         FieldMeta("context", FieldRole.READER_PROSE, "optional book digest or context"),
         FieldMeta("language_policy", FieldRole.NORMALIZED_INTERNAL, "field-language policy object"),
     ],
+    output_fields=[
+        FieldMeta("rationale", FieldRole.READER_PROSE, "reason for the proposal in reader_language"),
+        FieldMeta("proposal_type", FieldRole.NORMALIZED_INTERNAL, "controlled proposal type enum"),
+        FieldMeta("group_type", FieldRole.NORMALIZED_INTERNAL, "controlled group type enum"),
+        FieldMeta("edge_type", FieldRole.NORMALIZED_INTERNAL, "controlled edge type enum"),
+    ],
     type_vocabularies={
         "group": NARRATIVE_GROUP_TYPES,
     },
@@ -322,6 +368,12 @@ OVERVIEW_CONTRACT = PassContract(
         FieldMeta("text", FieldRole.SOURCE_IDENTITY, "exact source text for the full unit"),
         FieldMeta("context", FieldRole.READER_PROSE, "optional guidance object; use only to shape hints, not as source evidence"),
         FieldMeta("language_policy", FieldRole.NORMALIZED_INTERNAL, "field-language policy object"),
+    ],
+    output_fields=[
+        FieldMeta("start_quote", FieldRole.SOURCE_IDENTITY, "exact source substring near segment start"),
+        FieldMeta("end_quote", FieldRole.SOURCE_IDENTITY, "exact source substring near segment end"),
+        FieldMeta("extraction_hints", FieldRole.READER_PROSE, "reader-facing attention cues for the extraction pass"),
+        FieldMeta("warnings", FieldRole.READER_PROSE, "reader-facing warnings"),
     ],
 )
 

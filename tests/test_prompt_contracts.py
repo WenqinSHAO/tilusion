@@ -230,7 +230,9 @@ class TestBuiltinContracts:
         sections = render_contract_sections(EXTRACTION_CONTRACT)
         rendered = sections["{{ language_policy }}"]
         assert "Field-language policy" in rendered
-        assert "`surface`" not in rendered  # extraction fields are input fields
+        # Output fields now included: surface is a source-grounded output field
+        assert "`surface`" in rendered
+        assert "`summary`" in rendered
         rendered_input = sections["{{ input_contract }}"]
         assert "`unit_id`" in rendered_input
         assert "`text`" in rendered_input
