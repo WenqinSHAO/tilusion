@@ -197,45 +197,148 @@ phases — each round may touch multiple dimensions. The first priority is to
 make merge behavior observable and contract-driven before making larger prompt
 or soft-type changes.
 
-**Type definitions and vocabulary.** Add missing type definitions, tighten
-boundaries between similar types (method vs technique, person vs term for
-supernatural entities), ensure anti-examples cover common miscategorizations.
-Mostly prompt changes; Phase 2c makes them single-Python-constant edits.
+**Current status across all dimensions:**
 
-**Merge heuristics, facets, and soft typing.** The merge contract is now a
-first-class Part 3 concern, documented in `22_registry_merge_contract.md`.
-Facets support a plausible identity; they must not create identity by
-themselves. Soft type compatibility is allowed only after an identity signal
-exists, and hard boundary types (`place`, `time_anchor`, `source`) remain
-strict. Next work should improve merge observability before changing more
-heuristics: accepted/rejected merge counts by reason, soft-type pairs, generic
-alias suppression, meaningful vs generic facet overlap, and split candidates.
-Code changes mainly live in `book_registry.py`, `registry_delta.py`,
-`registry_index.py`, and `reading_pipeline.py`, with resolver prompt updates
-only when the LLM needs to make a judgment.
+| Dimension | Status | Next action |
+|-----------|--------|-------------|
+| Type definitions | Done | — |
+| Merge heuristics + facets | Core done; observability missing | **→ Next: observability** |
+| Repair/retry | Done | Tune thresholds from run data |
+| Timeline/grouping | Not started | After merge observability |
+| Known/new hints | Done | — |
+| Higher-order refs | Deferred | After grouping |
 
-**Repair/retry policy.** After Phase 2c, use quality metrics from real runs
-to calibrate which failures trigger repair. Source-grounded field violations
-→ fatal; reader-language issues → warn (currently zero); sparse facets →
-warn. Code changes in `reading_pipeline.py`.
+**Type definitions and vocabulary.** DONE — method type restored, time_anchor
+cname guidance, cross-category anti-examples, type_vocabularies.json
+externalized, cross-category auto-fix in repair loop.
 
-**Timeline and grouping.** Group resolution should prefer `continue` on
-existing timelines when new temporal_sequences share key entities.
-Cross-group edges (`part_of`, `precedes`) should be proposed when merging isn't
-appropriate. Deterministic concept-overlap pre-check before LLM resolution.
-Prompt + code changes in group resolver and `registry_delta.py`.
+**Merge heuristics, facets, and soft typing.** Core identity-gated merge is
+done: generic identity forms filtered, facet-based soft typing active,
+first-write-wins surface preservation, deterministic dedup with alias safety.
+The merge contract is documented in `22_registry_merge_contract.md`.
 
-**Known/new hints.** Per-segment known-concept lookup is now present for
-source-block-overlapping registry concepts. These hints are merge guidance,
-not evidence and not valid local refs. Future work may add explicit
-`known_in_registry` labels or candidate IDs to local concepts, but only after
-we decide the data-model contract and validator behavior. Primarily code
-changes in `registry_index.py`, `overview.py`, `reading_pipeline.py`, plus
-prompt-contract updates.
+**Repair/retry policy.** DONE — cross-category type warnings auto-fixed
+deterministically, repair propagation direction fixed, auto-fixable issues
+applied in all repair paths including full retry fallback.
 
-**Higher-order references.** Concepts that refer to items/events/groups
-need first-class representation (optional `refers_to` field). Detection
-first, metrics second, resolution deferred. Prompt + schema changes.
+**Timeline and grouping.** NOT STARTED. Group resolution should prefer
+`continue` on existing timelines when new temporal_sequences share key
+entities. Cross-group edges (`part_of`, `precedes`) should be proposed when
+merging isn't appropriate. Deterministic concept-overlap pre-check before
+LLM resolution. Depends on clean concept identity — merge observability
+must come first.
+
+**Known/new hints.** DONE — `known_concepts_for_blocks()` passes block-overlap
+registry concepts to per-segment extraction context. The extractor sees what's
+already known. Further work (explicit `known_in_registry` labels) deferred.
+
+**Higher-order references.** DEFERRED. Concepts that refer to items/events/
+groups need first-class representation. Detection first, metrics second,
+resolution deferred. Low priority until merge and grouping quality stabilizes.
+
+---
+
+### Part 3 next move: Merge Observability + Facet Overlap Weighting
+
+**Joint rationale.** The merge contract (`22_registry_merge_contract.md`)
+correctly prescribes observability before further heuristic changes. The
+timeline/grouping dimension depends on clean concept identity, which merge
+observability directly verifies. Facet overlap weighting closes the
+remaining gap in soft typing: binary facet intersection is too permissive
+(class-only overlaps like `person` + `person` should not bridge types).
+
+Do these together: they share code paths in `book_registry.py` and the
+observability counters make facet weighting auditable from day one.
+
+#### A. Merge observability
+
+Add a structured merge summary to `registry_delta.py` / `book_registry.py`,
+logged to stderr and persisted in run metadata. Counters by reason:
+
+| Category | Reason | What to count |
+|----------|--------|---------------|
+| Accepted | `same_surface` | Merges where all members share one surface |
+| Accepted | `shared_canonical_name` | All members share a canonical_name |
+| Accepted | `usable_alias_overlap` | Non-generic alias overlap + same type |
+| Accepted | `soft_type_facet_bridge` | Different types, facet overlap bridged |
+| Accepted | `llm_link_proposal` | LLM resolver proposed `link` |
+| Rejected | `no_identity_signal` | No surface/cname/alias overlap |
+| Rejected | `hard_boundary_type` | place/time_anchor/source type mismatch |
+| Rejected | `generic_alias_only` | Only generic forms overlap (余, 吾, 先生...) |
+| Rejected | `type_mismatch_no_facets` | Different types, no facet overlap |
+| Rejected | `type_mismatch_generic_facets_only` | Different types, only class-only facet overlap |
+
+Also track:
+- `dedup_candidates_found` / `dedup_accepted` / `dedup_rejected` — from
+  `find_registry_duplicates`
+- `soft_type_bridge_pairs` — list of (type_a, type_b, shared_facets) for
+  each soft-type merge
+- `split_candidates` — concepts with same/similar canonical forms still
+  split after resolution
+
+Implementation (~60 lines):
+- `tilusion/book_registry.py`: `MergeSummary` dataclass, increment counters
+  at each merge/reject decision point
+- `tilusion/registry_delta.py` or `tilusion/reading_pipeline.py`: collect,
+  log, persist in run metadata
+
+#### B. Facet overlap weighting
+
+Replace binary `_facets_overlap()` with a weighted check that ignores
+class-only overlaps for soft-type bridging:
+
+```python
+# Facets that are merely type-class labels — too generic to bridge types
+_GENERIC_FACETS: frozenset[str] = frozenset({
+    "person", "place", "object", "term", "theme", "motif",
+    "method", "time_anchor", "source", "event", "other",
+})
+
+def _facets_overlap(members, *, require_specific: bool = False) -> bool:
+    """True if any two members share at least one meaningful facet."""
+    ...
+```
+
+Two modes:
+- `require_specific=False` — current behavior (any overlap, used for
+  same-type merge confirmation)
+- `require_specific=True` — only non-generic overlaps count (used for
+  soft-type bridging across different types)
+
+The soft-type path in `_check_merge_boundary` calls with
+`require_specific=True`. The same-type path is unchanged.
+
+Implementation (~20 lines in `book_registry.py`).
+
+#### C. Connection to timeline/grouping (plan, not implement)
+
+After merge observability and facet weighting are in place:
+1. Re-run units 2-4, inspect merge summaries
+2. If concept identity is clean (low rejection rate, meaningful facet
+   bridges), proceed to timeline/grouping improvements
+3. If concept identity still has issues, fix those first — grouping
+   quality depends on resolved concepts
+
+The grouping improvements themselves will be:
+- Deterministic concept-overlap pre-check: temporal_sequences sharing
+  ≥30% of concept_refs with a timeline → surface as high-priority
+  `continue` candidates
+- Group resolution prompt: prefer `continue` over `new_thread` when
+  concept overlap exists
+- Group resolution prompt: post-placement scan for adjacent temporal
+  sequences → propose `merge_groups` or `part_of` edges
+
+#### Implementation order
+
+| Step | What | Est. lines | Depends on |
+|------|------|------------|------------|
+| 1 | Merge observability counters | ~60 | — |
+| 2 | Facet overlap weighting | ~20 | — |
+| 3 | Re-run + audit merge summaries | — | 1, 2 |
+| 4 | Timeline/grouping improvements | ~40 | 3 (clean identity verified) |
+
+Steps 1 and 2 are independent and can ship together. Step 4 is gated on
+step 3 results.
 
 ---
 

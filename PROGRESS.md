@@ -42,9 +42,9 @@
 
 ## Ongoing
 
-- **Current goal:** Begin Part 3 iterative extraction-quality improvement, starting with merge/facet/soft-type observability before further heuristic or prompt changes.
+- **Current goal:** Part 3 next move: merge observability + facet overlap weighting (jointly, per `design/15_cross_unit_refactor_plan.md` Part 3 roadmap). Timeline/grouping improvements gated on clean merge audit results.
 - **Branch:** `prompt_refresh`.
-- **Immediate next step:** Implement merge observability from `design/22_registry_merge_contract.md`: accepted/rejected merge summaries, soft-type facet bridge traces, generic-alias suppression counts, and deterministic dedup outcomes in CLI/run metadata.
+- **Immediate next step:** Implement merge observability counters (accepted/rejected by reason, soft-type pairs, dedup stats) and facet overlap weighting (ignore class-only overlaps for soft-type bridges). ~80 lines across `book_registry.py` and pipeline.
 
 ## Plan Structure (from `design/15_cross_unit_refactor_plan.md`)
 
