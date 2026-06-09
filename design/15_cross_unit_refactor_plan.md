@@ -1,8 +1,11 @@
 # Cross-Unit Entity Consistency: Unified Refactoring Plan
 
-Status: **plan + partial implementation** — Foundation phases (1, 1.5, 2a, 2b)
-are done. Phase 2c (contract refactor) is the next infrastructure milestone.
-Iterative quality improvement follows.
+Status: **Part 1 done, Part 2 implemented and hardened, Part 3 starting**.
+Foundation phases (1, 1.5, 2a, 2b) are done. Phase 2c contract
+infrastructure is implemented. Recent hardening fixed repair-loop
+normalization, prompt/code cooperation around known registry concepts, and
+unsafe alias-only registry dedup. The project is now entering iterative
+quality improvement.
 
 This is the canonical plan. It incorporates findings from:
 - `16_extraction_quality_audit.md` — 10 quality problems (v0.2 run)
@@ -10,6 +13,8 @@ This is the canonical plan. It incorporates findings from:
 - `18_prompt_simplification.md` — field-language policy and prompt simplification
 - `19_phase_2c_contract_api.md` — Phase 2c Python API design
 - `20_v0.3_extraction_analysis.md` — quality analysis of the v0.3 run (issue catalog #1)
+- `21_v0.3_unit5_analysis.md` — unit-0005 merge-corruption analysis and hardening verification
+- `22_registry_merge_contract.md` — current registry merge/facet/soft-type contract
 - `14_cross_chunk_entity_consistency_analysis.md` — original problem analysis
 
 ## Structure
@@ -20,16 +25,17 @@ The plan has three parts:
    These are done.
 
 2. **Infrastructure** — Phase 2c: code-owned prompt/data-model contracts.
-   This is backbone infrastructure, like the multi-round agentic loop and book
-   registry. It changes how prompts are composed and how types/language policy
-   are maintained. Once in place, all subsequent quality work builds on it.
+   This backbone infrastructure is implemented. It changed how prompts are
+   composed and how types/language policy are maintained. Subsequent quality
+   work now builds on it instead of copy-editing multiple prompt files.
 
 3. **Iterative quality improvement** — One ongoing phase replacing the old
-   Phases 3–6. Issues accumulate from LLM-backed test runs into a catalog
-   (e.g., `20_v0.3_extraction_analysis.md`). Each round of fixes combines
-   prompt and code changes: type definitions, merge heuristics, repair/retry
-   policy, timeline grouping, known/new hints, higher-order references.
-   Targeted, auditable commits — not big-bang phases.
+   Phases 3–6. Issues accumulate from LLM-backed test runs into catalogs
+   (e.g., `20_v0.3_extraction_analysis.md`, `21_v0.3_unit5_analysis.md`).
+   Each round of fixes combines prompt and code changes: type definitions,
+   merge heuristics, facet semantics, repair/retry policy, timeline grouping,
+   known/new hints, higher-order references. Targeted, auditable commits — not
+   big-bang phases.
 
 ---
 
@@ -91,11 +97,11 @@ types (was 25), only 3 group type values (was 7).
 
 ---
 
-## Part 2: Infrastructure
+## Part 2: Infrastructure — IMPLEMENTED
 
-### Phase 2c: Prompt/Data-Model Contract Refactor — NEXT
+### Phase 2c: Prompt/Data-Model Contract Refactor — DONE
 
-**Status**: designed (`19_phase_2c_contract_api.md`), not implemented.
+**Status**: implemented and hardened.
 
 **Motivation**: This is backbone infrastructure, like the multi-round agentic
 loop and the book registry. Five v0.3 prompt files hand-maintain the same
@@ -105,8 +111,8 @@ files + `reading_schema.py` + tests. The contract refactor makes the data
 model code-owned and prompts generated from it.
 
 **What it changes**: How prompts are composed and how types/language policy
-are maintained. It does NOT change extraction behavior — it makes future
-changes cheaper and safer.
+are maintained. It does NOT by itself solve extraction quality; it makes
+future quality changes cheaper, more local, and safer.
 
 **API** (detailed in `19_phase_2c_contract_api.md`):
 - `FieldRole` enum + `FieldMeta` dataclass — owns field-level language policy
@@ -122,15 +128,29 @@ constant; narrowing types for a domain requires passing a different
 `TypeVocabulary`, not editing prompt files; field-language policy is rendered
 from code, not copy-pasted across 5 files.
 
-**Acceptance criteria** (from `19_phase_2c_contract_api.md`):
-- One source of truth renders concept/item/group/edge vocabularies into prompts
-- Language policy field roles declared in metadata, reused by every prompt
-- Adding a non-core type requires editing the type registry + targeted tests only
-- Existing 423 tests pass; new contract tests cover rendering and domain subsets
+**Acceptance status**:
+- One source of truth renders concept/item/group/edge vocabularies into prompts.
+- Language policy field roles are declared in metadata and reused by prompts.
+- Type vocabulary changes are concentrated in code/config plus targeted tests.
+- Contract rendering is covered by prompt-contract tests.
+- The current full suite is 462 tests passing after repair/dedup hardening.
 
-**Files**: `tilusion/prompt_contracts.py` (new, ~150), `tilusion/reading_schema.py`
-(+10), `tilusion/reading_prompts.py` (~40, ~20), `tilusion/prompts/*.md`
-(~50 removed per file), `tests/test_prompt_contracts.py` (new, ~80).
+**Follow-on hardening already done**:
+- Output fields are included in pass contracts, so generated language policy
+  covers fields produced by the LLM, not only fields in the input payload.
+- Cross-category type warnings are deterministically normalized before a pass
+  is accepted.
+- Repair propagation now copies fixed validation-subject fields back into the
+  returned LLM data.
+- `known_concepts` in per-segment extraction is documented as merge hints, not
+  evidence and not valid local `concept_refs`.
+- Registry dedup ignores generic alias-only identity signals and logs skipped
+  merge attempts instead of swallowing them silently.
+
+**Files**: `tilusion/prompt_contracts.py`, `tilusion/reading_schema.py`,
+`tilusion/reading_prompts.py`, `tilusion/prompts/*.md`,
+`tests/test_prompt_contracts.py`, plus hardening tests in repair, prompt, and
+registry suites.
 
 ---
 
@@ -173,18 +193,26 @@ Documented in `design/20_v0.3_extraction_analysis.md`. Summary of open issues:
 ### Quality dimensions (ongoing)
 
 These are the areas iterative improvement targets. They are not sequential
-phases — each round may touch multiple dimensions.
+phases — each round may touch multiple dimensions. The first priority is to
+make merge behavior observable and contract-driven before making larger prompt
+or soft-type changes.
 
 **Type definitions and vocabulary.** Add missing type definitions, tighten
 boundaries between similar types (method vs technique, person vs term for
 supernatural entities), ensure anti-examples cover common miscategorizations.
 Mostly prompt changes; Phase 2c makes them single-Python-constant edits.
 
-**Merge heuristics.** Deterministic pre-checks before LLM resolution: same
-surface + same type → auto-link; alias overlap → high-priority candidate;
-single-char surface that is a prefix of an existing concept → flag. Code
-changes in `registry_delta.py` and `registry_index.py`, with resolver
-prompt updates for the cases that still need LLM judgment.
+**Merge heuristics, facets, and soft typing.** The merge contract is now a
+first-class Part 3 concern, documented in `22_registry_merge_contract.md`.
+Facets support a plausible identity; they must not create identity by
+themselves. Soft type compatibility is allowed only after an identity signal
+exists, and hard boundary types (`place`, `time_anchor`, `source`) remain
+strict. Next work should improve merge observability before changing more
+heuristics: accepted/rejected merge counts by reason, soft-type pairs, generic
+alias suppression, meaningful vs generic facet overlap, and split candidates.
+Code changes mainly live in `book_registry.py`, `registry_delta.py`,
+`registry_index.py`, and `reading_pipeline.py`, with resolver prompt updates
+only when the LLM needs to make a judgment.
 
 **Repair/retry policy.** After Phase 2c, use quality metrics from real runs
 to calibrate which failures trigger repair. Source-grounded field violations
@@ -197,10 +225,13 @@ Cross-group edges (`part_of`, `precedes`) should be proposed when merging isn't
 appropriate. Deterministic concept-overlap pre-check before LLM resolution.
 Prompt + code changes in group resolver and `registry_delta.py`.
 
-**Known/new hints.** Per-segment known-concept lookup (reverse index
-block_id → concept_id, normalized lexical matching), enriched segment
-context, known_in_registry flagging. Primarily code changes in
-`registry_index.py`, `overview.py`, `reading_pipeline.py`.
+**Known/new hints.** Per-segment known-concept lookup is now present for
+source-block-overlapping registry concepts. These hints are merge guidance,
+not evidence and not valid local refs. Future work may add explicit
+`known_in_registry` labels or candidate IDs to local concepts, but only after
+we decide the data-model contract and validator behavior. Primarily code
+changes in `registry_index.py`, `overview.py`, `reading_pipeline.py`, plus
+prompt-contract updates.
 
 **Higher-order references.** Concepts that refer to items/events/groups
 need first-class representation (optional `refers_to` field). Detection
@@ -220,8 +251,9 @@ After each batch of changes:
   tests/test_reading_validation.py tests/test_reading_payloads_prompts.py -q
 ```
 
-After Phase 2c: existing 423 tests pass; new contract tests cover rendering
-and domain subsets.
+After Phase 2c and recent hardening: full suite is 462 tests passing; new
+contract, repair-loop, prompt, and registry tests cover rendering, warning
+normalization, known-concept hint wording, and generic alias merge safety.
 
 After each quality iteration: re-run LLM-backed extraction, compare metrics
 against the previous catalog, verify fixed issues are resolved and no
