@@ -53,7 +53,11 @@ class DeterministicConceptMerger:
     """
 
     @staticmethod
-    def merge(members: list[Concept]) -> Concept:
+    def merge(
+        members: list[Concept],
+        *,
+        merge_stats: MergeStats | None = None,
+    ) -> Concept:
         if not members:
             raise ValueError("merge requires at least one concept")
         if len(members) == 1:
@@ -348,7 +352,9 @@ class BookRegistry:
 
     # ── Concept merge ─────────────────────────────────────────────────────
 
-    def merge_concepts(self, ids: list[str]) -> str:
+    def merge_concepts(
+        self, ids: list[str], *, merge_stats: MergeStats | None = None
+    ) -> str:
         ids = list(dict.fromkeys(ids))  # dedup preserving order
         if len(ids) < 2:
             raise ValueError("merge_concepts requires at least two distinct concept IDs")
@@ -360,11 +366,11 @@ class BookRegistry:
                 raise KeyError(f"concept {cid} not found")
             members.append(c)
 
-        rejection = _check_merge_boundary(members)
+        rejection = _check_merge_boundary(members, stats=merge_stats)
         if rejection is not None:
             raise MergeRejectedError(rejection)
 
-        merged = DeterministicConceptMerger.merge(members)
+        merged = DeterministicConceptMerger.merge(members, merge_stats=merge_stats)
         # Keep the first ID as the stable target (typically a book concept
         # that other operations may reference). Source IDs are absorbed.
         target_id = ids[0]
@@ -677,10 +683,115 @@ class BookRegistry:
         self._groups.update(data.get("groups", {}))
 
 
+# ── Merge observability ──────────────────────────────────────────────────────
+
+
+@dataclass
+class MergeStats:
+    """Counters collected during a single cross-unit delta application.
+
+    Incremented by _check_merge_boundary and the dedup pass.  Logged at the
+    end of each book-scope pipeline run.
+    """
+
+    # Accepted
+    accepted_same_surface: int = 0
+    accepted_shared_cname: int = 0
+    accepted_usable_alias: int = 0
+    accepted_soft_type_bridge: int = 0
+    accepted_llm_link: int = 0
+
+    # Rejected
+    rejected_no_identity: int = 0
+    rejected_hard_boundary: int = 0
+    rejected_generic_alias_only: int = 0
+    rejected_type_mismatch: int = 0
+    rejected_type_mismatch_no_facets: int = 0
+
+    # Dedup
+    dedup_found: int = 0
+    dedup_accepted: int = 0
+    dedup_skipped: int = 0
+
+    # Soft-type bridge details: (type_a, type_b, shared_facets)
+    soft_type_bridges: list[tuple[str, str, str]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "accepted": {
+                "same_surface": self.accepted_same_surface,
+                "shared_cname": self.accepted_shared_cname,
+                "usable_alias": self.accepted_usable_alias,
+                "soft_type_bridge": self.accepted_soft_type_bridge,
+                "llm_link": self.accepted_llm_link,
+            },
+            "rejected": {
+                "no_identity": self.rejected_no_identity,
+                "hard_boundary": self.rejected_hard_boundary,
+                "generic_alias_only": self.rejected_generic_alias_only,
+                "type_mismatch": self.rejected_type_mismatch,
+                "type_mismatch_no_facets": self.rejected_type_mismatch_no_facets,
+            },
+            "dedup": {
+                "found": self.dedup_found,
+                "accepted": self.dedup_accepted,
+                "skipped": self.dedup_skipped,
+            },
+            "soft_type_bridges": [
+                {"type_a": a, "type_b": b, "shared_facets": f}
+                for a, b, f in self.soft_type_bridges
+            ],
+        }
+
+
+def _log_merge_stats(stats: MergeStats) -> None:
+    """Print a one-line merge summary to stderr."""
+    import sys
+
+    a = stats.accepted_same_surface + stats.accepted_shared_cname + \
+        stats.accepted_usable_alias + stats.accepted_soft_type_bridge + \
+        stats.accepted_llm_link
+    r = stats.rejected_no_identity + stats.rejected_hard_boundary + \
+        stats.rejected_generic_alias_only + stats.rejected_type_mismatch + \
+        stats.rejected_type_mismatch_no_facets
+    print(
+        f"  [merge-stats] accepted={a} "
+        f"(surface={stats.accepted_same_surface} "
+        f"cname={stats.accepted_shared_cname} "
+        f"alias={stats.accepted_usable_alias} "
+        f"facet_bridge={stats.accepted_soft_type_bridge} "
+        f"llm={stats.accepted_llm_link}) "
+        f"rejected={r} "
+        f"(no_id={stats.rejected_no_identity} "
+        f"boundary={stats.rejected_hard_boundary} "
+        f"generic_alias={stats.rejected_generic_alias_only} "
+        f"type_mismatch={stats.rejected_type_mismatch} "
+        f"no_facets={stats.rejected_type_mismatch_no_facets}) "
+        f"dedup={stats.dedup_accepted}/{stats.dedup_found} "
+        f"(skipped={stats.dedup_skipped})",
+        file=sys.stderr,
+    )
+
+
+# ── Facet overlap weighting ───────────────────────────────────────────────────
+
+# Facets that are merely type-class labels — too generic to bridge types
+# in soft-type merges.  Role, domain, and continuity facets carry actual
+# identity signal.
+_GENERIC_FACETS: frozenset[str] = frozenset({
+    "person", "place", "object", "term", "theme", "motif",
+    "method", "time_anchor", "source", "event", "other",
+})
+
+
 # ── Merge boundary validation ────────────────────────────────────────────────
 
 
-def _check_merge_boundary(members: list[Concept]) -> str | None:
+def _check_merge_boundary(
+    members: list[Concept],
+    *,
+    stats: MergeStats | None = None,
+) -> str | None:
     """Return rejection reason if the merge is unsafe, None if ok.
 
     Adapted from reading_pipeline._classify_merge_risk.
@@ -713,32 +824,79 @@ def _check_merge_boundary(members: list[Concept]) -> str | None:
     if not identity_signal:
         reason = _make_rejection_reason(surfaces, types, shared_cnames)
         _log_rejected_merge(members, reason)
+        if stats is not None:
+            stats.rejected_no_identity += 1
         return reason
 
     # ── Type compatibility ───────────────────────────────────────────────
     # Hard match: all members share the same normalized type
     if len(types) == 1:
+        if stats is not None:
+            if same_surface:
+                stats.accepted_same_surface += 1
+            elif shared_cname:
+                stats.accepted_shared_cname += 1
+            else:
+                stats.accepted_usable_alias += 1
         return None
+
+    # Check hard boundary types before soft typing
+    if stats is not None:
+        if types & {"time_anchor", "place", "source"}:
+            stats.rejected_hard_boundary += 1
 
     # Soft typing: different types but overlapping facets → compatible.
     # Identity-gated: we only reach here if identity_signal is already
     # true (same surface, shared cname, or alias overlap).
-    if _facets_overlap(members):
+    # Require non-generic facet overlap for cross-type bridging.
+    if _facets_overlap(members, require_specific=True):
+        if stats is not None:
+            stats.accepted_soft_type_bridge += 1
+            shared = _shared_facets(members)
+            type_a = sorted(types)[0] if len(types) >= 1 else "?"
+            type_b = sorted(types)[1] if len(types) >= 2 else "?"
+            stats.soft_type_bridges.append((type_a, type_b, ", ".join(sorted(shared))))
         return None
 
     # ── Rejection path ───────────────────────────────────────────────────
     reason = _make_rejection_reason(surfaces, types, shared_cnames)
     _log_rejected_merge(members, reason)
+    if stats is not None:
+        if len(types) > 1:
+            if _facets_overlap(members, require_specific=False):
+                # Had class-only overlap but not specific
+                stats.rejected_type_mismatch += 1
+            else:
+                stats.rejected_type_mismatch_no_facets += 1
+        elif _no_usable_identity(members):
+            stats.rejected_generic_alias_only += 1
     return reason
 
 
-def _facets_overlap(members: list[Concept]) -> bool:
-    """True if any two members share at least one facet (case-insensitive)."""
-    facet_sets: list[set[str]] = []
+def _collect_facet_sets(
+    members: list[Concept], *, require_specific: bool = False
+) -> list[set[str]]:
+    """Return facet sets for each member, optionally filtered to non-generic."""
+    result: list[set[str]] = []
     for m in members:
         fs = {f.strip().lower() for f in (m.facets or []) if f.strip()}
+        if require_specific:
+            fs = fs - _GENERIC_FACETS
         if fs:
-            facet_sets.append(fs)
+            result.append(fs)
+    return result
+
+
+def _facets_overlap(
+    members: list[Concept], *, require_specific: bool = False
+) -> bool:
+    """True if any two members share at least one facet (case-insensitive).
+
+    When *require_specific* is True, class-only facets (person, place,
+    object, etc.) are ignored — only role, domain, or continuity facets
+    count.  Used for soft-type bridging across different concept types.
+    """
+    facet_sets = _collect_facet_sets(members, require_specific=require_specific)
     if len(facet_sets) < 2:
         return False
     for i in range(len(facet_sets)):
@@ -746,6 +904,30 @@ def _facets_overlap(members: list[Concept]) -> bool:
             if facet_sets[i] & facet_sets[j]:
                 return True
     return False
+
+
+def _shared_facets(members: list[Concept]) -> set[str]:
+    """Return facets shared by at least two members (case-insensitive)."""
+    facet_sets = _collect_facet_sets(members)
+    shared: set[str] = set()
+    for i in range(len(facet_sets)):
+        for j in range(i + 1, len(facet_sets)):
+            shared |= facet_sets[i] & facet_sets[j]
+    return shared
+
+
+def _no_usable_identity(members: list[Concept]) -> bool:
+    """True if the only identity signals are generic forms (余, 吾, 先生...)."""
+    per_concept: list[set[str]] = []
+    for m in members:
+        per_concept.append(_usable_identity_forms(
+            [m.surface, *m.aliases, *m.observed_surfaces]
+        ))
+    for i in range(len(per_concept)):
+        for j in range(i + 1, len(per_concept)):
+            if per_concept[i] & per_concept[j]:
+                return False  # at least one non-generic overlap
+    return True  # all overlaps are generic
 
 
 def _make_rejection_reason(

@@ -205,6 +205,8 @@ def compute_registry_delta(
 def apply_registry_delta(
     registry: BookRegistry,
     delta: RegistryDeltaResult,
+    *,
+    merge_stats: Any = None,
 ) -> list[str]:
     """Apply safe operations from a delta to the BookRegistry.
 
@@ -233,7 +235,9 @@ def apply_registry_delta(
             new_id, _ = registry.add_concept(unit_concept, force=True)
             # Merge into existing book concept
             try:
-                merged_id = registry.merge_concepts([book_concept_id, new_id])
+                merged_id = registry.merge_concepts(
+                    [book_concept_id, new_id], merge_stats=merge_stats
+                )
             except MergeRejectedError:
                 # Deterministic boundary check rejected the merge — keep the
                 # force-added concept as a distinct entry.  The rejection is

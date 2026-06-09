@@ -69,7 +69,7 @@ from .reading_validation import (
     validate_extraction_unit_package,
 )
 from .book_digest import build_book_digest, make_context_dict
-from .book_registry import BookRegistry, find_registry_duplicates
+from .book_registry import BookRegistry, MergeStats, _log_merge_stats, find_registry_duplicates
 from .registry_index import (
     build_registry_index,
     init_embedding_cache,
@@ -2891,10 +2891,20 @@ def run_reading_pipeline(
             group_resolution_proposals=group_resolution_proposals,
         )
         _log_registry_delta_preview(delta_result, registry)
-        applied = apply_registry_delta(registry, delta_result)
+
+        merge_stats = MergeStats()
+        # Count LLM link proposals
+        for op in delta_result.operations:
+            if op.get("op_type") == "merge_concepts":
+                match_reason = op.get("match_reason", "")
+                if "llm_link" in match_reason:
+                    merge_stats.accepted_llm_link += 1
+
+        applied = apply_registry_delta(registry, delta_result, merge_stats=merge_stats)
 
         # ── Deterministic registry dedup ──
         dup_pairs = find_registry_duplicates(registry._concepts)
+        merge_stats.dedup_found = len(dup_pairs)
         if dup_pairs:
             print(
                 f"  [registry-dedup] found {len(dup_pairs)} duplicate pair(s)",
@@ -2912,12 +2922,17 @@ def run_reading_pipeline(
                 )
             for id_a, id_b, _reason in dup_pairs:
                 try:
-                    registry.merge_concepts([id_a, id_b])
+                    registry.merge_concepts([id_a, id_b], merge_stats=merge_stats)
+                    merge_stats.dedup_accepted += 1
                 except Exception as exc:
+                    merge_stats.dedup_skipped += 1
                     print(
                         f"    skip {id_b} -> {id_a}: {exc}",
                         file=sys.stderr,
                     )
+
+        _log_merge_stats(merge_stats)
+        metrics["merge"] = merge_stats.to_dict()
 
         # ── Post-extraction digest update ──
         # Keep digest generation on the dedicated digest prompt. Reusing the
