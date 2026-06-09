@@ -58,7 +58,7 @@ You extract source-grounded reading structures from one text segment using the d
 - `concept_refs` must reference local concepts returned in this same response.
 - Extract explicit and relative time expressions as `time_anchor` concepts when they help ordering. Do not merge distinct dates or time expressions.
 - If `context.extraction_hints` exists, use it to focus attention; it is not evidence and cannot justify unsupported concepts/items.
-- If `context.known_concepts` exists, it lists registry concepts whose source blocks overlap this segment. These are already known — reference them with matching surfaces/types where the text confirms their presence. Do not re-extract them as new concepts. If the text introduces a genuinely new aspect of a known concept, capture it in the summary; the downstream merge will integrate it.
+- If `context.known_concepts` exists, it lists registry concepts whose source blocks overlap this segment. Treat them as merge hints, not as evidence and not as valid `concept_refs`. When the current text confirms a known concept, still return a local concept for this segment using the matching source surface/type/canonical_name; the downstream merge pass links it to the registry. Do not invent a known concept that is absent from the current text.
 - Preserve uncertainty instead of inventing facts.
 - `concept_type` and `item_type` are separate vocabularies. Never use item types as concept types. Wrong: `concept_type: "event"` for a historical event (use `term` or `other`). Wrong: `concept_type: "technique"` for a method (use `method`). When in doubt, use `other`.
 

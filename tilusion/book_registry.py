@@ -16,6 +16,23 @@ from .reading_schema import (
 )
 
 
+GENERIC_IDENTITY_FORMS = frozenset({
+    "余", "吾", "我", "予", "作者", "叙述者",
+    "先生", "夫人", "妻", "妻子", "夫", "丈夫", "友人", "主人",
+    "person", "author", "narrator", "wife", "husband", "friend",
+})
+
+
+def _usable_identity_forms(values: list[str]) -> set[str]:
+    """Return non-generic surface forms suitable as identity evidence."""
+    forms: set[str] = set()
+    for value in values:
+        form = str(value or "").strip()
+        if form and form not in GENERIC_IDENTITY_FORMS:
+            forms.add(form)
+    return forms
+
+
 @dataclass
 class CollisionInfo:
     existing_concept_id: str
@@ -189,11 +206,11 @@ def find_registry_duplicates(
                 pair = frozenset({id_a, id_b})
                 if pair in seen:
                     continue
-                aliases_a = set(c_a.aliases or [])
-                aliases_b = set(c_b.aliases or [])
-                if aliases_a & aliases_b:
+                aliases_a = _usable_identity_forms(list(c_a.aliases or []))
+                aliases_b = _usable_identity_forms(list(c_b.aliases or []))
+                shared = aliases_a & aliases_b
+                if shared:
                     seen.add(pair)
-                    shared = aliases_a & aliases_b
                     pairs.append((id_a, id_b, f"shared alias {sorted(shared)}"))
 
     # Sort: older (lower-numbered) ID absorbs newer
@@ -797,10 +814,9 @@ def _surfaces_overlap(members: list[Concept]) -> bool:
     """True if any two concepts share at least one surface form."""
     per_concept: list[set[str]] = []
     for m in members:
-        s: set[str] = {m.surface}
-        s.update(m.aliases)
-        s.update(m.observed_surfaces)
-        per_concept.append(s)
+        per_concept.append(_usable_identity_forms(
+            [m.surface, *m.aliases, *m.observed_surfaces]
+        ))
     for i in range(len(per_concept)):
         for j in range(i + 1, len(per_concept)):
             if per_concept[i] & per_concept[j]:

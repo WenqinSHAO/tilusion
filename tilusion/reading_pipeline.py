@@ -2913,8 +2913,11 @@ def run_reading_pipeline(
             for id_a, id_b, _reason in dup_pairs:
                 try:
                     registry.merge_concepts([id_a, id_b])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(
+                        f"    skip {id_b} -> {id_a}: {exc}",
+                        file=sys.stderr,
+                    )
 
         # ── Post-extraction digest update ──
         # Keep digest generation on the dedicated digest prompt. Reusing the

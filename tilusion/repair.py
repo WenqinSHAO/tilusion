@@ -310,6 +310,17 @@ NOT_AUTO_FIXABLE: set[str] = {
 }
 
 
+def _auto_fixable_issues(report: ReadingValidationReport) -> list[dict[str, Any]]:
+    """Return validation issues that deterministic repair can safely handle."""
+    result: list[dict[str, Any]] = []
+    for issue in report.issues:
+        data = issue.to_dict()
+        code = data.get("code", "")
+        if code in AUTO_FIXERS and code not in NOT_AUTO_FIXABLE:
+            result.append(data)
+    return result
+
+
 class DeterministicAutoFixer:
     """Applies deterministic fixes to validation errors.
 
@@ -512,7 +523,7 @@ def run_agentic_pass(
     validation_subject = validation_subject_builder(data)
     report = validate_extraction_unit_package(validation_subject)
 
-    if report.passed:
+    if report.passed and not _auto_fixable_issues(report):
         _update_conversation_validation(conversation, report)
         result = validation_subject if return_subject else data
         return result, conversation, report
@@ -558,7 +569,7 @@ def _repair_loop(
         validation_subject = validation_subject_builder(data)
         report = validate_extraction_unit_package(validation_subject)
 
-        if report.passed:
+        if report.passed and not _auto_fixable_issues(report):
             _update_conversation_validation(conversation, report)
             result = validation_subject if return_subject else data
             return result, conversation, report
@@ -573,7 +584,7 @@ def _repair_loop(
         if fixed_codes:
             _log_auto_fixes(fixed_codes, repair_turns, pass_name)
             # Propagate auto-fixes from validation_subject back to data
-            _propagate_fixes(data, validation_subject)
+            _propagate_fixes(validation_subject, data)
             if not remaining_issues:
                 # Re-validate to confirm all issues resolved
                 final_subject = validation_subject_builder(data)
@@ -602,7 +613,7 @@ def _repair_loop(
             repairs = repair_data.get("repairs", [])
             if repairs:
                 apply_repair_patch(validation_subject, repairs)
-                _propagate_fixes(data, validation_subject)
+                _propagate_fixes(validation_subject, data)
                 _log_repair_applied(repairs, pass_name, validation_subject)
             else:
                 print(
@@ -633,6 +644,17 @@ def _repair_loop(
     data = parse_json_response(assistant_response)
     validation_subject = validation_subject_builder(data)
     report = validate_extraction_unit_package(validation_subject)
+
+    retry_fixable = _auto_fixable_issues(report)
+    if retry_fixable:
+        fixer = DeterministicAutoFixer()
+        fixed_codes, _remaining = fixer.fix(validation_subject, retry_fixable)
+        if fixed_codes:
+            _log_auto_fixes(fixed_codes, 0, f"{pass_name} full retry")
+            _propagate_fixes(validation_subject, data)
+            validation_subject = validation_subject_builder(data)
+            report = validate_extraction_unit_package(validation_subject)
+
     _update_conversation_validation(conversation, report)
 
     if report.passed:

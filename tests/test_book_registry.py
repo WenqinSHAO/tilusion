@@ -414,6 +414,12 @@ class TestBookRegistryMerge:
         with pytest.raises(MergeRejectedError):
             self.reg.merge_concepts([cid1, cid2])
 
+    def test_merge_rejects_generic_alias_as_only_identity_signal(self) -> None:
+        cid1 = self._add("沈复", ctype="person", aliases=["余"])
+        cid2 = self._force_add("某友", ctype="person", aliases=["余"])
+        with pytest.raises(MergeRejectedError, match="identity signal"):
+            self.reg.merge_concepts([cid1, cid2])
+
     def test_merge_requires_two_distinct_ids(self) -> None:
         cid1 = self._add("Confucius", "Confucius")
         with pytest.raises(ValueError, match="distinct"):
@@ -791,6 +797,13 @@ class TestFindRegistryDuplicates:
         assert pairs[0][0] == "concept-0001"
         assert pairs[0][1] == "concept-0031"
         assert "shared alias" in pairs[0][2]
+
+    def test_shared_generic_alias_same_type_does_not_merge(self) -> None:
+        c1 = Concept(concept_id="concept-0001", surface="沈复", concept_type="person",
+                     aliases=["余"])
+        c2 = Concept(concept_id="concept-0031", surface="某友", concept_type="person",
+                     aliases=["余"])
+        assert find_registry_duplicates({"concept-0001": c1, "concept-0031": c2}) == []
 
     def test_different_type_no_merge(self) -> None:
         c1 = Concept(concept_id="concept-0001", surface="沈复", concept_type="person")

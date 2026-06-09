@@ -25,7 +25,7 @@
 - Phase 1.5: per-concept candidate maps with caps (5 embedding + 3 BM25-only).
 - Phase 2a: quality metrics scaffolding (`tilusion/reading_quality.py`) — non-fatal field-language, type vocabulary, canonical-name, facet, group granularity checks.
 - Phase 2b: v0.3 prompt refresh — field-language policy, stripped overhead, type vocabulary consolidation (narrowed to novels/essays: 7 preferred concept types, 9 item types, 8 group types), facet + canonical_name instructions, `reader_language` parameter.
-- Phase 2c API design: `design/19_phase_2c_contract_api.md` — FieldRole, FieldMeta, PassContract, TypeVocabulary API.
+- Phase 2c contract backbone: `tilusion/prompt_contracts.py` owns FieldRole, FieldMeta, PassContract, TypeVocabulary API and prompt-rendered language/type sections.
 
 **v0.3 extraction test run (units 2–4, 浮生六记)**
 - Zero English output, 100% facet coverage, 76% canonical names, 3 non-standard types (was 25).
@@ -40,14 +40,14 @@
 
 ## Ongoing
 
-- **Current goal:** Implement Phase 2c (contract refactor) as backbone infrastructure, then begin iterative quality improvement from the issue catalog.
+- **Current goal:** Harden v0.3 extraction quality fixes after the contract refactor, with emphasis on repair determinism, merge safety, and prompt/code consistency.
 - **Branch:** `prompt_refresh`.
-- **Immediate next step:** Implement Phase 2c — `tilusion/prompt_contracts.py`, update `reading_prompts.py` builders, shrink prompt files to pass-specific content only.
+- **Immediate next step:** Re-run focused extraction after repair-loop and merge-visibility fixes, then use quality metrics and CLI traces to prioritize the next prompt/pipeline changes.
 
 ## Plan Structure (from `design/15_cross_unit_refactor_plan.md`)
 
 | Part | What | Status |
 |------|------|--------|
 | 1. Foundation | Phases 1, 1.5, 2a, 2b | Done |
-| 2. Infrastructure | Phase 2c: prompt/data-model contracts | Designed, not implemented |
+| 2. Infrastructure | Phase 2c: prompt/data-model contracts | Implemented; hardening in progress |
 | 3. Iterative quality | Ongoing improvement from issue catalogs | Catalog #1 at `design/20_v0.3_extraction_analysis.md` |

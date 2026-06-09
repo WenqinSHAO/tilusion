@@ -41,6 +41,9 @@ def test_per_segment_extraction_composition_loads_static_contract() -> None:
     assert "Do not invent block IDs" in composition.content
     assert "Field-language policy" in composition.content
     assert "reader_language" in composition.content
+    assert "known_concepts" in composition.content
+    assert "merge hints, not as evidence and not as valid `concept_refs`" in composition.content
+    assert "still return a local concept" in composition.content
     assert composition.to_dict()["parts"][0]["metadata"]["schema_version"] == "reading-unit-v0.3"
 
 

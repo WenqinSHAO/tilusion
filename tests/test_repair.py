@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
+from tilusion.conversation import ConversationContext
+from tilusion.reading_schema import READING_UNIT_SCHEMA_VERSION
 from tilusion.repair import (
     DeterministicAutoFixer,
+    _repair_loop,
     _parse_dot_path,
     _parse_index_path,
     _resolve_path,
@@ -169,6 +174,74 @@ def test_fix_schema_version_mismatch() -> None:
     fixed, remaining = fixer.fix(data, issues)
     assert "schema_version_mismatch" in fixed
     assert data["schema_version"] == "reading-unit-v0.3"
+
+
+def test_repair_loop_auto_fixes_warning_only_cross_category_type() -> None:
+    data = {
+        "concepts": [
+            {
+                "concept_id": "concept-0001",
+                "surface": "爱花",
+                "concept_type": "event",
+                "source_block_refs": ["block-000001"],
+                "aliases": [],
+                "observed_surfaces": ["爱花"],
+                "facets": [],
+                "uncertainty": [],
+                "provenance": {"grounding": "source_grounded", "created_by": "llm_inferred"},
+            }
+        ]
+    }
+
+    def build_subject(raw: dict) -> dict:
+        return {
+            "schema_version": READING_UNIT_SCHEMA_VERSION,
+            "unit_id": "unit-0001",
+            "source": {"text": "爱花"},
+            "source_blocks": [
+                {
+                    "block_id": "block-000001",
+                    "unit_id": "unit-0001",
+                    "segment_id": "overview-segment-0001",
+                    "block_index": 0,
+                    "block_type": "paragraph",
+                    "start": 0,
+                    "end": 2,
+                    "text": "爱花",
+                    "text_hash": "hash",
+                    "provenance": {"grounding": "source_grounded", "created_by": "deterministic"},
+                }
+            ],
+            "concepts": deepcopy(raw["concepts"]),
+            "atomic_items": [],
+            "logical_groups": [],
+            "unresolved_items": [],
+            "validation": {},
+            "context_metadata": {},
+        }
+
+    conversation = ConversationContext.create(
+        model_identity="test-model",
+        pass_name="test-pass",
+        system_prompt="test",
+        user_payload={},
+    )
+
+    result, _conversation, report = _repair_loop(
+        data=data,
+        conversation=conversation,
+        validation_subject_builder=build_subject,
+        max_repair_turns=0,
+        backend=None,
+        prompt=None,
+        payload={},
+        pass_name="test-pass",
+        return_subject=False,
+    )
+
+    assert report.passed
+    assert result["concepts"][0]["concept_type"] == "other"
+    assert data["concepts"][0]["concept_type"] == "other"
 
 
 def test_fix_stale_core_field() -> None:
