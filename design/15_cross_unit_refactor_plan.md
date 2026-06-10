@@ -190,6 +190,65 @@ Documented in `design/20_v0.3_extraction_analysis.md`. Summary of open issues:
 | P2 | concept-0235 (憨) split from 憨园 | Extraction + merge | both |
 | P3 | Source block click not working | Frontend | HTML template |
 
+### Issue catalog #2: DingDing book (non-narrative domain, 2 units)
+
+A business/tech book about DingDing's product development exposed gaps in a
+pipeline designed and tested primarily on narrative text (浮生六记).
+Registry: 99 concepts, 126 items, 7 groups. Key findings:
+
+| # | Issue | Severity | Root cause |
+|---|-------|----------|------------|
+| 1 | 25% concepts typed `other` | High | LLM computes facets and concept_type independently; `method` is available but unused |
+| 2 | 23% items ungrouped (29/126) | High | Grouping pass omits statement-type items; no flat "loose items" group |
+| 3 | LLM reasoning leaked into group summary | Medium | Group resolution prompt doesn't separate summary from rationale |
+| 4 | "7 graphs" counted but 4 are empty theme_sets | Low | Frontend counts any graph dict as having a graph |
+| 5 | Statement-heavy (52%), sparse events (29%) | Medium | Source text is analytical; overview hints may not distinguish |
+
+**Root cause detail for #1 (other overuse):** Concepts like 优先级算法
+have facets `["method", "algorithm", "design"]` but concept_type=`other`.
+The LLM correctly identifies the facet-level category (`method`) but doesn't
+propagate it to concept_type. The two fields are generated independently
+in the extraction prompt — there's no binding rule linking them.
+
+**Root cause detail for #2 (ungrouped items):** 28/29 ungrouped items have
+concept_refs. The grouping LLM simply didn't place them. Most are `statement`
+type (18) — analytical observations that don't fit neatly into temporal
+sequences or theme_sets. The grouping prompt asks the LLM to build groups
+from items but doesn't instruct it to handle "everything else."
+
+**Root cause detail for #3 (summary leak):** group-0007 summary reads:
+"建议通过cross_group_edge建立关联" — the group resolution LLM wrote its
+recommendation into the group summary instead of the `rationale` field.
+
+#### Improvement directions from this catalog
+
+**Direction 1: Concept type from facets.** Add a binding rule in the
+extraction prompt: "`concept_type` should be consistent with `facets`.
+If facets include `method`, concept_type should be `method`. If facets
+include `person`, concept_type should be `person`, etc." This closes the
+gap between facet-level understanding and type assignment. Pure prompt
+change — ~2 lines.
+
+**Direction 2: Ungrouped item handling.** Two complementary fixes:
+- In the grouping prompt: add a rule — "Any item not placed in a group
+  should be listed in `unresolved_items` with a reason."
+- In the grouping pass code: after the LLM returns groups, detect
+  items not referenced by any group and either auto-assign to a
+  catch-all group or flag in metrics. Prompt + code — ~15 lines.
+
+**Direction 3: Summary/rationale separation.** In the group resolution
+prompt: "Write group `summary` as a standalone description of the group's
+content. Put cross-group recommendations in `rationale`, not in `summary`."
+Pure prompt change — ~1 line.
+
+**Direction 4: Domain-appropriate type vocabulary.** The narrative
+vocabulary (person, place, object, term, source, method) under-serves
+analytical/business text. A new domain config in `type_vocabularies.json`
+would add `process`, `principle`, `metric` and remove narrative-only
+types. But this should follow Direction 1 — if concept_type is derived
+from facets, the vocabulary matters less because facets are richer.
+Defer until after Direction 1 is validated.
+
 ### Quality dimensions (ongoing)
 
 These are the areas iterative improvement targets. They are not sequential
@@ -201,16 +260,21 @@ or soft-type changes.
 
 | Dimension | Status | Next action |
 |-----------|--------|-------------|
-| Type definitions | Done | — |
-| Merge heuristics + facets | Observability + facet weighting implemented | **→ Next: LLM-run audit** |
+| Type definitions | Gaps in non-narrative domains | Direction 1: bind concept_type to facets |
+| Merge heuristics + facets | Observability + facet weighting implemented | LLM-run audit |
 | Repair/retry | Done | Tune thresholds from run data |
-| Timeline/grouping | Not started | After merge observability |
+| Timeline/grouping | Ungrouped items + summary leaks | Directions 2 + 3 |
 | Known/new hints | Done | — |
 | Higher-order refs | Deferred | After grouping |
+| Domain vocabulary | Narrative-only; breaks on business text | Direction 4 (deferred, after Dir 1) |
 
-**Type definitions and vocabulary.** DONE — method type restored, time_anchor
-cname guidance, cross-category anti-examples, type_vocabularies.json
-externalized, cross-category auto-fix in repair loop.
+**Type definitions and vocabulary.** Core narrative vocabulary is done but
+non-narrative domains (business, technical) expose a gap: the LLM produces
+correct facets (`["method", "algorithm"]`) but leaves concept_type=`other`.
+Direction 1: add a binding rule linking concept_type to facets — "If facets
+include `method`, concept_type must be `method`." This is a 2-line prompt
+change in the extraction binding rules. Direction 4 (domain-specific
+type_vocabularies.json configs) is deferred until Direction 1 is validated.
 
 **Merge heuristics, facets, and soft typing.** Core identity-gated merge is
 done: generic identity forms filtered, facet-based soft typing active,
@@ -224,12 +288,25 @@ in `22_registry_merge_contract.md`.
 deterministically, repair propagation direction fixed, auto-fixable issues
 applied in all repair paths including full retry fallback.
 
-**Timeline and grouping.** NOT STARTED. Group resolution should prefer
-`continue` on existing timelines when new temporal_sequences share key
-entities. Cross-group edges (`part_of`, `precedes`) should be proposed when
-merging isn't appropriate. Deterministic concept-overlap pre-check before
-LLM resolution. Depends on clean concept identity — merge observability
-must come first.
+**Timeline and grouping.** Two newly discovered issues from the DingDing
+book, plus the deferred timeline-continuation work:
+
+Direction 2 — Ungrouped items (23% orphan rate). The grouping LLM omits
+statement-type items that don't fit cleanly into temporal sequences or
+theme_sets. Fix: (a) grouping prompt rule — "Any item not placed in a
+group must be listed in `unresolved_items` with a reason"; (b) code-side
+detection of ungrouped items post-LLM, with auto-assignment to a catch-all
+group or flagging in metrics. ~15 lines.
+
+Direction 3 — Summary/rationale leak. The group resolution LLM writes
+recommendations ("建议通过cross_group_edge建立关联") into group.summary
+instead of proposal.rationale. Fix: one-line prompt clarification —
+"Write group summary as a standalone description. Put cross-group
+recommendations in `rationale`, not in `summary`."
+
+Deferred (still gated on merge audit): timeline continuation (prefer
+`continue` on existing timelines), cross-group edges, and deterministic
+concept-overlap pre-check for temporal_sequence→timeline candidates.
 
 **Known/new hints.** DONE — `known_concepts_for_blocks()` passes block-overlap
 registry concepts to per-segment extraction context. The extractor sees what's

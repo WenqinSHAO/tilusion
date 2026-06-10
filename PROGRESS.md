@@ -42,9 +42,9 @@
 
 ## Ongoing
 
-- **Current goal:** Part 3 merge observability + facet overlap weighting is implemented; next is a fresh LLM-backed merge audit before timeline/grouping work.
+- **Current goal:** Part 3 iterative improvement. Three new directions from DingDing book catalog (#2): (1) bind concept_type to facets, (2) handle ungrouped items, (3) fix summary/rationale leak. Merge audit and timeline continuation remain gated.
 - **Branch:** `prompt_refresh`.
-- **Immediate next step:** Re-run units 2-4/5 with book scope, inspect `metrics.merge` and CLI merge traces, then update the quality catalog before touching timeline/grouping logic.
+- **Immediate next step:** Implement Direction 1 (concept_type ← facets binding rule in extraction prompt, ~2 lines), Direction 2 (ungrouped item handling in grouping prompt + code, ~15 lines), Direction 3 (summary/rationale separation in group resolution prompt, ~1 line).
 
 ## Plan Structure (from `design/15_cross_unit_refactor_plan.md`)
 
