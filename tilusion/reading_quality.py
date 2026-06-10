@@ -52,6 +52,7 @@ def compute_quality_metrics(data: dict[str, Any], *, reader_language: str = "zh-
         if isinstance(item, dict) and item.get("item_id")
     }
 
+    ungrouped = _ungrouped_item_count(items, groups)
     return {
         "field_language": _field_language_metrics(
             concepts, items, groups, block_text, reader_language=reader_language
@@ -60,6 +61,7 @@ def compute_quality_metrics(data: dict[str, Any], *, reader_language: str = "zh-
         "canonical_names": _canonical_name_metrics(concepts),
         "facets": _facet_metrics(concepts),
         "group_granularity": _group_granularity_metrics(groups, item_by_id, block_text),
+        "ungrouped_items": ungrouped,
     }
 
 
@@ -316,6 +318,39 @@ def _group_issue_preview(group: dict[str, Any], field: str, text: str) -> dict[s
     }
 
 
+def _ungrouped_item_count(
+    items: list[dict[str, Any]],
+    groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    all_grouped: set[str] = set()
+    for g in groups:
+        if isinstance(g, dict):
+            all_grouped.update(str(r) for r in (g.get("item_refs") or []))
+    unresolved = {
+        str(r) for r in (data.get("unresolved_items") or [])
+    } if isinstance(data := {}, dict) else set()  # not available at this scope
+    total = len([i for i in items if isinstance(i, dict)])
+    grouped = sum(1 for i in items if isinstance(i, dict) and str(i.get("item_id", "")) in all_grouped)
+    ungrouped = total - grouped
+    examples = []
+    for i in items:
+        if isinstance(i, dict) and str(i.get("item_id", "")) not in all_grouped:
+            examples.append({
+                "item_id": i.get("item_id", ""),
+                "item_type": i.get("item_type", ""),
+                "summary": _preview_text(i.get("summary", "")),
+            })
+            if len(examples) >= 5:
+                break
+    return {
+        "total": total,
+        "grouped": grouped,
+        "ungrouped": ungrouped,
+        "ungrouped_ratio": round(ungrouped / total, 3) if total else 0.0,
+        "examples": examples,
+    }
+
+
 def log_quality_metrics(metrics: dict[str, Any]) -> None:
     field = metrics.get("field_language", {})
     types = metrics.get("type_vocabulary", {})
@@ -338,6 +373,13 @@ def log_quality_metrics(metrics: dict[str, Any]) -> None:
         f"{groups.get('temporal_sequence_count', 0)}",
         file=sys.stderr,
     )
+    ungrouped = metrics.get("ungrouped_items", {})
+    if ungrouped.get("ungrouped", 0) > 0:
+        print(
+            f"    ungrouped items: {ungrouped.get('ungrouped', 0)}/"
+            f"{ungrouped.get('total', 0)}",
+            file=sys.stderr,
+        )
     for example in field.get("source_surface_examples", [])[:3]:
         print(
             f"      source-field issue: {example.get('concept_id', '')} "
