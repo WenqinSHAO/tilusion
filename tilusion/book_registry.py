@@ -353,7 +353,11 @@ class BookRegistry:
     # ── Concept merge ─────────────────────────────────────────────────────
 
     def merge_concepts(
-        self, ids: list[str], *, merge_stats: MergeStats | None = None
+        self,
+        ids: list[str],
+        *,
+        merge_stats: MergeStats | None = None,
+        merge_reason: str | None = None,
     ) -> str:
         ids = list(dict.fromkeys(ids))  # dedup preserving order
         if len(ids) < 2:
@@ -366,7 +370,9 @@ class BookRegistry:
                 raise KeyError(f"concept {cid} not found")
             members.append(c)
 
-        rejection = _check_merge_boundary(members, stats=merge_stats)
+        rejection = _check_merge_boundary(
+            members, stats=merge_stats, merge_reason=merge_reason
+        )
         if rejection is not None:
             raise MergeRejectedError(rejection)
 
@@ -791,6 +797,7 @@ def _check_merge_boundary(
     members: list[Concept],
     *,
     stats: MergeStats | None = None,
+    merge_reason: str | None = None,
 ) -> str | None:
     """Return rejection reason if the merge is unsafe, None if ok.
 
@@ -820,19 +827,25 @@ def _check_merge_boundary(
     # Surface or alias overlap
     has_surface_overlap = _surfaces_overlap(members)
 
+    generic_form_overlap = _generic_forms_overlap(members)
     identity_signal = same_surface or shared_cname or has_surface_overlap
     if not identity_signal:
         reason = _make_rejection_reason(surfaces, types, shared_cnames)
         _log_rejected_merge(members, reason)
         if stats is not None:
-            stats.rejected_no_identity += 1
+            if generic_form_overlap:
+                stats.rejected_generic_alias_only += 1
+            else:
+                stats.rejected_no_identity += 1
         return reason
 
     # ── Type compatibility ───────────────────────────────────────────────
     # Hard match: all members share the same normalized type
     if len(types) == 1:
         if stats is not None:
-            if same_surface:
+            if merge_reason == "llm_link_proposal":
+                stats.accepted_llm_link += 1
+            elif same_surface:
                 stats.accepted_same_surface += 1
             elif shared_cname:
                 stats.accepted_shared_cname += 1
@@ -840,10 +853,13 @@ def _check_merge_boundary(
                 stats.accepted_usable_alias += 1
         return None
 
-    # Check hard boundary types before soft typing
-    if stats is not None:
-        if types & {"time_anchor", "place", "source"}:
+    # Hard boundary types never soft-bridge across concept types.
+    if types & {"time_anchor", "place", "source"}:
+        reason = _make_rejection_reason(surfaces, types, shared_cnames)
+        _log_rejected_merge(members, reason)
+        if stats is not None:
             stats.rejected_hard_boundary += 1
+        return reason
 
     # Soft typing: different types but overlapping facets → compatible.
     # Identity-gated: we only reach here if identity_signal is already
@@ -851,8 +867,11 @@ def _check_merge_boundary(
     # Require non-generic facet overlap for cross-type bridging.
     if _facets_overlap(members, require_specific=True):
         if stats is not None:
-            stats.accepted_soft_type_bridge += 1
-            shared = _shared_facets(members)
+            if merge_reason == "llm_link_proposal":
+                stats.accepted_llm_link += 1
+            else:
+                stats.accepted_soft_type_bridge += 1
+            shared = _shared_facets(members, require_specific=True)
             type_a = sorted(types)[0] if len(types) >= 1 else "?"
             type_b = sorted(types)[1] if len(types) >= 2 else "?"
             stats.soft_type_bridges.append((type_a, type_b, ", ".join(sorted(shared))))
@@ -868,7 +887,7 @@ def _check_merge_boundary(
                 stats.rejected_type_mismatch += 1
             else:
                 stats.rejected_type_mismatch_no_facets += 1
-        elif _no_usable_identity(members):
+        elif generic_form_overlap:
             stats.rejected_generic_alias_only += 1
     return reason
 
@@ -906,9 +925,11 @@ def _facets_overlap(
     return False
 
 
-def _shared_facets(members: list[Concept]) -> set[str]:
+def _shared_facets(
+    members: list[Concept], *, require_specific: bool = False
+) -> set[str]:
     """Return facets shared by at least two members (case-insensitive)."""
-    facet_sets = _collect_facet_sets(members)
+    facet_sets = _collect_facet_sets(members, require_specific=require_specific)
     shared: set[str] = set()
     for i in range(len(facet_sets)):
         for j in range(i + 1, len(facet_sets)):
@@ -916,18 +937,17 @@ def _shared_facets(members: list[Concept]) -> set[str]:
     return shared
 
 
-def _no_usable_identity(members: list[Concept]) -> bool:
-    """True if the only identity signals are generic forms (余, 吾, 先生...)."""
+def _generic_forms_overlap(members: list[Concept]) -> bool:
+    """True if members overlap only through generic identity forms."""
     per_concept: list[set[str]] = []
     for m in members:
-        per_concept.append(_usable_identity_forms(
-            [m.surface, *m.aliases, *m.observed_surfaces]
-        ))
+        forms = {str(v or "").strip() for v in [m.surface, *m.aliases, *m.observed_surfaces]}
+        per_concept.append({f for f in forms if f in GENERIC_IDENTITY_FORMS})
     for i in range(len(per_concept)):
         for j in range(i + 1, len(per_concept)):
             if per_concept[i] & per_concept[j]:
-                return False  # at least one non-generic overlap
-    return True  # all overlaps are generic
+                return True
+    return False
 
 
 def _make_rejection_reason(

@@ -202,7 +202,7 @@ or soft-type changes.
 | Dimension | Status | Next action |
 |-----------|--------|-------------|
 | Type definitions | Done | — |
-| Merge heuristics + facets | Core done; observability missing | **→ Next: observability** |
+| Merge heuristics + facets | Observability + facet weighting implemented | **→ Next: LLM-run audit** |
 | Repair/retry | Done | Tune thresholds from run data |
 | Timeline/grouping | Not started | After merge observability |
 | Known/new hints | Done | — |
@@ -215,7 +215,10 @@ externalized, cross-category auto-fix in repair loop.
 **Merge heuristics, facets, and soft typing.** Core identity-gated merge is
 done: generic identity forms filtered, facet-based soft typing active,
 first-write-wins surface preservation, deterministic dedup with alias safety.
-The merge contract is documented in `22_registry_merge_contract.md`.
+Part 3 observability is also implemented: accepted/rejected merge counters,
+dedup stats, soft-type bridge traces, hard-boundary enforcement before facet
+bridging, and applied-only LLM-link counts. The merge contract is documented
+in `22_registry_merge_contract.md`.
 
 **Repair/retry policy.** DONE — cross-category type warnings auto-fixed
 deterministically, repair propagation direction fixed, auto-fixable issues
@@ -238,7 +241,7 @@ resolution deferred. Low priority until merge and grouping quality stabilizes.
 
 ---
 
-### Part 3 next move: Merge Observability + Facet Overlap Weighting
+### Part 3 current move: Merge Observability + Facet Overlap Weighting
 
 **Joint rationale.** The merge contract (`22_registry_merge_contract.md`)
 correctly prescribes observability before further heuristic changes. The
@@ -276,11 +279,12 @@ Also track:
 - `split_candidates` — concepts with same/similar canonical forms still
   split after resolution
 
-Implementation (~60 lines):
-- `tilusion/book_registry.py`: `MergeSummary` dataclass, increment counters
-  at each merge/reject decision point
-- `tilusion/registry_delta.py` or `tilusion/reading_pipeline.py`: collect,
-  log, persist in run metadata
+Implementation status:
+- `tilusion/book_registry.py`: `MergeStats` dataclass, counters at merge/reject
+  decision points, and specific-facet soft bridge traces
+- `tilusion/registry_delta.py` / `tilusion/reading_pipeline.py`: collect, log,
+  and persist merge metrics in package metrics
+- LLM-link counts are applied-only, not proposal-only
 
 #### B. Facet overlap weighting
 
@@ -308,7 +312,8 @@ Two modes:
 The soft-type path in `_check_merge_boundary` calls with
 `require_specific=True`. The same-type path is unchanged.
 
-Implementation (~20 lines in `book_registry.py`).
+Implementation status: done in `book_registry.py`; soft-type bridges require
+non-generic shared facets, while same-type merge behavior remains unchanged.
 
 #### C. Connection to timeline/grouping (plan, not implement)
 
@@ -332,9 +337,9 @@ The grouping improvements themselves will be:
 
 | Step | What | Est. lines | Depends on |
 |------|------|------------|------------|
-| 1 | Merge observability counters | ~60 | — |
-| 2 | Facet overlap weighting | ~20 | — |
-| 3 | Re-run + audit merge summaries | — | 1, 2 |
+| 1 | Merge observability counters | Done | — |
+| 2 | Facet overlap weighting | Done | — |
+| 3 | Re-run + audit merge summaries | Next | 1, 2 |
 | 4 | Timeline/grouping improvements | ~40 | 3 (clean identity verified) |
 
 Steps 1 and 2 are independent and can ship together. Step 4 is gated on

@@ -102,12 +102,11 @@ Already done:
 
 Known gaps:
 
-- facet overlap is currently binary and does not distinguish generic from
-  meaningful overlap;
-- accepted/rejected merge reasons are not yet summarized in a structured metric;
-- soft-type merges are not yet logged by type pair and facet intersection;
-- LLM merge proposals and deterministic dedup are still harder to audit than
-  extraction/grouping metrics;
+- merge observability is implemented but still needs a fresh LLM-backed run to
+  verify that the traces are actionable on real extraction output;
+- split candidates with same/similar canonical forms are not yet summarized;
+- LLM merge proposal quality is still harder to audit than deterministic merge
+  outcomes, even though applied/rejected counts are now separated;
 - timeline/group continuation quality depends on resolved concept identity but
   has separate grouping logic that needs its own contract later.
 
@@ -140,12 +139,12 @@ Before changing more heuristics, log and persist summary data:
   soft-type facet bridge, LLM proposal;
 - rejected merges by reason: no identity signal, hard boundary type, type/facet
   mismatch, generic alias only;
-- soft-type merge type pairs and intersecting facets;
+- soft-type merge type pairs and intersecting specific facets;
 - deterministic dedup candidates found, accepted, rejected/skipped;
 - concepts left split despite same/similar canonical forms.
 
-This should be visible in CLI logs and preferably in `runs.json`/run manifests
-so extraction-quality analysis can compare runs.
+Status: the first three are implemented in CLI logs and package `metrics.merge`;
+split-candidate summaries are still open.
 
 ### 2. Make Facet Overlap More Meaningful
 

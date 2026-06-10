@@ -42,9 +42,9 @@
 
 ## Ongoing
 
-- **Current goal:** Part 3 next move: merge observability + facet overlap weighting (jointly, per `design/15_cross_unit_refactor_plan.md` Part 3 roadmap). Timeline/grouping improvements gated on clean merge audit results.
+- **Current goal:** Part 3 merge observability + facet overlap weighting is implemented; next is a fresh LLM-backed merge audit before timeline/grouping work.
 - **Branch:** `prompt_refresh`.
-- **Immediate next step:** Implement merge observability counters (accepted/rejected by reason, soft-type pairs, dedup stats) and facet overlap weighting (ignore class-only overlaps for soft-type bridges). ~80 lines across `book_registry.py` and pipeline.
+- **Immediate next step:** Re-run units 2-4/5 with book scope, inspect `metrics.merge` and CLI merge traces, then update the quality catalog before touching timeline/grouping logic.
 
 ## Plan Structure (from `design/15_cross_unit_refactor_plan.md`)
 

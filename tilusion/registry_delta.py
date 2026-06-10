@@ -236,7 +236,9 @@ def apply_registry_delta(
             # Merge into existing book concept
             try:
                 merged_id = registry.merge_concepts(
-                    [book_concept_id, new_id], merge_stats=merge_stats
+                    [book_concept_id, new_id],
+                    merge_stats=merge_stats,
+                    merge_reason=op.get("match_reason"),
                 )
             except MergeRejectedError:
                 # Deterministic boundary check rejected the merge — keep the

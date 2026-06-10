@@ -13,6 +13,7 @@ from tilusion.book_registry import (
     DeterministicConceptMerger,
     KeepExistingConceptMerger,
     MergeRejectedError,
+    MergeStats,
     find_registry_duplicates,
 )
 from tilusion.reading_payloads import _merge_concept_group, _pick_canonical_name
@@ -419,6 +420,32 @@ class TestBookRegistryMerge:
         cid2 = self._force_add("某友", ctype="person", aliases=["余"])
         with pytest.raises(MergeRejectedError, match="identity signal"):
             self.reg.merge_concepts([cid1, cid2])
+
+    def test_merge_counts_generic_alias_only_rejection(self) -> None:
+        cid1 = self._add("沈复", ctype="person", aliases=["余"])
+        cid2 = self._force_add("某友", ctype="person", aliases=["余"])
+        stats = MergeStats()
+        with pytest.raises(MergeRejectedError):
+            self.reg.merge_concepts([cid1, cid2], merge_stats=stats)
+        assert stats.rejected_generic_alias_only == 1
+        assert stats.rejected_no_identity == 0
+
+    def test_merge_rejects_hard_boundary_before_facet_bridge(self) -> None:
+        cid1 = self._add("扬州", ctype="place", facets=["travel", "city"])
+        cid2 = self._force_add("扬州", ctype="term", facets=["travel", "city"])
+        stats = MergeStats()
+        with pytest.raises(MergeRejectedError, match="place"):
+            self.reg.merge_concepts([cid1, cid2], merge_stats=stats)
+        assert stats.rejected_hard_boundary == 1
+        assert stats.accepted_soft_type_bridge == 0
+
+    def test_soft_type_bridge_records_specific_facets_only(self) -> None:
+        cid1 = self._add("芸", ctype="person", facets=["person", "spouse"])
+        cid2 = self._force_add("芸", ctype="theme", facets=["theme", "spouse"])
+        stats = MergeStats()
+        self.reg.merge_concepts([cid1, cid2], merge_stats=stats)
+        assert stats.accepted_soft_type_bridge == 1
+        assert stats.soft_type_bridges == [("person", "theme", "spouse")]
 
     def test_merge_requires_two_distinct_ids(self) -> None:
         cid1 = self._add("Confucius", "Confucius")

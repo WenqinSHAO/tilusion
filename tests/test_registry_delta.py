@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tilusion.book_registry import BookRegistry
+from tilusion.book_registry import BookRegistry, MergeStats
 from tilusion.reading_schema import AtomicItem, Concept
 from tilusion.registry_delta import (
     RegistryDeltaResult,
@@ -359,6 +359,78 @@ class TestApplyRegistryDelta:
         assert "[unit-0002]" in merged.summary
         assert "A sage from Lu" in merged.summary
         assert "Spring and Autumn Annals" in merged.summary
+
+    def test_llm_link_stats_count_only_applied_merge(self, tmp_path: Path) -> None:
+        reg = _make_registry(tmp_path)
+        existing = Concept(
+            concept_id="",
+            surface="Confucius",
+            concept_type="person",
+            canonical_name="Confucius",
+            summary="A sage",
+            observed_surfaces=["Confucius"],
+        )
+        cid, _ = reg.add_concept(existing)
+        unit_data = {
+            "concepts": [
+                _make_concept_dict("c1", "Kongzi", canonical_name="Confucius"),
+            ],
+            "atomic_items": [],
+            "logical_groups": [],
+            "unresolved_items": [],
+        }
+        delta = compute_registry_delta(
+            unit_data,
+            reg,
+            unit_id="unit-0002",
+            concept_resolution_proposals=[{
+                "proposal_type": "link",
+                "target_refs": ["c1"],
+                "registry_ref": cid,
+            }],
+        )
+        stats = MergeStats()
+        apply_registry_delta(reg, delta, merge_stats=stats)
+        assert stats.accepted_llm_link == 1
+        assert stats.accepted_shared_cname == 0
+
+    def test_rejected_llm_link_not_counted_as_accepted(self, tmp_path: Path) -> None:
+        reg = _make_registry(tmp_path)
+        existing = Concept(
+            concept_id="",
+            surface="扬州",
+            concept_type="place",
+            canonical_name="扬州",
+            facets=["travel", "city"],
+            observed_surfaces=["扬州"],
+        )
+        cid, _ = reg.add_concept(existing)
+        unit_data = {
+            "concepts": [
+                _make_concept_dict(
+                    "c1", "扬州", concept_type="term", canonical_name="扬州",
+                    facets=["travel", "city"],
+                ),
+            ],
+            "atomic_items": [],
+            "logical_groups": [],
+            "unresolved_items": [],
+        }
+        delta = compute_registry_delta(
+            unit_data,
+            reg,
+            unit_id="unit-0002",
+            concept_resolution_proposals=[{
+                "proposal_type": "link",
+                "target_refs": ["c1"],
+                "registry_ref": cid,
+            }],
+        )
+        stats = MergeStats()
+        apply_registry_delta(reg, delta, merge_stats=stats)
+        assert stats.accepted_llm_link == 0
+        assert stats.rejected_hard_boundary == 1
+
 
     def test_apply_item_remaps_concept_refs(self, tmp_path: Path) -> None:
         reg = _make_registry(tmp_path)

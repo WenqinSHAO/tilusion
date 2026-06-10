@@ -2893,13 +2893,6 @@ def run_reading_pipeline(
         _log_registry_delta_preview(delta_result, registry)
 
         merge_stats = MergeStats()
-        # Count LLM link proposals
-        for op in delta_result.operations:
-            if op.get("op_type") == "merge_concepts":
-                match_reason = op.get("match_reason", "")
-                if "llm_link" in match_reason:
-                    merge_stats.accepted_llm_link += 1
-
         applied = apply_registry_delta(registry, delta_result, merge_stats=merge_stats)
 
         # ── Deterministic registry dedup ──
