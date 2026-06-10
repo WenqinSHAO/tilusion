@@ -42,9 +42,9 @@
 
 ## Ongoing
 
-- **Current goal:** Part 3 iterative improvement. Three new directions from DingDing book catalog (#2): (1) bind concept_type to facets, (2) handle ungrouped items, (3) fix summary/rationale leak. Merge audit and timeline continuation remain gated.
+- **Current goal:** Part 3 reorganized into three work groups: A (type accuracy), B (grouping quality), C (timeline structure). Groups A+B are independent and ship first. Timeline work (C) un-gated — merge infrastructure is mature enough.
 - **Branch:** `prompt_refresh`.
-- **Immediate next step:** Implement Direction 1 (concept_type ← facets binding rule in extraction prompt, ~2 lines), Direction 2 (ungrouped item handling in grouping prompt + code, ~15 lines), Direction 3 (summary/rationale separation in group resolution prompt, ~1 line).
+- **Immediate next step:** Implement Work Group A (concept_type ← facets binding, ~2 lines) + Work Group B (ungrouped items, summary leak, theme_set guidance, ~20 lines). Then Work Group C (timeline continuation, ~40 lines).
 
 ## Plan Structure (from `design/15_cross_unit_refactor_plan.md`)
 

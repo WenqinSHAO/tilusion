@@ -251,70 +251,101 @@ Defer until after Direction 1 is validated.
 
 ### Quality dimensions (ongoing)
 
-These are the areas iterative improvement targets. They are not sequential
-phases — each round may touch multiple dimensions. The first priority is to
-make merge behavior observable and contract-driven before making larger prompt
-or soft-type changes.
+Issues from both catalogs cluster into three work groups. Each group
+combines prompt and code changes; they are ordered by impact-to-effort
+ratio, not by catalog origin.
 
-**Current status across all dimensions:**
+#### Work group A: Type accuracy (Dirs 1 + 4, joint)
 
-| Dimension | Status | Next action |
-|-----------|--------|-------------|
-| Type definitions | Gaps in non-narrative domains | Direction 1: bind concept_type to facets |
-| Merge heuristics + facets | Observability + facet weighting implemented | LLM-run audit |
-| Repair/retry | Done | Tune thresholds from run data |
-| Timeline/grouping | Ungrouped items + summary leaks | Directions 2 + 3 |
-| Known/new hints | Done | — |
-| Higher-order refs | Deferred | After grouping |
-| Domain vocabulary | Narrative-only; breaks on business text | Direction 4 (deferred, after Dir 1) |
+**Problem across both catalogs:** The LLM computes correct facets but
+leaves concept_type=`other` (25% rate on DingDing). Facets like
+`["method", "algorithm"]` should imply concept_type=`method`. The two
+fields are generated independently — there's no binding rule.
 
-**Type definitions and vocabulary.** Core narrative vocabulary is done but
-non-narrative domains (business, technical) expose a gap: the LLM produces
-correct facets (`["method", "algorithm"]`) but leaves concept_type=`other`.
-Direction 1: add a binding rule linking concept_type to facets — "If facets
-include `method`, concept_type must be `method`." This is a 2-line prompt
-change in the extraction binding rules. Direction 4 (domain-specific
-type_vocabularies.json configs) is deferred until Direction 1 is validated.
+**Fix (Dir 1):** Add a binding rule in the extraction prompt: "`concept_type`
+must be consistent with `facets`. If facets include `method`, concept_type
+should be `method`. If facets include `person`, concept_type should be
+`person`. When facets suggest multiple types, prefer the most specific."
+~2 lines in the extraction prompt binding rules.
 
-**Merge heuristics, facets, and soft typing.** Core identity-gated merge is
-done: generic identity forms filtered, facet-based soft typing active,
-first-write-wins surface preservation, deterministic dedup with alias safety.
-Part 3 observability is also implemented: accepted/rejected merge counters,
-dedup stats, soft-type bridge traces, hard-boundary enforcement before facet
-bridging, and applied-only LLM-link counts. The merge contract is documented
-in `22_registry_merge_contract.md`.
+**Why Dir 4 is folded in:** If concept_type is derived from facets, the
+specific concept_type vocabulary matters less — facets are richer. Domain-
+specific type configs in `type_vocabularies.json` become a secondary concern
+rather than a prerequisite. Defer Dir 4 until Dir 1 is validated on both
+narrative and business text.
 
-**Repair/retry policy.** DONE — cross-category type warnings auto-fixed
-deterministically, repair propagation direction fixed, auto-fixable issues
-applied in all repair paths including full retry fallback.
+#### Work group B: Grouping quality (Dir 2 + Dir 3 + catalog #1 P2)
 
-**Timeline and grouping.** Two newly discovered issues from the DingDing
-book, plus the deferred timeline-continuation work:
+**Problem across both catalogs:** Three grouping issues that share the
+same root: the grouping/resolution LLM doesn't have clear rules for
+edge cases.
+- Dir 2: 23% items ungrouped (DingDing). Statement-type items that don't
+  fit temporal sequences or theme_sets are simply omitted.
+- Dir 3: LLM reasoning leaks into group.summary — resolution-level
+  recommendations ("建议通过cross_group_edge") appear in output fields.
+- Catalog #1 P2: All theme_sets are editorial commentary (浮生六记).
+  The LLM defaults to theme_set for any reflective/analytical content.
 
-Direction 2 — Ungrouped items (23% orphan rate). The grouping LLM omits
-statement-type items that don't fit cleanly into temporal sequences or
-theme_sets. Fix: (a) grouping prompt rule — "Any item not placed in a
-group must be listed in `unresolved_items` with a reason"; (b) code-side
-detection of ungrouped items post-LLM, with auto-assignment to a catch-all
-group or flagging in metrics. ~15 lines.
+**Fix (single batch, ~20 lines):**
+- **Grouping prompt** — new rule: "Every `atomic_item` in the input must
+  appear in at least one group's `item_refs` or in `unresolved_items`.
+  Do not silently drop items." Plus: "A `theme_set` groups items sharing
+  a topic. Editorial commentary and author reflection are valid theme_sets
+  only if they share a specific theme — tag them with descriptive summaries."
+- **Group resolution prompt** — clarify output field roles: "`summary`
+  describes the group's content. Recommendations about cross-group
+  relationships go in `rationale`, never in `summary`."
+- **Code** — post-grouping check: detect items not referenced by any group
+  or unresolved_items, log count as a quality metric, auto-place in a
+  generated catch-all `theme_set` with summary "未归类项".
 
-Direction 3 — Summary/rationale leak. The group resolution LLM writes
-recommendations ("建议通过cross_group_edge建立关联") into group.summary
-instead of proposal.rationale. Fix: one-line prompt clarification —
-"Write group summary as a standalone description. Put cross-group
-recommendations in `rationale`, not in `summary`."
+#### Work group C: Timeline structure (catalog #1 P0, previously gated)
 
-Deferred (still gated on merge audit): timeline continuation (prefer
-`continue` on existing timelines), cross-group edges, and deterministic
-concept-overlap pre-check for temporal_sequence→timeline candidates.
+**Problem:** Temporal_sequences form around local episodes but are not
+continued into existing timelines. Across both catalogs, 7 temporal
+sequences exist alongside only 1–2 timelines. The group resolution
+pass defaults to `new_thread`.
 
-**Known/new hints.** DONE — `known_concepts_for_blocks()` passes block-overlap
-registry concepts to per-segment extraction context. The extractor sees what's
-already known. Further work (explicit `known_in_registry` labels) deferred.
+**Why un-gate now:** Merge infrastructure is mature — identity guards,
+generic form filtering, facet-based soft typing, dedup, and
+observability are all implemented and verified across multiple runs.
+The merge audit was precautionary; the infrastructure has proven itself.
 
-**Higher-order references.** DEFERRED. Concepts that refer to items/events/
-groups need first-class representation. Detection first, metrics second,
-resolution deferred. Low priority until merge and grouping quality stabilizes.
+**Fix (~40 lines):**
+- **Grouping prompt** — add concrete timeline threshold: "A `timeline`
+  must span ≥10 items or multiple segments. Single episodes use
+  `temporal_sequence`."
+- **Group resolution prompt** — stronger continue preference: "When a
+  temporal_sequence shares ≥3 concept_refs with an existing timeline,
+  prefer `continue` over `new_thread`. The timeline absorbs the
+  temporal_sequence's items in chronological order."
+- **Group resolution prompt** — post-placement scan step: "After all
+  groups are placed, review temporal_sequences. If adjacent sequences
+  share key entities and cover sequential time periods, propose
+  `merge_groups`. If a temporal_sequence is clearly part of a larger
+  timeline, propose `continue`."
+- **Code** — deterministic concept-overlap pre-check: temporal_sequences
+  sharing ≥30% concept_refs with a timeline → boost as `continue`
+  candidates in `select_group_candidates`.
+
+#### Frontend (separate track)
+
+- Catalog #1 P3: source block click not jumping for some concepts
+- Catalog #2: "7 groups 7 graphs" counts empty theme_set graphs as graphs
+- Not extraction quality — HTML/CSS/JS fixes in `tools/reader_view_template.html`
+
+#### Status summary
+
+| Work group | Contents | Est. lines | Priority |
+|-----------|----------|------------|----------|
+| A: Type accuracy | Dirs 1 + 4 (concept_type ← facets) | ~2 prompt | High |
+| B: Grouping quality | Dirs 2 + 3 + cat#1 P2 | ~20 prompt+code | High |
+| C: Timeline structure | Cat#1 P0 (continue, merge_groups, edges) | ~40 prompt+code | Medium |
+| Frontend | Click targets, graph counts | HTML/JS | Low |
+
+Groups A and B are independent and can ship together. Group C follows
+naturally — once items are all grouped (B) and types are accurate (A),
+timeline continuation has cleaner inputs.
 
 ---
 
